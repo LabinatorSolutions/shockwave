@@ -67,6 +67,21 @@ app.get('/agent-secret/:name/token', handle((req) => store.getSecret(pool, maste
 // Targeted OAuth write (desktop persists exchange/refresh results here).
 app.post('/oauth/:name', handle((req) => store.patchOAuth(pool, masterKey, req.params.name, req.body)));
 
+// ── Chats ────────────────────────────────────────────────────────────────────
+app.get('/chats', handle((req) => store.listSessions(pool, String(req.query.workspaceId), {
+  limit: req.query.limit ? Number(req.query.limit) : undefined,
+  before: req.query.before ? Number(req.query.before) : undefined,
+})));
+app.get('/chats/starred', handle((req) => store.listStarred(pool, String(req.query.workspaceId))));
+app.get('/chats/search', handle((req) => store.searchSessions(pool, String(req.query.workspaceId), String(req.query.q ?? ''), { limit: req.query.limit ? Number(req.query.limit) : undefined })));
+app.get('/chat/:id', handle(async (req) => ({ session: await store.getSession(pool, req.params.id), messages: await store.getMessages(pool, req.params.id) })));
+app.get('/chat/:id/messages', handle((req) => store.getMessages(pool, req.params.id)));
+app.post('/chat', handle((req) => store.upsertSession(pool, { ...req.body, now: Date.now() })));
+app.post('/chat/:id/messages', handle((req) => store.persistMessages(pool, req.params.id, req.body)));
+app.patch('/chat/:id/title', handle((req) => store.setSessionTitle(pool, req.params.id, req.body?.title ?? '')));
+app.patch('/chat/:id/starred', handle((req) => store.setSessionStarred(pool, req.params.id, !!req.body?.starred)));
+app.delete('/chat/:id', handle((req) => store.deleteSession(pool, req.params.id)));
+
 // ── Workspace identity ───────────────────────────────────────────────────────
 app.get('/workspaces', handle(() => store.listWorkspaces(pool)));
 app.post('/workspaces', handle((req) => store.upsertWorkspace(pool, req.body)));

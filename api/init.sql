@@ -61,3 +61,38 @@ CREATE TABLE IF NOT EXISTS secret_value (
   updated_at  bigint NOT NULL,
   PRIMARY KEY (owner, field)
 );
+
+-- Chats. `workspace_id` references the shared workspace identity (NOT a local
+-- path). The transcript JSONL stays machine-local (derived from session_id on
+-- the desktop), so it isn't a column here. `deleted` is a tombstone.
+CREATE TABLE IF NOT EXISTS chat_session (
+  session_id    text PRIMARY KEY,
+  workspace_id  text NOT NULL,
+  title         text,
+  system_prompt text,
+  model         text,
+  source        text,          -- 'desktop' | 'cron' | ...
+  source_id     text,
+  machine       text,          -- hostname that created it (provenance only)
+  created_at    bigint NOT NULL,
+  updated_at    bigint NOT NULL,
+  archived      boolean NOT NULL DEFAULT false,
+  starred       boolean NOT NULL DEFAULT false,
+  deleted       boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS idx_chat_session_ws_updated ON chat_session (workspace_id, updated_at);
+
+-- One row per pi message. Keyed by (session_id, seq) — globally unique because
+-- session_id is a UUID and a chat has one writer. No autoincrement needed.
+CREATE TABLE IF NOT EXISTS message (
+  session_id   text NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  seq          integer NOT NULL,
+  role         text NOT NULL,     -- 'user' | 'assistant' | 'tool'
+  content      text,
+  reasoning    text,
+  tool_calls   text,              -- JSON array
+  tool_call_id text,
+  tool_name    text,
+  created_at   bigint NOT NULL,
+  PRIMARY KEY (session_id, seq)
+);

@@ -233,6 +233,87 @@ export async function updateWorkspaceOrder(pool: DB, list: Array<{ id: string; n
   });
 }
 
+// ── Chats ────────────────────────────────────────────────────────────────────
+
+const sessionCols = 'session_id AS "sessionId", workspace_id AS "workspaceId", title, system_prompt AS "systemPrompt", model, source, source_id AS "sourceId", machine, created_at AS "createdAt", updated_at AS "updatedAt", archived, starred';
+
+export async function listSessions(pool: DB, workspaceId: string, opts: { limit?: number; before?: number } = {}) {
+  const limit = Math.min(opts.limit ?? 30, 100);
+  const params: any[] = [workspaceId];
+  let where = 'workspace_id=$1 AND NOT archived AND NOT starred AND NOT deleted';
+  if (typeof opts.before === 'number') { params.push(opts.before); where += ` AND updated_at < $${params.length}`; }
+  params.push(limit);
+  const { rows } = await q(pool, `SELECT ${sessionCols} FROM chat_session WHERE ${where} ORDER BY updated_at DESC LIMIT $${params.length}`, params);
+  return rows;
+}
+
+export async function listStarred(pool: DB, workspaceId: string) {
+  const { rows } = await q(pool, `SELECT ${sessionCols} FROM chat_session WHERE workspace_id=$1 AND NOT archived AND starred AND NOT deleted ORDER BY updated_at DESC`, [workspaceId]);
+  return rows;
+}
+
+// Title-only search (FTS5 is gone; content search can come later via tsvector).
+export async function searchSessions(pool: DB, workspaceId: string, query: string, opts: { limit?: number } = {}) {
+  const limit = Math.min(opts.limit ?? 30, 100);
+  const like = `%${String(query).replace(/[%_]/g, (m) => `\\${m}`)}%`;
+  const { rows } = await q(pool,
+    `SELECT ${sessionCols} FROM chat_session WHERE workspace_id=$1 AND NOT deleted AND title ILIKE $2 ORDER BY updated_at DESC LIMIT $3`,
+    [workspaceId, like, limit]);
+  return rows.map((r: any) => ({ sessionId: r.sessionId, title: r.title, updatedAt: r.updatedAt, snippet: r.title ?? '' }));
+}
+
+export async function getSession(pool: DB, sessionId: string) {
+  const { rows } = await q(pool, `SELECT ${sessionCols} FROM chat_session WHERE session_id=$1 AND NOT deleted`, [sessionId]);
+  return rows[0] ?? null;
+}
+
+export async function getMessages(pool: DB, sessionId: string) {
+  const { rows } = await q(pool,
+    `SELECT session_id AS "sessionId", seq, role, content, reasoning, tool_calls AS "toolCalls", tool_call_id AS "toolCallId", tool_name AS "toolName", created_at AS "createdAt"
+     FROM message WHERE session_id=$1 ORDER BY seq`, [sessionId]);
+  return rows;
+}
+
+export async function upsertSession(pool: DB, row: {
+  sessionId: string; workspaceId: string; systemPrompt?: string | null; model?: string | null;
+  source?: string | null; sourceId?: string | null; machine?: string | null; now: number;
+}) {
+  await q(pool,
+    `INSERT INTO chat_session (session_id,workspace_id,system_prompt,model,source,source_id,machine,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+     ON CONFLICT (session_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
+    [row.sessionId, row.workspaceId, row.systemPrompt ?? null, row.model ?? null, row.source ?? 'desktop', row.sourceId ?? null, row.machine ?? null, row.now]);
+}
+
+export async function setSessionTitle(pool: DB, sessionId: string, title: string) {
+  await q(pool, 'UPDATE chat_session SET title=$2 WHERE session_id=$1', [sessionId, title]);
+}
+export async function setSessionStarred(pool: DB, sessionId: string, starred: boolean) {
+  await q(pool, 'UPDATE chat_session SET starred=$2 WHERE session_id=$1', [sessionId, starred]);
+}
+export async function deleteSession(pool: DB, sessionId: string) {
+  // Tombstone so a delete propagates to other machines on pull.
+  await q(pool, 'UPDATE chat_session SET deleted=true, updated_at=$2 WHERE session_id=$1', [sessionId, now()]);
+}
+
+// Append new message rows. Idempotent by (session_id, seq): the desktop sends the
+// full mapped list; already-stored rows are skipped. Touches updated_at.
+export async function persistMessages(pool: DB, sessionId: string, rows: any[]): Promise<number> {
+  if (!Array.isArray(rows) || !rows.length) return 0;
+  let inserted = 0;
+  await tx(pool, async (c) => {
+    for (const m of rows) {
+      const res = await q(c,
+        `INSERT INTO message (session_id,seq,role,content,reasoning,tool_calls,tool_call_id,tool_name,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (session_id,seq) DO NOTHING`,
+        [sessionId, m.seq, m.role, m.content ?? null, m.reasoning ?? null, m.toolCalls ?? null, m.toolCallId ?? null, m.toolName ?? null, m.createdAt ?? now()]);
+      inserted += res.rowCount ?? 0;
+    }
+    if (inserted) await q(c, 'UPDATE chat_session SET updated_at=$2 WHERE session_id=$1', [sessionId, now()]);
+  });
+  return inserted;
+}
+
 // snake_case pg row -> camelCase for the joinAgentSecret shape.
 function camelRow(r: any) {
   return {
