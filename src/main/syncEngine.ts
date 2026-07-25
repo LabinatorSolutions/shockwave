@@ -33,7 +33,7 @@ import { BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { gitSpawn } from './sync.js';
-import { findWorkspaceByPath } from './db/index.js';
+import { findWorkspaceByPath } from './api/workspaces.js';
 
 // ─── Engine state ──────────────────────────────────────────────────────────
 
@@ -531,7 +531,7 @@ export async function start({ workspacePath, pat, intervalSeconds, windowId }) {
   // the icon rather than reporting an error. This replaced a `git remote
   // get-url` probe: "is sync set up" used to be a question about the checkout,
   // and is now a question about the table.
-  const ws = findWorkspaceByPath(workspacePath);
+  const ws = await findWorkspaceByPath(workspacePath);
   if (!ws) {
     state.windowId = windowId ?? state.windowId;
     emitStatus({ status: STATUS.UNCONFIGURED, detail: 'Not a workspace', lastSyncAt: null, repoUrl: null });

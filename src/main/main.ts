@@ -17,7 +17,11 @@ import {
   cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
 } from './cron.js';
 import { CRON_FILE } from './cronScheduler.js';
-import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred, insertWorkspace, deleteWorkspace, deleteWorkspaceLocal, insertWorkspaceLocal, getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed, setWorkspaceSyncDisabled } from './db/index.js';
+import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
+import {
+  getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
+  createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
+} from './api/workspaces.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from './defaults/files.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
@@ -32,7 +36,9 @@ import { ensureCliShims, prependPath } from './cliTools.js';
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
 // encryption were replaced wholesale; the signatures here are unchanged, so
 // every call site below (and in oauth.ts / cron.ts) is untouched.
-import { DEFAULT_SETTINGS, readSettings, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
+import { DEFAULT_SETTINGS, readSettings, readSettingsSafe, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
+import { readApiConfig, writeApiConfig } from './api/config.js';
+import { api } from './api/client.js';
 import {
   verifyPat as syncVerifyPat,
   checkGit as syncCheckGit,
@@ -219,7 +225,9 @@ function attachWindowBoundsPersistence(win) {
 }
 
 async function createWindow() {
-  const settings = await readSettings();
+  // windowBounds is machine-local (userData) — read it the safe way so a down
+  // server can never keep the window from opening.
+  const { settings } = await readSettingsSafe();
   const saved = settings.windowBounds;
   const useSaved = saved && boundsAreVisible(saved);
   const opts: any = {
@@ -881,14 +889,39 @@ ipcMain.handle('context:editorMenu', async (evt, { hasSelection, hasFilePath, ha
 });
 
 ipcMain.handle('settings:read', async () => {
-  return readSettings();
+  // Boot-safe: an unconfigured/offline server yields defaults (+ machine-local)
+  // rather than throwing, so the app still boots and can show a connect prompt.
+  const { settings } = await readSettingsSafe();
+  return settings;
 });
 
 ipcMain.handle('settings:write', async (_evt, obj) => {
   // notify:false — the renderer authored this write and already has the values.
-  // Echoing them back could overwrite a newer local edit made while this was
-  // in flight. `settings:changed` is for MAIN-initiated writes only.
   await writeSettings(obj, { notify: false });
+});
+
+// ── API connection config (URL + key) ───────────────────────────────────────
+ipcMain.handle('api:read', () => {
+  const c = readApiConfig();
+  return { url: c.url, hasApiKey: !!c.apiKey };
+});
+ipcMain.handle('api:write', (_evt, patch) => {
+  const next: any = {};
+  if (typeof patch?.url === 'string') next.url = patch.url;
+  if (typeof patch?.apiKey === 'string') next.apiKey = patch.apiKey;
+  const c = writeApiConfig(next);
+  return { ok: true, url: c.url, hasApiKey: !!c.apiKey };
+});
+ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
+  const key = apiKey || readApiConfig().apiKey;
+  if (!url || !key) return { ok: false, error: 'URL and API key are both required.' };
+  const ok = await api.health(url, key);
+  return ok ? { ok: true } : { ok: false, error: 'Could not reach the server with that URL and key.' };
+});
+// One-time push of the existing local SQLite data up to the API.
+ipcMain.handle('api:migrate', async () => {
+  const { migrateSqliteToApi } = await import('./api/migrate.js');
+  return migrateSqliteToApi();
 });
 
 // OAuth for agent secrets. The whole flow (system browser + loopback callback +
@@ -1104,7 +1137,7 @@ async function readSyncPat() {
 
 async function finishWorkspaceSetup(res: any, name: string) {
   const id = crypto.randomUUID();
-  insertWorkspace({
+  await createWorkspace({
     id,
     name: (name || '').trim() || res.repoName,
     path: res.path,
@@ -1142,9 +1175,9 @@ ipcMain.handle('workspace:addFromRepo', async (_evt, { workspacePath, owner, rep
   if (!auth.ok) return auth;
   // Two workspaces on one repo would sync over each other through the same
   // branch, so the repo — not the folder — is what has to be unique.
-  const dup = findWorkspaceByRepo(owner, repo);
+  const dup = await findWorkspaceByRepo(owner, repo);
   if (dup) return { ok: false, error: `${owner}/${repo} is already open as "${dup.name}".` };
-  if (isPathClaimed(workspacePath)) {
+  if (await isPathClaimed(workspacePath)) {
     return { ok: false, error: 'Another workspace already uses that folder.' };
   }
   const res = await syncEnsureCheckout({ workspacePath, owner, repo, pat: auth.pat });
@@ -1159,10 +1192,10 @@ ipcMain.handle('workspace:addFromRepo', async (_evt, { workspacePath, owner, rep
 ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
   const auth = await readSyncPat();
   if (!auth.ok) return auth;
-  const ws = getWorkspace(id);
+  const ws = await getWorkspace(id);
   if (!ws) return { ok: false, error: 'Workspace not found' };
   if (ws.path) return { ok: false, error: `"${ws.name}" is already set up at ${ws.path}.` };
-  if (isPathClaimed(workspacePath, id)) {
+  if (await isPathClaimed(workspacePath, id)) {
     return { ok: false, error: 'Another workspace already uses that folder.' };
   }
 
@@ -1171,10 +1204,8 @@ ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
   });
   if (!res.ok) return res;
 
-  // A concurrent call could still lose the (workspace_id, machine) primary-key
-  // race; surfacing it beats an unhandled rejection in the IPC.
   try {
-    insertWorkspaceLocal(id, workspacePath);
+    wsSetUpHere(id, workspacePath);
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'Could not record that checkout.' };
   }
@@ -1205,7 +1236,7 @@ ipcMain.handle('workspace:ensureFiles', async (_evt, { workspacePath, overwrite 
 // The engine holds a path captured at start(), not a live row reference, so
 // anything that removes a workspace has to stop it explicitly first.
 async function stopEngineForWorkspace(id: string) {
-  const ws = getWorkspace(id);
+  const ws = await getWorkspace(id);
   if (ws?.path && engineBoundPath() === ws.path) await engineStop();
 }
 
@@ -1218,7 +1249,7 @@ ipcMain.handle('workspace:remove', async (_evt, { id }) => {
   // path at start(), so deleting the row doesn't reach it — it would keep
   // committing and pushing to a folder the user just removed from the app.
   await stopEngineForWorkspace(id);
-  deleteWorkspace(id);
+  await removeWorkspace(id);
   await notifyWorkspacesChanged();
   return { ok: true };
 });
@@ -1229,7 +1260,7 @@ ipcMain.handle('workspace:remove', async (_evt, { id }) => {
 // back to "not set up here" and can be re-cloned.
 ipcMain.handle('workspace:forgetLocal', async (_evt, { id }) => {
   await stopEngineForWorkspace(id);
-  deleteWorkspaceLocal(id);
+  wsForgetLocal(id);
   await notifyWorkspacesChanged();
   return { ok: true };
 });
@@ -1252,7 +1283,7 @@ ipcMain.handle('sync:listRepos', async () => {
 ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds }) => {
   const settings = await readSettings();
   const pat = settings.sync?.pat || '';
-  const ws = findWorkspaceByPath(workspacePath);
+  const ws = await findWorkspaceByPath(workspacePath);
   const win = BrowserWindow.fromWebContents(evt.sender);
   // User turned sync off for this workspace → don't start the engine, but show
   // the DISABLED (stop) icon so they can re-enable from the status bar. Nothing
@@ -1279,10 +1310,10 @@ ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disable
   // One boolean on one row. This used to rebuild the whole disabledWorkspaceIds
   // array and write it back inside the sync object, which rewrote every
   // workspace row AND re-encrypted the GitHub PAT to flip one flag.
-  const ws = findWorkspaceByPath(workspacePath);
+  const ws = await findWorkspaceByPath(workspacePath);
   if (!ws) return { ok: false, error: 'Workspace not found' };
   const wsId = ws.id;
-  setWorkspaceSyncDisabled(wsId, disabled);
+  setSyncEnabled(wsId, !disabled);
   // The flag lives on the workspace row, so the renderer learns about it the
   // same way it learns about any other workspace change.
   await notifyWorkspacesChanged();

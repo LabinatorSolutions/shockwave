@@ -227,6 +227,11 @@ contextBridge.exposeInMainWorld('api', {
   settings: {
     /** @returns {Promise<object>} Full merged settings; secrets decrypted. */
     read: () => ipcRenderer.invoke('settings:read'),
+    // API connection config (URL + key) and one-time migration.
+    apiRead: () => ipcRenderer.invoke('api:read'),
+    apiWrite: (patch) => ipcRenderer.invoke('api:write', patch),
+    apiTest: (args) => ipcRenderer.invoke('api:test', args),
+    apiMigrate: () => ipcRenderer.invoke('api:migrate'),
     /** Writes only the keys present in `patch`; secrets are encrypted before write.
      *  @param {object} obj @returns {Promise<void>} */
     write: (obj) => ipcRenderer.invoke('settings:write', obj),
