@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shockwave
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: shockwave
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      # runs once on a fresh volume to create the schema
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # NOT exposed to the host by default — the api reaches it over the compose
+    # network. Uncomment to inspect locally.
+    # ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shockwave -d shockwave"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://shockwave:${POSTGRES_PASSWORD:?}@postgres:5432/shockwave
+      MASTER_KEY: ${MASTER_KEY:?set in .env — 32 bytes base64}
+      API_KEY: ${API_KEY:?set in .env}
+      PORT: 8080
+    ports:
+      - "8080:8080"        # the ONLY public surface; front with TLS in prod
+
+volumes:
+  pg-data:
