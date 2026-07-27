@@ -1,31 +1,11 @@
-// Chat persistence against the API. Replaces the db/index chat functions. The
-// pi runtime (session, streaming, its JSONL file) is unchanged — this is only
-// where the session row + message rows get stored. The transcript JSONL stays a
-// local pi file, derived from the session id; it is not sent to the server.
+// Chat persistence against the API — the DESKTOP host's dumb I/O for the shared
+// agent-core. All logic (the pi→row mapping, the upload-then-clear ordering)
+// lives in agent-core/agent.ts now; this file just moves already-shaped data
+// over HTTP. The companion host does the same operations directly against the
+// store. The transcript JSONL is a local pi file, uploaded whole after a turn.
 
 import { api } from './client.js';
-
-// pi message → row shape (moved verbatim from db/index; the server stores these).
-function textOf(content: any): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
-  return '';
-}
-function thinkingOf(content: any): string | null {
-  if (!Array.isArray(content)) return null;
-  const t = content.filter((c) => c?.type === 'thinking' && typeof c.thinking === 'string').map((c) => c.thinking).join('');
-  return t || null;
-}
-function toolCallsOf(content: any): string | null {
-  if (!Array.isArray(content)) return null;
-  const calls = content.filter((c) => c?.type === 'toolCall').map((c) => ({ id: c.id, name: c.name, arguments: c.arguments }));
-  return calls.length ? JSON.stringify(calls) : null;
-}
-function piMessageToRow(m: any, seq: number, now: number) {
-  if (m?.role === 'assistant') return { seq, role: 'assistant', content: textOf(m.content) || null, reasoning: thinkingOf(m.content), toolCalls: toolCallsOf(m.content), toolCallId: null, toolName: null, createdAt: now };
-  if (m?.role === 'toolResult') return { seq, role: 'tool', content: textOf(m.content) || null, reasoning: null, toolCalls: null, toolCallId: m.toolCallId ?? null, toolName: m.toolName ?? null, createdAt: now };
-  return { seq, role: 'user', content: textOf(m.content) || null, reasoning: null, toolCalls: null, toolCallId: null, toolName: null, createdAt: now };
-}
+import type { ChatRow } from '../../../agent-core/agent.js';
 
 export async function getSession(sessionId: string): Promise<any | null> {
   const { session } = await api.get(`/chat/${encodeURIComponent(sessionId)}`);
@@ -43,11 +23,9 @@ export async function setSessionTitle(sessionId: string, title: string): Promise
   await api.patch(`/chat/${encodeURIComponent(sessionId)}/title`, { title });
 }
 
-// Append complete messages. The API is idempotent by (session_id, seq), so we
-// send the full mapped list and the server skips what it already has.
-export async function persistMessages(sessionId: string, piMessages: any[], now: number): Promise<number> {
-  if (!Array.isArray(piMessages) || !piMessages.length) return 0;
-  const rows = piMessages.map((m, i) => piMessageToRow(m, i, now));
+// Append already-mapped rows. Idempotent by (session_id, seq) server-side.
+export async function persistMessages(sessionId: string, rows: ChatRow[]): Promise<number> {
+  if (!Array.isArray(rows) || !rows.length) return 0;
   return api.post(`/chat/${encodeURIComponent(sessionId)}/messages`, rows);
 }
 

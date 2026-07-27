@@ -11,13 +11,13 @@ import * as parcelWatcher from '@parcel/watcher';
 import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
-import { agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
+import { initDesktopAgent, agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
 import {
   initCron, cronActivate, cronDeactivate, cronOnFileChanged, cronRead, cronSetEnabled,
   cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
 } from './cron.js';
 import { CRON_FILE } from './cronScheduler.js';
-import { listSessions, listStarred, searchSessions, getMessages, openSession as openSessionApi, deleteSession, setSessionTitle, setSessionStarred } from './api/chats.js';
+import { listSessions, listStarred, searchSessions, getMessages, openSession as openSessionApi, deleteSession, setSessionTitle, setSessionStarred, postEvent } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
@@ -28,7 +28,6 @@ import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../.
 import { getProviders } from '@earendil-works/pi-ai/compat';
 import { initModelCatalog, getCatalogModels } from '../../agent-core/modelCatalog.js';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from '../../agent-core/skillLibrary.js';
-import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
 import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, getFreshToken, PROVIDER_PRESETS } from './oauth.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
@@ -1417,6 +1416,7 @@ ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
         sessionId,
         text,
         images,
+        workspaceId: ws?.id ?? '',
         workspacePath,
         provider,
         model,
@@ -1424,11 +1424,11 @@ ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
         baseUrl,
         contextWindow,
         thinkingLevel,
-        userDataDir: app.getPath('userData'),
-        builtinDir: builtinSkillsDir(),
         wsBuiltinSkills: wsData?.builtinSkills ?? {},
       },
-      (event) => emit('agent:event', event),
+      // Desktop emit routes to BOTH sinks: the renderer (IPC) and the companion
+      // live feed, so other clients watching this chat see the turn stream.
+      (event) => { emit('agent:event', event); postEvent(event.sessionId, event).catch(() => {}); },
     );
   } catch (err: any) {
     emit('agent:error', { sessionId, message: err?.message ?? String(err) });
@@ -1983,10 +1983,11 @@ async function runAgentTurnForCron(
   const { provider, model, baseUrl, contextWindow, thinkingLevel, providerKeys } = settings.codingAgent ?? {};
   const apiKey = providerKeys?.[provider] ?? '';
   const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
+  const wsRow = await findWorkspaceByPath(workspacePath);
   await agentSend(
     {
-      sessionId, text, workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel,
-      userDataDir: app.getPath('userData'), builtinDir: builtinSkillsDir(),
+      sessionId, text, workspaceId: wsRow?.id ?? workspacePath, workspacePath,
+      provider, model, apiKey, baseUrl, contextWindow, thinkingLevel,
       wsBuiltinSkills: wsData?.builtinSkills ?? {},
       unattended, source, cronTitle,
     },
@@ -2006,25 +2007,25 @@ ipcMain.handle('cron:runNow', (_e, { name }) => cronRunNow(name));
 ipcMain.handle('cron:setMaxCatchupHours', (_e, n) => cronSetMaxCatchupHours(n));
 ipcMain.handle('cron:setMaxRunMinutes', (_e, n) => cronSetMaxRunMinutes(n));
 
-// Install the bridge the agent-tokens pi extension uses to fetch decrypted
-// secrets. Re-reads on every call so user-side edits to secrets are picked
-// up mid-conversation without restarting the session.
-installAgentTokensBridge(
-  async () => {
+// Build the desktop agent host. The secret getters re-read settings on every
+// call so user-side edits are picked up mid-conversation. getToken returns a
+// usable credential: static → the stored token; OAuth → a fresh access token
+// (getFreshToken refreshes if expired), throwing a user-facing message for
+// unknown names / connections needing reconnect.
+initDesktopAgent({
+  builtinDir: builtinSkillsDir(),
+  getSecrets: async () => {
     const settings = await readSettings();
     return settings.agentSecrets ?? [];
   },
-  // getToken(name): a usable credential. Static → the stored token; OAuth →
-  // a fresh access token (getFreshToken refreshes if expired). Throws with a
-  // user-facing message for unknown names / connections needing reconnect.
-  async (name) => {
+  getToken: async (name) => {
     const settings = await readSettings();
     const secret = (settings.agentSecrets ?? []).find((s) => s.name === name);
     if (!secret) throw new Error(`No secret named "${name}". Call list_agent_secrets to see available names.`);
     if (secret.oauth) return getFreshToken(name);
     return secret.token ?? '';
   },
-);
+});
 
 // Bridge for the open-file pi extension: validate the agent's path against the
 // active workspace, then ask the renderer to open it in a new tab. Confined to
