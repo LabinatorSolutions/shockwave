@@ -12,6 +12,7 @@ export {
 } from '../shared/constants';
 
 export const SETTINGS_SECTIONS = Object.freeze({
+  COMPANION: 'companion',
   APPEARANCE: 'appearance',
   TRANSCRIPTION: 'transcription',
   UPDATES: 'updates',

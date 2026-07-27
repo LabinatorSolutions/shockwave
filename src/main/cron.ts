@@ -17,11 +17,22 @@ import {
   CRON_FILE, parseCronJobs, planTick, nextAfter, describeSchedule, localTz,
 } from './cronScheduler.js';
 import { agentRunningSessions, agentAbort } from './codingAgent.js';
-import {
-  getSession, listCronState, ensureCronRow, updateCronState, pruneCronState, deleteCronStateForWorkspace,
-} from './db/index.js';
+// Cron's state store was SQLite (removed). Cron is DISABLED on the client until
+// it's rebuilt on the companion — the scheduler never starts (see CRON_DISABLED)
+// and these inert stubs replace the old db/index calls so every bit of cron
+// logic below still compiles, untouched, ready for the rebuild.
+const getSession = (_id: string): any => null;
+const listCronState = (_ws: string): any[] => [];
+const ensureCronRow = (_row: any): void => {};
+const updateCronState = (_ws: string, _job: string, _patch: any, _now?: number): void => {};
+const pruneCronState = (_ws: string, _keep: string[]): void => {};
+const deleteCronStateForWorkspace = (_ws: string): void => {};
 
 const TICK_MS = 60_000;
+// Master kill switch: the scheduler does not run on the client in this build.
+// Typed as boolean (not the literal `true`) so the guarded code isn't flagged
+// unreachable. Flip to false only once cron is rebuilt companion-side.
+const CRON_DISABLED: boolean = true;
 
 // Injected by main at startup (initCron) to avoid importing main.ts (circular)
 // and to keep the decrypted-settings + opts-building plumbing where it lives.
@@ -49,6 +60,7 @@ export function initCron(d: CronDeps) { deps = d; }
 // ---- lifecycle (tied to the workspace watcher in main) ------------------------
 
 export function cronActivate(workspacePath: string) {
+  if (CRON_DISABLED) return; // scheduler off on the client
   if (activeWs === workspacePath && timer) return;
   activeWs = workspacePath;
   if (!timer) timer = setInterval(() => { void tick(); }, TICK_MS);
@@ -62,7 +74,7 @@ export function cronDeactivate() {
 
 // Called by the workspace watcher when cron.json changes (promptness only —
 // the 60s tick would catch it anyway). Reconciles + refires the tick.
-export function cronOnFileChanged() { void tick(); }
+export function cronOnFileChanged() { if (CRON_DISABLED) return; void tick(); }
 
 // ---- helpers ------------------------------------------------------------------
 
@@ -262,6 +274,7 @@ export async function cronSetMaxRunMinutes(n: number): Promise<void> {
 // even when cron/the job is disabled. Sourced from the live file (last-good),
 // so a currently-malformed file doesn't break Run-now for a job you can see.
 export async function cronRunNow(name: string): Promise<{ ok?: boolean; busy?: boolean; error?: string }> {
+  if (CRON_DISABLED) return { error: 'Scheduled runs are disabled in this build.' };
   if (!activeWs) return { error: 'No active workspace.' };
   if (inFlight || anyAgentBusy(activeWs)) return { busy: true };
   const { jobs } = await readCron(activeWs);

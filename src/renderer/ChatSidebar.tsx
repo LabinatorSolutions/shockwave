@@ -607,7 +607,10 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (workspacePath) chatStore.ensureActiveChat(workspacePath);
   }, [workspacePath]);
 
-  const { messages, running, error, tokens, queuedCount, attachments } = chat;
+  const { messages, running, error, tokens, queuedCount, attachments, remoteMachine } = chat;
+  // Running on another machine → this composer is frozen (single writer per turn).
+  // It unfreezes when that turn ends (agent_end clears remoteMachine).
+  const frozen = !!remoteMachine;
   const input = chat.draft;
   const sessionTitle = chat.title;
   const sessionStarred = chat.starred;
@@ -697,6 +700,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   });
 
   const onSend = useCallback(async () => {
+    const activeId = chatIdRef.current;
+    if (activeId && chatStore.getState().chats[activeId]?.remoteMachine) return; // frozen: running elsewhere
     // Commit any in-flight partial transcript before submitting. The textarea
     // displays input+partial as one string, so the user expects the partial
     // they just said to be part of what gets sent.
@@ -1083,6 +1088,12 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{error}</div>
         )}
+        {frozen && (
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-[11px] text-muted-foreground">
+            <SpinnerIcon size={11} />
+            <span>Running on <span className="font-medium text-foreground">{remoteMachine}</span> — the composer unlocks when it finishes.</span>
+          </div>
+        )}
       </div>
 
       {/* Composer card: rounded 14px, lifted off the panel (spec §6). */}
@@ -1099,9 +1110,10 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           )}
         <textarea
           ref={textareaRef}
-          className="max-h-44 w-full resize-none bg-transparent font-chat text-[13px] leading-normal text-foreground outline-none placeholder:text-muted-2"
+          className="max-h-44 w-full resize-none bg-transparent font-chat text-[13px] leading-normal text-foreground outline-none placeholder:text-muted-2 disabled:opacity-50"
           value={input + (partialText ? (input && !input.endsWith(' ') ? ' ' : '') + partialText : '')}
-          placeholder="Ask the agent…"
+          placeholder={frozen ? `Running on ${remoteMachine}…` : 'Ask the agent…'}
+          disabled={frozen}
           onChange={(e) => { setInput(e.target.value); setPartialText(''); }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -1154,7 +1166,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
                   : <MicIcon size={15} />}
               </button>
             )}
-            {running && (
+            {running && !frozen && (
               <button
                 type="button"
                 className="flex size-[29px] items-center justify-center rounded-[9px] bg-foreground/80 text-background hover:bg-foreground"
@@ -1167,8 +1179,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               type="button"
               className="flex size-[29px] items-center justify-center rounded-[9px] bg-primary text-primary-foreground hover:bg-primary-hover disabled:pointer-events-none disabled:opacity-40"
               onClick={onSend}
-              disabled={(!input.trim() && !partialText.trim() && attachments.length === 0) || !workspacePath}
-              title={running ? 'Send (steers the running response)' : 'Send'}
+              disabled={frozen || (!input.trim() && !partialText.trim() && attachments.length === 0) || !workspacePath}
+              title={frozen ? `Running on ${remoteMachine}` : running ? 'Send (steers the running response)' : 'Send'}
               aria-label="Send"
             ><PlayIcon size={14} /></button>
           </div>

@@ -65,4 +65,39 @@ export const api = {
       return r.ok;
     } catch { return false; }
   },
+  // Open a long-lived Server-Sent Events stream. `onEvent` fires per `data:`
+  // frame (parsed JSON). Returns an abort fn. No timeout — it stays open until
+  // aborted or the connection drops. Used for the live chat feed.
+  stream(pathname: string, onEvent: (evt: any) => void): () => void {
+    const { url, apiKey } = base();
+    const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(target, {
+          headers: { Authorization: `Bearer ${apiKey}`, Accept: 'text/event-stream' },
+          signal: ctrl.signal,
+        });
+        if (!res.ok || !res.body) return;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+            for (const line of frame.split('\n')) {
+              if (!line.startsWith('data:')) continue; // skip `:` comments/pings
+              const data = line.slice(5).trim();
+              if (data) { try { onEvent(JSON.parse(data)); } catch { /* malformed frame */ } }
+            }
+          }
+        }
+      } catch { /* aborted or connection dropped */ }
+    })();
+    return () => ctrl.abort();
+  },
 };

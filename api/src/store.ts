@@ -1,43 +1,45 @@
-// The API's data layer — async Postgres port of the old core.ts. Every function
-// takes the pool + the master key. Secrets are sealed/unsealed here; clients
-// never see ciphertext. Parameterized SQL throughout.
+// The API's data layer — drizzle over Postgres. Every function takes the drizzle
+// `Db` + (for secret ops) the master key. Secrets are sealed/unsealed here;
+// clients never see ciphertext.
 
-import type { DB } from './db.js';
-import { tx } from './db.js';
-import type pg from 'pg';
+import type { Db } from './db.js';
 import { seal, unseal } from './crypto.js';
 import {
   isSettingsSecretKey, SETTINGS_SECRET_OWNER, AGENT_SECRET_FIELDS, isOAuthOwnedField,
-  OAUTH_OWNED_COLUMNS, flattenInto, setPath, typeOf, encodeValue, decodeValue,
+  flattenInto, setPath, typeOf, encodeValue, decodeValue,
   isPlainObject, splitAgentSecret, joinAgentSecret,
 } from './keys.js';
+import {
+  workspace, setting, agentSecret, secretValue, chatSession, chatTranscript, message,
+} from './schema.js';
+import { and, eq, ne, lt, desc, asc, ilike, like, sql, notInArray } from 'drizzle-orm';
 
 const KEY_VERSION = 1;
 const now = () => Date.now();
 
-type Runner = DB | pg.PoolClient;
-const q = (r: Runner, text: string, params: any[] = []) => r.query(text, params);
+// A drizzle transaction context has the same query API as the top-level db, so
+// helpers accept either.
+type Tx = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
 
 // ── secret_value helpers ─────────────────────────────────────────────────────
 
-async function putSecret(c: pg.PoolClient, key: Buffer, owner: string, field: string, plain: string) {
+async function putSecret(c: Tx, key: Buffer, owner: string, field: string, plain: string) {
   if (!plain) {
-    await q(c, 'DELETE FROM secret_value WHERE owner=$1 AND field=$2', [owner, field]);
+    await c.delete(secretValue).where(and(eq(secretValue.owner, owner), eq(secretValue.field, field)));
     return;
   }
   const s = seal(key, plain);
-  await q(c,
-    `INSERT INTO secret_value (owner,field,ciphertext,iv,tag,key_version,updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (owner,field) DO UPDATE SET
-       ciphertext=EXCLUDED.ciphertext, iv=EXCLUDED.iv, tag=EXCLUDED.tag,
-       key_version=EXCLUDED.key_version, updated_at=EXCLUDED.updated_at`,
-    [owner, field, s.value, s.iv, s.tag, KEY_VERSION, now()]);
+  await c.insert(secretValue)
+    .values({ owner, field, ciphertext: s.value, iv: s.iv, tag: s.tag, keyVersion: KEY_VERSION, updatedAt: now() })
+    .onConflictDoUpdate({
+      target: [secretValue.owner, secretValue.field],
+      set: { ciphertext: s.value, iv: s.iv, tag: s.tag, keyVersion: KEY_VERSION, updatedAt: now() },
+    });
 }
 
 // owner -> { field: plaintext }
-async function loadSecrets(pool: DB, key: Buffer): Promise<Map<string, Record<string, string>>> {
-  const { rows } = await q(pool, 'SELECT owner,field,ciphertext,iv,tag FROM secret_value');
+async function loadSecrets(db: Db, key: Buffer): Promise<Map<string, Record<string, string>>> {
+  const rows = await db.select().from(secretValue);
   const out = new Map<string, Record<string, string>>();
   for (const r of rows) {
     const bucket = out.get(r.owner) ?? {};
@@ -49,54 +51,48 @@ async function loadSecrets(pool: DB, key: Buffer): Promise<Map<string, Record<st
 
 // ── Narrow secret reads (agent tools) ────────────────────────────────────────
 
-export async function getSecret(pool: DB, key: Buffer, owner: string, field: string): Promise<string> {
-  const { rows } = await q(pool, 'SELECT ciphertext,iv,tag FROM secret_value WHERE owner=$1 AND field=$2', [owner, field]);
+export async function getSecret(db: Db, key: Buffer, owner: string, field: string): Promise<string> {
+  const rows = await db.select({ ciphertext: secretValue.ciphertext, iv: secretValue.iv, tag: secretValue.tag })
+    .from(secretValue).where(and(eq(secretValue.owner, owner), eq(secretValue.field, field)));
   if (!rows[0]) return '';
   return unseal(key, { value: rows[0].ciphertext, iv: rows[0].iv, tag: rows[0].tag });
 }
 
-export async function listSecretNames(pool: DB): Promise<Array<{ owner: string; field: string }>> {
-  const { rows } = await q(pool, 'SELECT owner,field FROM secret_value');
-  return rows.map((r: any) => ({ owner: r.owner, field: r.field }));
+export async function listSecretNames(db: Db): Promise<Array<{ owner: string; field: string }>> {
+  const rows = await db.select({ owner: secretValue.owner, field: secretValue.field }).from(secretValue);
+  return rows.map((r) => ({ owner: r.owner, field: r.field }));
 }
 
-// Agent-secret metadata — no decryption. Shaped like the old joinAgentSecret
-// minus the secret fields, so the desktop's list_agent_secrets renders unchanged.
-export async function listAgentSecretMeta(pool: DB): Promise<any[]> {
-  const { rows } = await q(pool, 'SELECT * FROM agent_secret ORDER BY created_at, name');
-  return rows.map((r: any) => joinAgentSecret(camelRow(r), {}));
+// Agent-secret metadata — no decryption.
+export async function listAgentSecretMeta(db: Db): Promise<any[]> {
+  const rows = await db.select().from(agentSecret).orderBy(asc(agentSecret.createdAt), asc(agentSecret.name));
+  return rows.map((r) => joinAgentSecret(r, {}));
 }
 
 // ── Read the whole settings object (decrypted) ───────────────────────────────
 
-export async function readSettings(pool: DB, key: Buffer): Promise<any> {
+export async function readSettings(db: Db, key: Buffer): Promise<any> {
   const merged: any = {};
-  const secrets = await loadSecrets(pool, key);
+  const secrets = await loadSecrets(db, key);
 
-  const { rows: settingRows } = await q(pool, 'SELECT key,value,type FROM setting');
+  const settingRows = await db.select({ key: setting.key, value: setting.value, type: setting.type }).from(setting);
   for (const r of settingRows) setPath(merged, r.key, decodeValue(r.value, r.type));
 
   for (const [field, plain] of Object.entries(secrets.get(SETTINGS_SECRET_OWNER) ?? {})) {
     setPath(merged, field, plain);
   }
 
-  const { rows: secretRows } = await q(pool, 'SELECT * FROM agent_secret ORDER BY created_at, name');
-  merged.agentSecrets = secretRows.map((r: any) => joinAgentSecret(camelRow(r), secrets.get(r.name) ?? {}));
+  const secretRows = await db.select().from(agentSecret).orderBy(asc(agentSecret.createdAt), asc(agentSecret.name));
+  merged.agentSecrets = secretRows.map((r) => joinAgentSecret(r, secrets.get(r.name) ?? {}));
 
-  const { rows: wsRows } = await q(pool,
-    'SELECT id,name,repo_owner,repo_name,default_branch,sort_order FROM workspace ORDER BY sort_order');
-  merged.workspaces = wsRows.map((r: any) => ({
-    id: r.id, name: r.name, repoOwner: r.repo_owner, repoName: r.repo_name,
-    defaultBranch: r.default_branch, sortOrder: r.sort_order,
-  }));
-
+  merged.workspaces = await listWorkspaces(db);
   return merged;
 }
 
 // ── Write a settings patch ───────────────────────────────────────────────────
 
-export async function writeSettings(pool: DB, key: Buffer, patch: any): Promise<any> {
-  if (!patch || typeof patch !== 'object') return readSettings(pool, key);
+export async function writeSettings(db: Db, key: Buffer, patch: any): Promise<any> {
+  if (!patch || typeof patch !== 'object') return readSettings(db, key);
 
   const flat = new Map<string, any>();
   let agentSecretsPatch: any[] | null = null;
@@ -118,60 +114,66 @@ export async function writeSettings(pool: DB, key: Buffer, patch: any): Promise<
     flattenInto(k, value, flat);
   }
 
-  await tx(pool, async (c) => {
+  await db.transaction(async (c) => {
     for (const [k, value] of flat) {
       if (isSettingsSecretKey(k)) {
         await putSecret(c, key, SETTINGS_SECRET_OWNER, k, typeof value === 'string' ? value : '');
         continue;
       }
       const type = typeOf(value);
-      await q(c,
-        `INSERT INTO setting (key,value,type,updated_at) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, type=EXCLUDED.type, updated_at=EXCLUDED.updated_at`,
-        [k, encodeValue(value, type), type, now()]);
+      await c.insert(setting)
+        .values({ key: k, value: encodeValue(value, type), type, updatedAt: now() })
+        .onConflictDoUpdate({ target: setting.key, set: { value: encodeValue(value, type), type, updatedAt: now() } });
     }
     if (providerKeysPatch) await reconcileProviderKeys(c, key, providerKeysPatch);
     if (agentSecretsPatch) await writeAgentSecrets(c, key, agentSecretsPatch);
   });
-  return readSettings(pool, key);
+  return readSettings(db, key);
 }
 
-async function reconcileProviderKeys(c: pg.PoolClient, key: Buffer, map: Record<string, any>) {
+async function reconcileProviderKeys(c: Tx, key: Buffer, map: Record<string, any>) {
   const prefix = 'codingAgent.providerKeys.';
   const keep = new Set(Object.keys(map).map((s) => `${prefix}${s}`));
-  const { rows } = await q(c,
-    'SELECT field FROM secret_value WHERE owner=$1 AND field LIKE $2', [SETTINGS_SECRET_OWNER, `${prefix}%`]);
+  const rows = await c.select({ field: secretValue.field }).from(secretValue)
+    .where(and(eq(secretValue.owner, SETTINGS_SECRET_OWNER), like(secretValue.field, `${prefix}%`)));
   for (const r of rows) {
-    if (!keep.has(r.field)) await q(c, 'DELETE FROM secret_value WHERE owner=$1 AND field=$2', [SETTINGS_SECRET_OWNER, r.field]);
+    if (!keep.has(r.field)) {
+      await c.delete(secretValue).where(and(eq(secretValue.owner, SETTINGS_SECRET_OWNER), eq(secretValue.field, r.field)));
+    }
   }
   for (const [slug, val] of Object.entries(map)) {
     await putSecret(c, key, SETTINGS_SECRET_OWNER, `${prefix}${slug}`, typeof val === 'string' ? val : '');
   }
 }
 
-async function writeAgentSecrets(c: pg.PoolClient, key: Buffer, list: any[]) {
+async function writeAgentSecrets(c: Tx, key: Buffer, list: any[]) {
   const keep = list.filter((s) => s?.name).map((s) => s.name as string);
   if (keep.length) {
-    await q(c, `DELETE FROM agent_secret WHERE name <> ALL($1)`, [keep]);
-    await q(c, `DELETE FROM secret_value WHERE owner <> ALL($1)`, [[...keep, SETTINGS_SECRET_OWNER]]);
+    await c.delete(agentSecret).where(notInArray(agentSecret.name, keep));
+    await c.delete(secretValue).where(notInArray(secretValue.owner, [...keep, SETTINGS_SECRET_OWNER]));
   } else {
-    await q(c, 'DELETE FROM agent_secret');
-    await q(c, 'DELETE FROM secret_value WHERE owner <> $1', [SETTINGS_SECRET_OWNER]);
+    await c.delete(agentSecret);
+    await c.delete(secretValue).where(ne(secretValue.owner, SETTINGS_SECRET_OWNER));
   }
   for (const entry of list) {
     if (!entry?.name) continue;
     const { row, secrets } = splitAgentSecret(entry);
-    await q(c,
-      `INSERT INTO agent_secret (name,description,kind,oauth_provider,oauth_client_id,oauth_auth_url,
-         oauth_token_url,oauth_scopes,oauth_expires_at,oauth_status,oauth_account_email,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       ON CONFLICT (name) DO UPDATE SET
-         description=EXCLUDED.description, kind=EXCLUDED.kind, oauth_provider=EXCLUDED.oauth_provider,
-         oauth_client_id=EXCLUDED.oauth_client_id, oauth_auth_url=EXCLUDED.oauth_auth_url,
-         oauth_token_url=EXCLUDED.oauth_token_url, oauth_scopes=EXCLUDED.oauth_scopes, updated_at=EXCLUDED.updated_at`,
-      [row.name, row.description, row.kind, row.oauthProvider, row.oauthClientId, row.oauthAuthUrl,
-       row.oauthTokenUrl, row.oauthScopes, row.oauthExpiresAt, row.oauthStatus, row.oauthAccountEmail,
-       row.createdAt || now(), now()]);
+    const vals = {
+      name: row.name, description: row.description ?? null, kind: row.kind ?? null,
+      oauthProvider: row.oauthProvider ?? null, oauthClientId: row.oauthClientId ?? null,
+      oauthAuthUrl: row.oauthAuthUrl ?? null, oauthTokenUrl: row.oauthTokenUrl ?? null,
+      oauthScopes: row.oauthScopes ?? null, oauthExpiresAt: row.oauthExpiresAt ?? null,
+      oauthStatus: row.oauthStatus ?? null, oauthAccountEmail: row.oauthAccountEmail ?? null,
+      createdAt: row.createdAt || now(), updatedAt: now(),
+    };
+    await c.insert(agentSecret).values(vals).onConflictDoUpdate({
+      target: agentSecret.name,
+      set: {
+        description: vals.description, kind: vals.kind, oauthProvider: vals.oauthProvider,
+        oauthClientId: vals.oauthClientId, oauthAuthUrl: vals.oauthAuthUrl, oauthTokenUrl: vals.oauthTokenUrl,
+        oauthScopes: vals.oauthScopes, updatedAt: vals.updatedAt,
+      },
+    });
     for (const field of AGENT_SECRET_FIELDS) {
       if (isOAuthOwnedField(field)) continue;
       if (!(field in secrets)) continue;
@@ -182,18 +184,16 @@ async function writeAgentSecrets(c: pg.PoolClient, key: Buffer, list: any[]) {
 
 // ── Targeted OAuth write (token exchange/refresh persist through here) ────────
 
-export async function patchOAuth(pool: DB, key: Buffer, name: string, patch: Record<string, any>): Promise<void> {
-  await tx(pool, async (c) => {
-    const sets: string[] = ['updated_at=$2'];
-    const vals: any[] = [name, now()];
-    const add = (col: string, v: any) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
-    if ('expiresAt' in patch) add('oauth_expires_at', patch.expiresAt ?? null);
-    if ('status' in patch) add('oauth_status', patch.status ?? null);
-    if ('accountEmail' in patch) add('oauth_account_email', patch.accountEmail ?? null);
-    if ('provider' in patch) add('oauth_provider', patch.provider ?? null);
-    if ('clientId' in patch) add('oauth_client_id', patch.clientId ?? null);
-    if ('scopes' in patch) add('oauth_scopes', patch.scopes ? JSON.stringify(patch.scopes) : null);
-    await q(c, `UPDATE agent_secret SET ${sets.join(', ')} WHERE name=$1`, vals);
+export async function patchOAuth(db: Db, key: Buffer, name: string, patch: Record<string, any>): Promise<void> {
+  await db.transaction(async (c) => {
+    const set: any = { updatedAt: now() };
+    if ('expiresAt' in patch) set.oauthExpiresAt = patch.expiresAt ?? null;
+    if ('status' in patch) set.oauthStatus = patch.status ?? null;
+    if ('accountEmail' in patch) set.oauthAccountEmail = patch.accountEmail ?? null;
+    if ('provider' in patch) set.oauthProvider = patch.provider ?? null;
+    if ('clientId' in patch) set.oauthClientId = patch.clientId ?? null;
+    if ('scopes' in patch) set.oauthScopes = patch.scopes ? JSON.stringify(patch.scopes) : null;
+    await c.update(agentSecret).set(set).where(eq(agentSecret.name, name));
     for (const [k, field] of [['accessToken', 'oauth.accessToken'], ['refreshToken', 'oauth.refreshToken'], ['clientSecret', 'oauth.clientSecret']] as const) {
       if (k in patch) await putSecret(c, key, name, field, patch[k] ?? '');
     }
@@ -202,125 +202,147 @@ export async function patchOAuth(pool: DB, key: Buffer, name: string, patch: Rec
 
 // ── Workspace identity ───────────────────────────────────────────────────────
 
-export async function listWorkspaces(pool: DB) {
-  const { rows } = await q(pool, 'SELECT id,name,repo_owner,repo_name,default_branch,sort_order FROM workspace ORDER BY sort_order');
-  return rows.map((r: any) => ({ id: r.id, name: r.name, repoOwner: r.repo_owner, repoName: r.repo_name, defaultBranch: r.default_branch, sortOrder: r.sort_order }));
+export async function listWorkspaces(db: Db) {
+  const rows = await db.select().from(workspace).orderBy(asc(workspace.sortOrder));
+  return rows.map((r) => ({
+    id: r.id, name: r.name, repoOwner: r.repoOwner, repoName: r.repoName,
+    defaultBranch: r.defaultBranch, sortOrder: r.sortOrder,
+  }));
 }
 
-export async function upsertWorkspace(pool: DB, w: { id: string; name: string; repoOwner: string; repoName: string; defaultBranch?: string }) {
-  await tx(pool, async (c) => {
-    const { rows } = await q(c, 'SELECT COALESCE(MAX(sort_order),0) AS m FROM workspace');
-    const next = Number(rows[0].m) + 1;
-    await q(c,
-      `INSERT INTO workspace (id,name,repo_owner,repo_name,default_branch,sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, repo_owner=EXCLUDED.repo_owner, repo_name=EXCLUDED.repo_name`,
-      [w.id, w.name, w.repoOwner, w.repoName, w.defaultBranch ?? 'main', next]);
+export async function upsertWorkspace(db: Db, w: { id: string; name: string; repoOwner: string; repoName: string; defaultBranch?: string }) {
+  await db.transaction(async (c) => {
+    const [{ m }] = await c.select({ m: sql<number>`COALESCE(MAX(${workspace.sortOrder}),0)` }).from(workspace);
+    const next = Number(m) + 1;
+    await c.insert(workspace)
+      .values({ id: w.id, name: w.name, repoOwner: w.repoOwner, repoName: w.repoName, defaultBranch: w.defaultBranch ?? 'main', sortOrder: next })
+      .onConflictDoUpdate({ target: workspace.id, set: { name: w.name, repoOwner: w.repoOwner, repoName: w.repoName } });
   });
 }
 
-export async function deleteWorkspace(pool: DB, id: string) {
-  await q(pool, 'DELETE FROM workspace WHERE id=$1', [id]);
+export async function deleteWorkspace(db: Db, id: string) {
+  await db.delete(workspace).where(eq(workspace.id, id));
 }
 
-export async function updateWorkspaceOrder(pool: DB, list: Array<{ id: string; name: string }>) {
-  await tx(pool, async (c) => {
+export async function updateWorkspaceOrder(db: Db, list: Array<{ id: string; name: string }>) {
+  await db.transaction(async (c) => {
     for (let i = 0; i < list.length; i++) {
       const w = list[i];
       if (!w?.id) continue;
-      await q(c, 'UPDATE workspace SET name=$1, sort_order=$2 WHERE id=$3', [w.name ?? '', i + 1, w.id]);
+      await c.update(workspace).set({ name: w.name ?? '', sortOrder: i + 1 }).where(eq(workspace.id, w.id));
     }
   });
 }
 
 // ── Chats ────────────────────────────────────────────────────────────────────
 
-const sessionCols = 'session_id AS "sessionId", workspace_id AS "workspaceId", title, system_prompt AS "systemPrompt", model, source, source_id AS "sourceId", machine, created_at AS "createdAt", updated_at AS "updatedAt", archived, starred';
+// The camelCase session projection returned to clients (includes running state).
+const sessionSelect = {
+  sessionId: chatSession.sessionId, workspaceId: chatSession.workspaceId, title: chatSession.title,
+  systemPrompt: chatSession.systemPrompt, model: chatSession.model, source: chatSession.source,
+  sourceId: chatSession.sourceId, machine: chatSession.machine, createdAt: chatSession.createdAt,
+  updatedAt: chatSession.updatedAt, archived: chatSession.archived, starred: chatSession.starred,
+  running: chatSession.running, runningMachine: chatSession.runningMachine,
+};
 
-export async function listSessions(pool: DB, workspaceId: string, opts: { limit?: number; before?: number } = {}) {
+export async function listSessions(db: Db, workspaceId: string, opts: { limit?: number; before?: number } = {}) {
   const limit = Math.min(opts.limit ?? 30, 100);
-  const params: any[] = [workspaceId];
-  let where = 'workspace_id=$1 AND NOT archived AND NOT starred AND NOT deleted';
-  if (typeof opts.before === 'number') { params.push(opts.before); where += ` AND updated_at < $${params.length}`; }
-  params.push(limit);
-  const { rows } = await q(pool, `SELECT ${sessionCols} FROM chat_session WHERE ${where} ORDER BY updated_at DESC LIMIT $${params.length}`, params);
-  return rows;
+  const conds = [eq(chatSession.workspaceId, workspaceId), eq(chatSession.archived, false), eq(chatSession.starred, false), eq(chatSession.deleted, false)];
+  if (typeof opts.before === 'number') conds.push(lt(chatSession.updatedAt, opts.before));
+  return db.select(sessionSelect).from(chatSession).where(and(...conds)).orderBy(desc(chatSession.updatedAt)).limit(limit);
 }
 
-export async function listStarred(pool: DB, workspaceId: string) {
-  const { rows } = await q(pool, `SELECT ${sessionCols} FROM chat_session WHERE workspace_id=$1 AND NOT archived AND starred AND NOT deleted ORDER BY updated_at DESC`, [workspaceId]);
-  return rows;
+export async function listStarred(db: Db, workspaceId: string) {
+  return db.select(sessionSelect).from(chatSession)
+    .where(and(eq(chatSession.workspaceId, workspaceId), eq(chatSession.archived, false), eq(chatSession.starred, true), eq(chatSession.deleted, false)))
+    .orderBy(desc(chatSession.updatedAt));
 }
 
-// Title-only search (FTS5 is gone; content search can come later via tsvector).
-export async function searchSessions(pool: DB, workspaceId: string, query: string, opts: { limit?: number } = {}) {
+// Title-only search (content search can come later via tsvector).
+export async function searchSessions(db: Db, workspaceId: string, query: string, opts: { limit?: number } = {}) {
   const limit = Math.min(opts.limit ?? 30, 100);
-  const like = `%${String(query).replace(/[%_]/g, (m) => `\\${m}`)}%`;
-  const { rows } = await q(pool,
-    `SELECT ${sessionCols} FROM chat_session WHERE workspace_id=$1 AND NOT deleted AND title ILIKE $2 ORDER BY updated_at DESC LIMIT $3`,
-    [workspaceId, like, limit]);
-  return rows.map((r: any) => ({ sessionId: r.sessionId, title: r.title, updatedAt: r.updatedAt, snippet: r.title ?? '' }));
+  const pattern = `%${String(query).replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+  const rows = await db.select({ sessionId: chatSession.sessionId, title: chatSession.title, updatedAt: chatSession.updatedAt })
+    .from(chatSession)
+    .where(and(eq(chatSession.workspaceId, workspaceId), eq(chatSession.deleted, false), ilike(chatSession.title, pattern)))
+    .orderBy(desc(chatSession.updatedAt)).limit(limit);
+  return rows.map((r) => ({ sessionId: r.sessionId, title: r.title, updatedAt: r.updatedAt, snippet: r.title ?? '' }));
 }
 
-export async function getSession(pool: DB, sessionId: string) {
-  const { rows } = await q(pool, `SELECT ${sessionCols} FROM chat_session WHERE session_id=$1 AND NOT deleted`, [sessionId]);
+export async function getSession(db: Db, sessionId: string) {
+  const rows = await db.select(sessionSelect).from(chatSession)
+    .where(and(eq(chatSession.sessionId, sessionId), eq(chatSession.deleted, false)));
   return rows[0] ?? null;
 }
 
-export async function getMessages(pool: DB, sessionId: string) {
-  const { rows } = await q(pool,
-    `SELECT session_id AS "sessionId", seq, role, content, reasoning, tool_calls AS "toolCalls", tool_call_id AS "toolCallId", tool_name AS "toolName", created_at AS "createdAt"
-     FROM message WHERE session_id=$1 ORDER BY seq`, [sessionId]);
-  return rows;
+export async function getMessages(db: Db, sessionId: string) {
+  return db.select({
+    sessionId: message.sessionId, seq: message.seq, role: message.role, content: message.content,
+    reasoning: message.reasoning, toolCalls: message.toolCalls, toolCallId: message.toolCallId,
+    toolName: message.toolName, createdAt: message.createdAt,
+  }).from(message).where(eq(message.sessionId, sessionId)).orderBy(asc(message.seq));
 }
 
-export async function upsertSession(pool: DB, row: {
+export async function upsertSession(db: Db, row: {
   sessionId: string; workspaceId: string; systemPrompt?: string | null; model?: string | null;
   source?: string | null; sourceId?: string | null; machine?: string | null; now: number;
 }) {
-  await q(pool,
-    `INSERT INTO chat_session (session_id,workspace_id,system_prompt,model,source,source_id,machine,created_at,updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
-     ON CONFLICT (session_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
-    [row.sessionId, row.workspaceId, row.systemPrompt ?? null, row.model ?? null, row.source ?? 'desktop', row.sourceId ?? null, row.machine ?? null, row.now]);
+  await db.insert(chatSession)
+    .values({
+      sessionId: row.sessionId, workspaceId: row.workspaceId, systemPrompt: row.systemPrompt ?? null,
+      model: row.model ?? null, source: row.source ?? 'desktop', sourceId: row.sourceId ?? null,
+      machine: row.machine ?? null, createdAt: row.now, updatedAt: row.now,
+    })
+    .onConflictDoUpdate({ target: chatSession.sessionId, set: { updatedAt: row.now } });
 }
 
-export async function setSessionTitle(pool: DB, sessionId: string, title: string) {
-  await q(pool, 'UPDATE chat_session SET title=$2 WHERE session_id=$1', [sessionId, title]);
+export async function setSessionTitle(db: Db, sessionId: string, title: string) {
+  await db.update(chatSession).set({ title }).where(eq(chatSession.sessionId, sessionId));
 }
-export async function setSessionStarred(pool: DB, sessionId: string, starred: boolean) {
-  await q(pool, 'UPDATE chat_session SET starred=$2 WHERE session_id=$1', [sessionId, starred]);
+export async function setSessionStarred(db: Db, sessionId: string, starred: boolean) {
+  await db.update(chatSession).set({ starred }).where(eq(chatSession.sessionId, sessionId));
 }
-export async function deleteSession(pool: DB, sessionId: string) {
+export async function deleteSession(db: Db, sessionId: string) {
   // Tombstone so a delete propagates to other machines on pull.
-  await q(pool, 'UPDATE chat_session SET deleted=true, updated_at=$2 WHERE session_id=$1', [sessionId, now()]);
+  await db.update(chatSession).set({ deleted: true, updatedAt: now() }).where(eq(chatSession.sessionId, sessionId));
 }
 
-// Append new message rows. Idempotent by (session_id, seq): the desktop sends the
-// full mapped list; already-stored rows are skipped. Touches updated_at.
-export async function persistMessages(pool: DB, sessionId: string, rows: any[]): Promise<number> {
+// Cross-client execution flag. `machine` non-null → running; null → stopped.
+// Cleared only AFTER the turn's rows + transcript are uploaded (caller ordering),
+// so running=false means "done and uploaded".
+export async function setRunning(db: Db, sessionId: string, machine: string | null) {
+  await db.update(chatSession)
+    .set({ running: machine != null, runningMachine: machine, updatedAt: now() })
+    .where(eq(chatSession.sessionId, sessionId));
+}
+
+// Append new message rows. Idempotent by (session_id, seq). Touches updated_at.
+export async function persistMessages(db: Db, sessionId: string, rows: any[]): Promise<number> {
   if (!Array.isArray(rows) || !rows.length) return 0;
   let inserted = 0;
-  await tx(pool, async (c) => {
+  await db.transaction(async (c) => {
     for (const m of rows) {
-      const res = await q(c,
-        `INSERT INTO message (session_id,seq,role,content,reasoning,tool_calls,tool_call_id,tool_name,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (session_id,seq) DO NOTHING`,
-        [sessionId, m.seq, m.role, m.content ?? null, m.reasoning ?? null, m.toolCalls ?? null, m.toolCallId ?? null, m.toolName ?? null, m.createdAt ?? now()]);
+      const res = await c.insert(message).values({
+        sessionId, seq: m.seq, role: m.role, content: m.content ?? null, reasoning: m.reasoning ?? null,
+        toolCalls: m.toolCalls ?? null, toolCallId: m.toolCallId ?? null, toolName: m.toolName ?? null,
+        createdAt: m.createdAt ?? now(),
+      }).onConflictDoNothing({ target: [message.sessionId, message.seq] });
       inserted += res.rowCount ?? 0;
     }
-    if (inserted) await q(c, 'UPDATE chat_session SET updated_at=$2 WHERE session_id=$1', [sessionId, now()]);
+    if (inserted) await c.update(chatSession).set({ updatedAt: now() }).where(eq(chatSession.sessionId, sessionId));
   });
   return inserted;
 }
 
-// snake_case pg row -> camelCase for the joinAgentSecret shape.
-function camelRow(r: any) {
-  return {
-    name: r.name, description: r.description, kind: r.kind,
-    oauthProvider: r.oauth_provider, oauthClientId: r.oauth_client_id, oauthAuthUrl: r.oauth_auth_url,
-    oauthTokenUrl: r.oauth_token_url, oauthScopes: r.oauth_scopes, oauthExpiresAt: r.oauth_expires_at,
-    oauthStatus: r.oauth_status, oauthAccountEmail: r.oauth_account_email,
-    createdAt: r.created_at, updatedAt: r.updated_at,
-  };
+// ── Chat transcript (the pi JSONL, whole) ────────────────────────────────────
+
+export async function putTranscript(db: Db, sessionId: string, content: string): Promise<void> {
+  await db.insert(chatTranscript)
+    .values({ sessionId, content, updatedAt: now() })
+    .onConflictDoUpdate({ target: chatTranscript.sessionId, set: { content, updatedAt: now() } });
+}
+
+export async function getTranscript(db: Db, sessionId: string): Promise<string | null> {
+  const rows = await db.select({ content: chatTranscript.content }).from(chatTranscript).where(eq(chatTranscript.sessionId, sessionId));
+  return rows[0]?.content ?? null;
 }

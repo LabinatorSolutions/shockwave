@@ -1,0 +1,108 @@
+// Drizzle schema — the single source of truth for the Postgres tables. The query
+// layer (store.ts) is built on these definitions; `drizzle-kit push`/`generate`
+// (see drizzle.config.ts) syncs them to the database. `bytea` has no built-in
+// drizzle type, so it's declared once as a customType.
+
+import { pgTable, text, integer, doublePrecision, boolean, bigint, primaryKey, index, customType } from 'drizzle-orm/pg-core';
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() { return 'bytea'; },
+});
+
+// Epoch-ms timestamps. mode:'number' + the global int8 type parser (db.ts) keep
+// these as JS numbers on the way out.
+const epochMs = (name: string) => bigint(name, { mode: 'number' });
+
+// Workspace IDENTITY — a GitHub repo. Checkout path / active / sync-toggle are
+// machine-local (desktop userData), not here.
+export const workspace = pgTable('workspace', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  repoOwner: text('repo_owner').notNull(),
+  repoName: text('repo_name').notNull(),
+  defaultBranch: text('default_branch').notNull().default('main'),
+  sortOrder: doublePrecision('sort_order').notNull(),
+}, (t) => [
+  index('idx_workspace_sort').on(t.sortOrder),
+  index('idx_workspace_repo').on(t.repoOwner, t.repoName),
+]);
+
+// Non-secret scalar settings, one row per dotted leaf key.
+export const setting = pgTable('setting', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  type: text('type').notNull(),      // 'string' | 'number' | 'boolean' | 'json'
+  updatedAt: epochMs('updated_at').notNull(),
+});
+
+// Agent-secret ENTITY metadata (no crypto columns).
+export const agentSecret = pgTable('agent_secret', {
+  name: text('name').primaryKey(),
+  description: text('description'),
+  kind: text('kind'),                // 'static' | 'oauth'
+  oauthProvider: text('oauth_provider'),
+  oauthClientId: text('oauth_client_id'),
+  oauthAuthUrl: text('oauth_auth_url'),
+  oauthTokenUrl: text('oauth_token_url'),
+  oauthScopes: text('oauth_scopes'), // JSON array
+  oauthExpiresAt: epochMs('oauth_expires_at'),
+  oauthStatus: text('oauth_status'), // 'disconnected' | 'connected' | 'expired'
+  oauthAccountEmail: text('oauth_account_email'),
+  createdAt: epochMs('created_at').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
+});
+
+// EVERY encrypted value. Crypto columns NOT NULL so a plaintext credential is
+// unrepresentable. bytea for the GCM iv/tag.
+export const secretValue = pgTable('secret_value', {
+  owner: text('owner').notNull(),    // 'settings' or an agent_secret.name
+  field: text('field').notNull(),
+  ciphertext: text('ciphertext').notNull(), // base64, AES-256-GCM
+  iv: bytea('iv').notNull(),
+  tag: bytea('tag').notNull(),
+  keyVersion: integer('key_version').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
+}, (t) => [primaryKey({ columns: [t.owner, t.field] })]);
+
+// Chats. `running`/`running_machine` are the cross-client execution flag: the
+// executing machine sets them on agent_start and clears them AFTER uploading the
+// turn (rows + transcript), so running=false means "done and uploaded".
+export const chatSession = pgTable('chat_session', {
+  sessionId: text('session_id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  title: text('title'),
+  systemPrompt: text('system_prompt'),
+  model: text('model'),
+  source: text('source'),            // 'desktop' | 'cron' | ...
+  sourceId: text('source_id'),
+  machine: text('machine'),          // hostname that created it (provenance)
+  createdAt: epochMs('created_at').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
+  archived: boolean('archived').notNull().default(false),
+  starred: boolean('starred').notNull().default(false),
+  deleted: boolean('deleted').notNull().default(false),
+  running: boolean('running').notNull().default(false),
+  runningMachine: text('running_machine'),
+}, (t) => [index('idx_chat_session_ws_updated').on(t.workspaceId, t.updatedAt)]);
+
+// The pi transcript JSONL, whole (Postgres TOAST handles multi-MB text). One row
+// per session.
+export const chatTranscript = pgTable('chat_transcript', {
+  sessionId: text('session_id').primaryKey().references(() => chatSession.sessionId, { onDelete: 'cascade' }),
+  content: text('content').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
+});
+
+// One row per pi message. Keyed by (session_id, seq) — globally unique because
+// session_id is a UUID and a chat has one writer.
+export const message = pgTable('message', {
+  sessionId: text('session_id').notNull().references(() => chatSession.sessionId, { onDelete: 'cascade' }),
+  seq: integer('seq').notNull(),
+  role: text('role').notNull(),      // 'user' | 'assistant' | 'tool'
+  content: text('content'),
+  reasoning: text('reasoning'),
+  toolCalls: text('tool_calls'),     // JSON array
+  toolCallId: text('tool_call_id'),
+  toolName: text('tool_name'),
+  createdAt: epochMs('created_at').notNull(),
+}, (t) => [primaryKey({ columns: [t.sessionId, t.seq] })]);

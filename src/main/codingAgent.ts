@@ -41,7 +41,10 @@ import { AGENT_TOKEN_TOOLS } from './agentTokensExtension.js';
 import { OPEN_FILE_TOOL } from './openFileExtension.js';
 import { assembleSystemPrompt } from './defaults/index.js';
 import { ACTIVE_TOOL_NAMES } from './defaults/tools.js';
-import { upsertSession, persistMessages, setSessionTitle, getSession } from './db/index.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import { upsertSession, persistMessages, setSessionTitle, getSession, getTranscript, putTranscript, setRunning, postEvent } from './api/chats.js';
+import { findWorkspaceByPath } from './api/workspaces.js';
 
 type Emit = (event: any) => void;
 
@@ -210,11 +213,21 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
   // resume; otherwise pi creates a fresh one UNDER OUR ID so the renderer's
   // pre-generated sessionId is the session's real identity.
   const agentDir = agentDirFor(userDataDir);
-  const row = getSession(sessionId);
+  const row = await getSession(sessionId);
+  // The transcript JSONL is pi's own local file, derived from the id. If the
+  // server knows this chat but its JSONL isn't on THIS machine (started on
+  // another box), pull it down first so we can continue it here.
+  const jsonlPath = join(agentDir, 'sessions', `${sessionId}.jsonl`);
+  if (row && !fs.existsSync(jsonlPath)) {
+    try {
+      const content = await getTranscript(sessionId);
+      if (content) { fs.mkdirSync(join(agentDir, 'sessions'), { recursive: true }); fs.writeFileSync(jsonlPath, content); }
+    } catch { /* offline or no transcript → create a fresh session below */ }
+  }
   let sessionManager;
   let promptOverride: string;
-  if (row?.jsonlPath) {
-    sessionManager = SessionManager.open(row.jsonlPath);
+  if (row && fs.existsSync(jsonlPath)) {
+    sessionManager = SessionManager.open(jsonlPath);
     promptOverride = row.systemPrompt ?? await assembleSystemPrompt(workspacePath);
   } else {
     sessionManager = SessionManager.create(workspacePath, join(agentDir, 'sessions'), { id: sessionId });
@@ -257,7 +270,8 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
     // pi-translated level — else a 'max' setting would rebuild every send.
     key: makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel: thinkingLevel || 'off' }),
     workspacePath,
-    jsonlPath: session.sessionFile,
+    // Set by pi as soon as the session is created/opened (which just happened).
+    jsonlPath: session.sessionFile ?? '',
     running: false,
     emit: emitEvent,
     lastFailureError: null,
@@ -270,11 +284,14 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
   entry.unsubscribe = session.subscribe((event) => {
     if (event?.type === 'agent_end' && Array.isArray(event.messages)) {
       const failure = event.messages.find(
-        (m) => m?.role === 'assistant' && m?.stopReason === 'error' && m?.errorMessage,
-      );
+        (m: any) => m?.role === 'assistant' && m?.stopReason === 'error' && m?.errorMessage,
+      ) as any;
       if (failure) entry.lastFailureError = failure.errorMessage;
     }
     entry.emit({ ...event, sessionId });
+    // Live feed: relay every event to the companion so other clients watching
+    // this chat see the turn stream in real time. Fire-and-forget, ephemeral.
+    postEvent(sessionId, { ...event, sessionId }).catch(() => { /* best-effort */ });
   });
 
   sessions.set(sessionId, entry);
@@ -283,28 +300,28 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
   // assembled prompt we just used (frozen); for a resume/continue the insert
   // conflicts and only refreshes the path + recency, preserving the frozen
   // prompt + title.
-  upsertSession({
+  const wsForChat = await findWorkspaceByPath(workspacePath);
+  await upsertSession({
     sessionId,
-    workspace: workspacePath,
-    jsonlPath: entry.jsonlPath,
+    workspaceId: wsForChat?.id ?? workspacePath,
     systemPrompt: promptOverride,
     model: model ?? null,
     source: source ?? 'desktop',
     // Identity within the source. Cron's is the job name (already threaded here
     // as cronTitle); an interactive desktop chat has no external id.
     sourceId: cronTitle ?? null,
-    now: Date.now(),
+    machine: os.hostname(),
   });
 
   // Cron runs pre-title their chat with the job name (skipping auto-title —
   // maybeGenerateTitle no-ops once a title exists). Only on a fresh row.
   if (cronTitle) {
-    const existing = getSession(sessionId);
-    if (existing && !existing.title) setSessionTitle(sessionId, cronTitle);
+    const existing = await getSession(sessionId);
+    if (existing && !existing.title) await setSessionTitle(sessionId, cronTitle);
   }
 
   // Tell the renderer this chat's session is live (title + star from the DB).
-  const dbRow = getSession(sessionId);
+  const dbRow = await getSession(sessionId);
   entry.emit({ type: 'shockwave_session', sessionId, title: dbRow?.title ?? null, starred: !!dbRow?.starred });
 
   return entry;
@@ -335,8 +352,8 @@ async function ensureSession(sessionId: string, opts, emitEvent: Emit): Promise<
 // Fire-and-forget: after the first exchange, ask pi's own LLM for a short title.
 // A single completeSimple call — NOT the agent loop — so it never touches the
 // transcript or runs tools.
-function maybeGenerateTitle(entry: Entry, sessionId: string, messages: any[]) {
-  const row = getSession(sessionId);
+async function maybeGenerateTitle(entry: Entry, sessionId: string, messages: any[]) {
+  const row = await getSession(sessionId);
   if (!row || row.title) return;
   const firstUser = messages.find((m) => m?.role === 'user');
   const firstAsst = messages.find((m) => m?.role === 'assistant');
@@ -362,7 +379,7 @@ function maybeGenerateTitle(entry: Entry, sessionId: string, messages: any[]) {
         .replace(/^["']|["']$/g, '')
         .slice(0, 100);
       if (title) {
-        setSessionTitle(sessionId, title);
+        await setSessionTitle(sessionId, title);
         entry.emit({ type: 'shockwave_session_titled', sessionId, title });
       }
     } catch { /* title is best-effort */ }
@@ -392,10 +409,21 @@ export async function agentSend(opts, emitEvent: Emit) {
   const entry = await ensureSession(sessionId, opts, emitEvent);
   entry.lastFailureError = null;
   entry.running = true;
+  // Mark the chat running on the companion (this machine). Other clients freeze
+  // their composer for it until we clear this — which we do only AFTER uploading
+  // the turn below (upload-before-clear = "running=false means done + uploaded").
+  setRunning(sessionId, os.hostname()).catch(() => { /* best-effort */ });
+  let threw = false;
   try {
     await entry.session.prompt(text, hasImages ? { images } : undefined);
+  } catch (e) {
+    threw = true;
+    throw e;
   } finally {
     entry.running = false;
+    // A hard throw ends the turn with nothing new to upload — release now so the
+    // chat doesn't stay frozen on other clients.
+    if (threw) setRunning(sessionId, null).catch(() => { /* best-effort */ });
   }
 
   if (entry.lastFailureError) {
@@ -414,13 +442,23 @@ export async function agentSend(opts, emitEvent: Emit) {
       }
     }
     entry.emit({ type: 'agent_send_failed', errorMessage, sessionId });
+    setRunning(sessionId, null).catch(() => { /* nothing new to upload */ });
     return;
   }
 
-  // Turn succeeded: persist the new complete messages, then maybe title.
+  // Turn succeeded: upload the turn (rows + whole JSONL), THEN clear the running
+  // flag — so running=false on the companion means "done and uploaded" and any
+  // other machine can safely take over.
   const msgs = entry.session.state?.messages ?? [];
-  try { persistMessages(sessionId, msgs, Date.now()); } catch { /* persistence is best-effort */ }
-  maybeGenerateTitle(entry, sessionId, msgs);
+  try {
+    await persistMessages(sessionId, msgs, Date.now());
+    try {
+      const content = fs.readFileSync(entry.jsonlPath, 'utf8');
+      await putTranscript(sessionId, content);
+    } catch { /* jsonl not ready yet */ }
+  } catch { /* best-effort persist */ }
+  setRunning(sessionId, null).catch(() => { /* best-effort */ });
+  maybeGenerateTitle(entry, sessionId, msgs).catch(() => { /* best-effort */ });
 }
 
 export async function agentAbort(sessionId: string) {

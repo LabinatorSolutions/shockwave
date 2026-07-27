@@ -231,7 +231,6 @@ contextBridge.exposeInMainWorld('api', {
     apiRead: () => ipcRenderer.invoke('api:read'),
     apiWrite: (patch) => ipcRenderer.invoke('api:write', patch),
     apiTest: (args) => ipcRenderer.invoke('api:test', args),
-    apiMigrate: () => ipcRenderer.invoke('api:migrate'),
     /** Writes only the keys present in `patch`; secrets are encrypted before write.
      *  @param {object} obj @returns {Promise<void>} */
     write: (obj) => ipcRenderer.invoke('settings:write', obj),
@@ -374,6 +373,11 @@ contextBridge.exposeInMainWorld('api', {
     deleteSession: (sessionId) => ipcRenderer.invoke('chat:deleteSession', sessionId),
     /** Rename a chat. @param {{ sessionId: string, title: string }} opts @returns {Promise<void>} */
     renameSession: (opts) => ipcRenderer.invoke('chat:renameSession', opts),
+    /** Watch a chat's live feed (running on another machine). Its events arrive
+     *  via agent.onEvent, stamped with this sessionId. @param {string} sessionId */
+    watchStart: (sessionId) => ipcRenderer.invoke('chat:watchStart', sessionId),
+    /** Stop watching a chat's live feed. @param {string} sessionId */
+    watchStop: (sessionId) => ipcRenderer.invoke('chat:watchStop', sessionId),
   },
 
   // ---- Voice transcription (AssemblyAI streaming) ------------------------
@@ -395,6 +399,9 @@ contextBridge.exposeInMainWorld('api', {
   // Dev builds fall back to the notify-only GitHub poll.
 
   app: {
+    /** This machine's name (os.hostname). Used to tell a chat running on THIS
+     *  machine (my turn) from one running elsewhere (freeze). @returns {Promise<string>} */
+    machineId: () => ipcRenderer.invoke('app:machineId'),
     /** Force an update check now (Settings → Updates). Resolves with the freshest status.
      *  @returns {Promise<{ updateAvailable: boolean, latest: string|null, current: string, url: string|null, error: string|null, downloaded: boolean }>} */
     checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),

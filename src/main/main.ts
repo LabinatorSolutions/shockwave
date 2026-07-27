@@ -17,7 +17,7 @@ import {
   cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
 } from './cron.js';
 import { CRON_FILE } from './cronScheduler.js';
-import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
+import { listSessions, listStarred, searchSessions, getMessages, openSession as openSessionApi, deleteSession, setSessionTitle, setSessionStarred } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
@@ -38,7 +38,9 @@ import { ensureCliShims, prependPath } from './cliTools.js';
 // every call site below (and in oauth.ts / cron.ts) is untouched.
 import { DEFAULT_SETTINGS, readSettings, readSettingsSafe, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
 import { readApiConfig, writeApiConfig } from './api/config.js';
+import os from 'node:os';
 import { api } from './api/client.js';
+import { readLocalSettings } from './api/localSettings.js';
 import {
   verifyPat as syncVerifyPat,
   checkGit as syncCheckGit,
@@ -918,12 +920,6 @@ ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
   const ok = await api.health(url, key);
   return ok ? { ok: true } : { ok: false, error: 'Could not reach the server with that URL and key.' };
 });
-// One-time push of the existing local SQLite data up to the API.
-ipcMain.handle('api:migrate', async () => {
-  const { migrateSqliteToApi } = await import('./api/migrate.js');
-  return migrateSqliteToApi();
-});
-
 // OAuth for agent secrets. The whole flow (system browser + loopback callback +
 // token exchange/refresh) lives in main; the renderer only kicks it off and
 // reads status back off the persisted secret. `oauth:listPresets` feeds the
@@ -1493,28 +1489,33 @@ async function activeWorkspacePath(): Promise<string | null> {
   return ws?.path ?? null;
 }
 
+// Chats are scoped by workspace IDENTITY (shared), not the local path.
+function activeWorkspaceId(): string | null {
+  return readLocalSettings().activeWorkspaceId ?? null;
+}
+
 // Recent chats for the picker (keyset paginated on updatedAt; pass `before`).
 ipcMain.handle('chat:listSessions', async (_evt, opts = {}) => {
-  const ws = await activeWorkspacePath();
+  const ws = activeWorkspaceId();
   if (!ws) return [];
   return listSessions(ws, opts);
 });
 
 // Starred chats (the pinned section at the top of the picker).
 ipcMain.handle('chat:listStarred', async () => {
-  const ws = await activeWorkspacePath();
+  const ws = activeWorkspaceId();
   if (!ws) return [];
   return listStarred(ws);
 });
 
 // Toggle a chat's starred flag.
 ipcMain.handle('chat:setStarred', async (_evt, { sessionId, starred }) => {
-  if (sessionId) setSessionStarred(sessionId, !!starred);
+  if (sessionId) await setSessionStarred(sessionId, !!starred);
 });
 
-// Cross-chat full-text search over message content.
+// Cross-chat title search.
 ipcMain.handle('chat:searchSessions', async (_evt, { query, limit } = {}) => {
-  const ws = await activeWorkspacePath();
+  const ws = activeWorkspaceId();
   if (!ws || !query) return [];
   return searchSessions(ws, query, { limit });
 });
@@ -1526,23 +1527,44 @@ ipcMain.handle('chat:getMessages', async (_evt, sessionId) => {
 });
 
 // Open a saved chat: return its row + messages so the renderer can hydrate the
-// UI. No main-side session work — the chat's session boots (or is reused) on
-// the next send, resolved from the DB by sessionId.
+// UI. No main-side session work — the chat's session boots on the next send.
 ipcMain.handle('chat:openSession', async (_evt, sessionId) => {
-  const row = getSession(sessionId);
-  if (!row) return { messages: [] };
-  return { session: row, messages: getMessages(sessionId) };
+  const { session, messages } = await openSessionApi(sessionId);
+  if (!session) return { messages: [] };
+  return { session, messages: messages ?? [] };
 });
 
 ipcMain.handle('chat:deleteSession', async (_evt, sessionId) => {
   if (!sessionId) return;
   // Abort + drop any live session first so a running turn can't keep writing.
   try { await agentDisposeSession(sessionId); } catch { /* best-effort */ }
-  deleteSession(sessionId);
+  await deleteSession(sessionId);
 });
 
 ipcMain.handle('chat:renameSession', async (_evt, { sessionId, title }) => {
-  if (sessionId && typeof title === 'string') setSessionTitle(sessionId, title.slice(0, 100));
+  if (sessionId && typeof title === 'string') await setSessionTitle(sessionId, title.slice(0, 100));
+});
+
+// This machine's name — used by the renderer to tell "running on THIS machine"
+// (my turn, composer stays live) from "running elsewhere" (freeze).
+ipcMain.handle('app:machineId', () => os.hostname());
+
+// Live feed subscription (spectator side). Opens the companion's SSE stream for
+// a chat running on ANOTHER machine and forwards each event into the same
+// `agent:event` channel the renderer already renders — so a remote turn draws
+// identically to a local one. One stream per session.
+const chatWatchers = new Map<string, () => void>();
+ipcMain.handle('chat:watchStart', (evt, sessionId) => {
+  if (!sessionId || chatWatchers.has(sessionId)) return;
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  const abort = api.stream(`/chat/${encodeURIComponent(sessionId)}/stream`, (e) => {
+    if (win && !win.isDestroyed()) win.webContents.send('agent:event', { ...e, sessionId });
+  });
+  chatWatchers.set(sessionId, abort);
+});
+ipcMain.handle('chat:watchStop', (_evt, sessionId) => {
+  const abort = chatWatchers.get(sessionId);
+  if (abort) { abort(); chatWatchers.delete(sessionId); }
 });
 
 // Provider + model lookups for the Settings UI. Pi-ai's `getProviders()` is
@@ -1916,10 +1938,11 @@ app.on('before-quit', () => { stopWatcher(); agentDisposeAll().catch(() => {}); 
 // Drain the sync engine before the process exits — let any in-flight git
 // push/pull finish so we don't leave a partial commit on the remote.
 //
-// Settings writes no longer need draining: they're synchronous better-sqlite3
-// transactions that have already committed by the time writeSettings resolves,
-// so the window-bounds save fired from `close` can't be lost to a fast Cmd+Q
-// the way the old async tmp+rename could.
+// Settings writes no longer need draining here: the window-bounds save fired
+// from `close` is a machine-local userData write (see api/localSettings), which
+// is synchronous and committed by the time it returns — nothing in flight to a
+// fast Cmd+Q. (Synced settings go to the companion, but window bounds isn't one
+// of those.)
 let cleanQuitting = false;
 app.on('will-quit', (event) => {
   if (cleanQuitting) return;

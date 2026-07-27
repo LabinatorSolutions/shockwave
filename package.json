@@ -13,8 +13,6 @@
     "test": "node --test \"tests/**/*.test.js\"",
     "lint": "eslint \"src/**/*.{js,jsx,cjs,ts,tsx}\" \"tests/**/*.js\"",
     "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate",
-    "postinstall": "electron-rebuild -f -w better-sqlite3",
     "ui:diff": "node scripts/ui-diff.mjs"
   },
   "keywords": [],
@@ -28,7 +26,6 @@
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
-    "drizzle-kit": "^0.31.10",
     "electron": "^42.2.0",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
@@ -57,7 +54,6 @@
     "@excalidraw/excalidraw": "^0.18.1",
     "@parcel/watcher": "^2.5.6",
     "arctic": "^3.7.0",
-    "better-sqlite3": "^12.11.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -66,7 +62,6 @@
     "date-fns": "^4.4.0",
     "dayjs": "^1.11.20",
     "diff": "^9.0.0",
-    "drizzle-orm": "^0.45.2",
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "force-graph": "^1.51.4",
@@ -101,17 +96,12 @@
       "!cli-tools/node_modules/.bin/**"
     ],
     "asarUnpack": [
-      "cli-tools/**",
-      "**/node_modules/better-sqlite3/**"
+      "cli-tools/**"
     ],
     "extraResources": [
       {
         "from": "resources/built-in-skills",
         "to": "built-in-skills"
-      },
-      {
-        "from": "drizzle",
-        "to": "drizzle"
       }
     ],
     "mac": {

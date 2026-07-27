@@ -7,7 +7,9 @@
   "scripts": {
     "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/server.js",
     "start": "node dist/server.js",
-    "dev": "npm run build && node dist/server.js"
+    "dev": "npm run build && node dist/server.js",
+    "db:push": "drizzle-kit push",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -18,6 +20,8 @@
     "pino": "^9.6.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.31.10",
     "esbuild": "^0.24.2"
   }
 }

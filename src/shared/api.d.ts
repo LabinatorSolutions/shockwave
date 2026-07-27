@@ -150,6 +150,10 @@ export interface ChatSession {
   updatedAt: number;
   archived: number;
   starred: number;
+  /** Cross-client execution flag: true while some machine runs this chat. */
+  running?: boolean;
+  /** Hostname of the machine currently running it (null when idle). */
+  runningMachine?: string | null;
 }
 
 /** A stored chat message (row of `message`). Tool CALLS ride on the assistant
@@ -242,6 +246,13 @@ export interface ShockwaveApi {
      *  cron, auto-provisioned secret slots). Never fires for the renderer's own
      *  writes. Apply only the reported `keys`. Returns an unsubscribe fn. */
     onChanged(cb: (payload: { keys: string[]; settings: Settings }) => void): () => void;
+    /** The API connection config (server URL + whether a key is stored). The key
+     *  itself never leaves main. */
+    apiRead(): Promise<{ url: string; hasApiKey: boolean }>;
+    /** Persist URL and/or key. Omit `apiKey` to keep the stored one. */
+    apiWrite(patch: { url?: string; apiKey?: string }): Promise<{ ok: boolean; url: string; hasApiKey: boolean }>;
+    /** Health-check a URL + key (falls back to the stored key when omitted). */
+    apiTest(args: { url: string; apiKey?: string }): Promise<{ ok: boolean; error?: string }>;
   };
 
   oauth: {
@@ -292,6 +303,11 @@ export interface ShockwaveApi {
     openSession(sessionId: string): Promise<{ session?: ChatSession; messages: ChatMessage[] }>;
     deleteSession(sessionId: string): Promise<void>;
     renameSession(opts: { sessionId: string; title: string }): Promise<void>;
+    /** Watch a chat running on another machine — its live events arrive via
+     *  agent.onEvent, stamped with this sessionId. */
+    watchStart(sessionId: string): Promise<void>;
+    /** Stop watching a chat's live feed. */
+    watchStop(sessionId: string): Promise<void>;
   };
 
   voice: {
@@ -299,6 +315,8 @@ export interface ShockwaveApi {
   };
 
   app: {
+    /** This machine's name (os.hostname) — distinguishes "running here" from "running elsewhere". */
+    machineId(): Promise<string>;
     checkForUpdates(): Promise<UpdateStatus>;
     getUpdateStatus(): Promise<UpdateStatus | null>;
     onUpdateStatus(cb: (status: UpdateStatus) => void): Unsubscribe;

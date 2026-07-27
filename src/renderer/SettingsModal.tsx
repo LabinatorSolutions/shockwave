@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import CompanionSection from './settings/CompanionSection.jsx';
 import { SETTINGS_SECTIONS } from './constants.js';
 import { CheckCircleIcon } from './Icons.jsx';
 import {
@@ -33,6 +34,7 @@ import AdvancedSection from './settings/AdvancedSection.jsx';
 function buildNav(workspaceLabel) {
   return [
     { kind: 'header', label: 'General' },
+    { kind: 'item', id: SETTINGS_SECTIONS.COMPANION, label: 'Companion' },
     { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
     { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
@@ -99,7 +101,16 @@ export default function SettingsModal({
   saveStatus,
   onOpenCronPanel,
 }) {
+  // null = still checking on open; every non-Server page is disabled until the
+  // server connection is confirmed reachable.
+  const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
+
+  const gated = apiReady !== true; // true while checking or when not connected
+  // When the server isn't set up, only the Server page is reachable.
+  const effectiveActive = gated && active !== SETTINGS_SECTIONS.COMPANION
+    ? SETTINGS_SECTIONS.COMPANION
+    : active;
 
   const activeWs = (workspaces || []).find((w) => w.id === activeWorkspaceId);
   const workspaceLabel = activeWs ? `Workspace · ${activeWs.name}` : 'Workspace';
@@ -145,15 +156,19 @@ export default function SettingsModal({
                 </div>
               );
             }
+            const disabled = gated && row.id !== SETTINGS_SECTIONS.COMPANION;
             return (
               <button
                 key={row.id}
+                disabled={disabled}
+                title={disabled ? 'Connect to your server first' : undefined}
                 className={cn(
                   'rounded-lg px-3 py-[7px] text-left text-[13px] text-foreground/75 hover:bg-accent',
-                  active === row.id && 'bg-selected font-medium text-selected-foreground hover:bg-selected',
+                  effectiveActive === row.id && 'bg-selected font-medium text-selected-foreground hover:bg-selected',
+                  disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent',
                 )}
-                onClick={() => setActive(row.id)}
-                aria-current={active === row.id ? 'page' : undefined}
+                onClick={() => { if (!disabled) setActive(row.id); }}
+                aria-current={effectiveActive === row.id ? 'page' : undefined}
               >
                 {row.label}
               </button>
@@ -161,7 +176,10 @@ export default function SettingsModal({
           })}
         </nav>
         <div className="min-w-0 flex-1 overflow-y-auto">
-          {active === SETTINGS_SECTIONS.APPEARANCE && (
+          {effectiveActive === SETTINGS_SECTIONS.COMPANION && (
+            <CompanionSection onReadyChange={setApiReady} />
+          )}
+          {effectiveActive === SETTINGS_SECTIONS.APPEARANCE && (
             <AppearanceSection
               themeMode={themeMode}
               onThemeModeChange={onThemeModeChange}
@@ -171,7 +189,7 @@ export default function SettingsModal({
               onTreePanelChange={onTreePanelChange}
             />
           )}
-          {active === SETTINGS_SECTIONS.WORKSPACES && (
+          {effectiveActive === SETTINGS_SECTIONS.WORKSPACES && (
             <WorkspacesSection
               workspaces={workspaces}
               activeWorkspaceId={activeWorkspaceId}
@@ -183,12 +201,12 @@ export default function SettingsModal({
               onOpenGitHubSettings={() => setActive(SETTINGS_SECTIONS.GITHUB)}
             />
           )}
-          {active === SETTINGS_SECTIONS.GITHUB && (
+          {effectiveActive === SETTINGS_SECTIONS.GITHUB && (
             <GitHubSection sync={sync} onSyncChange={onSyncChange} />
           )}
           {/* Per-workspace config — applies to the ACTIVE workspace, stored in
               its `.shockwave/workspace.json`. */}
-          {active === SETTINGS_SECTIONS.DAILY_NOTE && (
+          {effectiveActive === SETTINGS_SECTIONS.DAILY_NOTE && (
             workspacePath ? (
               <DailyNoteSection
                 dailyNote={dailyNote}
@@ -199,7 +217,7 @@ export default function SettingsModal({
               />
             ) : <NoWorkspaceNote />
           )}
-          {active === SETTINGS_SECTIONS.TEMPLATES && (
+          {effectiveActive === SETTINGS_SECTIONS.TEMPLATES && (
             workspacePath ? (
               <TemplatesSection
                 templates={templates}
@@ -209,7 +227,7 @@ export default function SettingsModal({
               />
             ) : <NoWorkspaceNote />
           )}
-          {active === SETTINGS_SECTIONS.WORKSPACE_SKILLS && (
+          {effectiveActive === SETTINGS_SECTIONS.WORKSPACE_SKILLS && (
             workspacePath ? (
               <WorkspaceSkillsSection
                 workspacePath={workspacePath}
@@ -218,35 +236,35 @@ export default function SettingsModal({
               />
             ) : <NoWorkspaceNote />
           )}
-          {active === SETTINGS_SECTIONS.TRANSCRIPTION && (
+          {effectiveActive === SETTINGS_SECTIONS.TRANSCRIPTION && (
             <TranscriptionSection
               transcription={transcription}
               onTranscriptionChange={onTranscriptionChange}
             />
           )}
-          {active === SETTINGS_SECTIONS.UPDATES && (
+          {effectiveActive === SETTINGS_SECTIONS.UPDATES && (
             <UpdatesSection appUpdate={appUpdate} />
           )}
-          {active === SETTINGS_SECTIONS.ADVANCED && (
+          {effectiveActive === SETTINGS_SECTIONS.ADVANCED && (
             <AdvancedSection
               hasWorkspace={!!workspacePath}
               onRebuildCache={onRebuildCache}
             />
           )}
-          {active === SETTINGS_SECTIONS.AGENT_LLM && (
+          {effectiveActive === SETTINGS_SECTIONS.AGENT_LLM && (
             <AgentChatSection
               codingAgent={codingAgent}
               onCodingAgentChange={onCodingAgentChange}
             />
           )}
-          {active === SETTINGS_SECTIONS.AGENT_SECRETS && (
+          {effectiveActive === SETTINGS_SECTIONS.AGENT_SECRETS && (
             <AgentSecretsSection
               secrets={agentSecrets ?? []}
               onChange={onAgentSecretsChange}
               onReload={onReloadSecrets}
             />
           )}
-          {active === SETTINGS_SECTIONS.CRON && <CronSection onOpenCronPanel={onOpenCronPanel} />}
+          {effectiveActive === SETTINGS_SECTIONS.CRON && <CronSection onOpenCronPanel={onOpenCronPanel} />}
         </div>
       </DialogContent>
     </Dialog>

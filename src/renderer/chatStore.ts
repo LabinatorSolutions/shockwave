@@ -40,6 +40,10 @@ type ChatEntry = {
   persisted: boolean;
   /** DB rows loaded (new chats are born hydrated — nothing stored yet). */
   hydrated: boolean;
+  /** Set to the hostname of ANOTHER machine while it runs this chat (from the
+   *  server's running flag). Non-null = frozen: the composer is disabled and we
+   *  hold a live-feed subscription until the turn ends. Null = free to send. */
+  remoteMachine: string | null;
   draft: string;
   attachments: any[];
   // Streaming cursors (formerly refs in ChatSidebar).
@@ -67,6 +71,7 @@ export const EMPTY_CHAT: ChatEntry = {
   starred: false,
   persisted: false,
   hydrated: false,
+  remoteMachine: null,
   draft: '',
   attachments: [],
   currentAssistantId: null,
@@ -76,6 +81,11 @@ export const EMPTY_CHAT: ChatEntry = {
 
 let state: ChatStoreState = { chats: {}, activeByWorkspace: {} };
 const listeners = new Set<() => void>();
+
+// This machine's name, cached once. Lets us tell "running on THIS machine" (my
+// own turn — composer stays live) from "running elsewhere" (freeze + watch).
+let myMachine: string | null = null;
+window.api.app?.machineId?.().then((m: string) => { myMachine = m; }).catch(() => { /* best-effort */ });
 let idCounter = 0;
 const nextId = () => `m${++idCounter}`;
 
@@ -122,8 +132,14 @@ function handleAgentEvent(evt: any) {
     return;
   }
   if (evt.type === 'agent_end') {
+    // A chat we were watching on another machine just finished. Stop the live
+    // feed and unfreeze — the turn's rows + transcript are now uploaded, so this
+    // machine can take over on the next send.
+    const wasRemote = state.chats[sessionId]?.remoteMachine;
+    if (wasRemote) window.api.chat.watchStop?.(sessionId);
     patchChat(sessionId, (c) => ({
       running: false,
+      remoteMachine: null,
       queuedCount: 0,
       currentAssistantId: null,
       currentThinkingId: null,
@@ -369,12 +385,19 @@ export async function openChat(sessionId: string, workspace: string | null) {
     // Right after app start the sidebar's workspacePath prop can still be null;
     // the chat's own DB row knows its workspace (chats are workspace-scoped).
     ws = ws ?? session?.workspace ?? null;
+    // Running on ANOTHER machine? Freeze this chat and subscribe to its live
+    // feed so the turn streams in here (running on THIS machine = my own turn,
+    // not frozen). watchStart is idempotent in main (one stream per session).
+    const remote = session?.running && session.runningMachine && session.runningMachine !== myMachine
+      ? session.runningMachine : null;
+    if (remote) window.api.chat.watchStart?.(sessionId);
     patchChat(sessionId, (c) => ({
       workspace: ws,
       hydrated: true,
       persisted: !!session || c.persisted,
       title: session?.title ?? c.title,
       starred: !!(session?.starred ?? c.starred),
+      remoteMachine: remote,
       messages: [...hydrateMessages(rows || []), ...c.messages],
     }));
   }

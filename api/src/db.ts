@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import * as schema from './schema.js';
 
 const { Pool } = pg;
 
@@ -21,6 +23,13 @@ export type DB = pg.Pool;
 export function makePool(url: string): DB {
   return new Pool({ connectionString: url, max: 10 });
 }
+
+// The drizzle query layer over the pool. store.ts is written against this; the
+// schema (schema.ts) is the source of truth for the tables.
+export function getDb(pool: DB) {
+  return drizzle(pool, { schema });
+}
+export type Db = ReturnType<typeof getDb>;
 
 export async function ensureSchema(pool: DB): Promise<void> {
   const here = path.dirname(fileURLToPath(import.meta.url));

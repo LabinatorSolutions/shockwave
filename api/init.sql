@@ -78,9 +78,26 @@ CREATE TABLE IF NOT EXISTS chat_session (
   updated_at    bigint NOT NULL,
   archived      boolean NOT NULL DEFAULT false,
   starred       boolean NOT NULL DEFAULT false,
-  deleted       boolean NOT NULL DEFAULT false
+  deleted       boolean NOT NULL DEFAULT false,
+  -- Cross-client execution flag. The executing machine sets running=true on
+  -- agent_start and clears it AFTER uploading the turn, so running=false means
+  -- "done and uploaded". running_machine names which client is executing.
+  running         boolean NOT NULL DEFAULT false,
+  running_machine text
 );
 CREATE INDEX IF NOT EXISTS idx_chat_session_ws_updated ON chat_session (workspace_id, updated_at);
+-- Existing volumes (table already created before these columns) get them here.
+ALTER TABLE chat_session ADD COLUMN IF NOT EXISTS running boolean NOT NULL DEFAULT false;
+ALTER TABLE chat_session ADD COLUMN IF NOT EXISTS running_machine text;
+
+-- The pi transcript JSONL, stored whole (Postgres TOAST handles multi-MB text
+-- fine — the "files not blobs" rule was a SQLite limitation). Lets any machine
+-- continue any chat. One row per session.
+CREATE TABLE IF NOT EXISTS chat_transcript (
+  session_id text PRIMARY KEY REFERENCES chat_session(session_id) ON DELETE CASCADE,
+  content    text NOT NULL,
+  updated_at bigint NOT NULL
+);
 
 -- One row per pi message. Keyed by (session_id, seq) — globally unique because
 -- session_id is a UUID and a chat has one writer. No autoincrement needed.
