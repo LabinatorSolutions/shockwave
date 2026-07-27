@@ -21,8 +21,9 @@ services:
 
   api:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # Repo root so the build can reach ../agent-core (the shared agent runtime).
+      context: ..
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:

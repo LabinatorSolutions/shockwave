@@ -1,0 +1,8 @@
+# Docker build context is the repo root (for the api image, so it can reach
+# agent-core). Keep host node_modules, build outputs, and secrets out.
+**/node_modules
+**/dist
+out
+.git
+api/.env
+*.log

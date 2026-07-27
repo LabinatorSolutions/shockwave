@@ -9,6 +9,9 @@ import rateLimit from 'express-rate-limit';
 import pino from 'pino';
 import { makePool, getDb, ensureSchema } from './db.js';
 import * as store from './store.js';
+import * as feed from './feed.js';
+import { makeCompanionRuntime } from './agentHost.js';
+import { runCronJob } from './cronRun.js';
 
 const log = pino({ base: undefined });
 
@@ -28,6 +31,8 @@ const apiKeyHash = crypto.createHash('sha256').update(API_KEY).digest();
 
 const pool = makePool(DATABASE_URL);
 const db = getDb(pool);
+// The companion's own agent runtime (shared agent-core, companion host).
+const agentRuntime = makeCompanionRuntime(pool, masterKey);
 
 const app = express();
 app.set('trust proxy', 1);
@@ -90,15 +95,11 @@ app.patch('/chat/:id/transcript', handle((req) => store.putTranscript(db, req.pa
 // null } clears it. The executing client clears only after uploading the turn.
 app.patch('/chat/:id/running', handle((req) => store.setRunning(db, req.params.id, req.body?.machine ?? null)));
 
-// ── Live feed (ephemeral pub/sub) ────────────────────────────────────────────
-// The executing client POSTs each pi event to /events; spectators hold an SSE
-// connection on /stream. In-memory fan-out only — nothing is persisted here (the
-// durable record is the rows + transcript written at turn end).
-const feedSubs = new Map<string, Set<express.Response>>();
+// ── Live feed (ephemeral pub/sub — see feed.ts) ──────────────────────────────
+// A spectator holds an SSE connection on /stream; the desktop producer POSTs to
+// /events. Server-side cron runs publish to the same feed in-process.
 
-// Spectator subscribes to a session's live event stream.
 app.get('/chat/:id/stream', (req, res) => {
-  const id = req.params.id;
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -106,26 +107,27 @@ app.get('/chat/:id/stream', (req, res) => {
     'X-Accel-Buffering': 'no',
   });
   res.write(': connected\n\n'); // open the stream immediately
-  let set = feedSubs.get(id);
-  if (!set) { set = new Set(); feedSubs.set(id, set); }
-  set.add(res);
+  const unsubscribe = feed.subscribe(req.params.id, res);
   const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25_000);
-  req.on('close', () => {
-    clearInterval(ping);
-    const s = feedSubs.get(id);
-    if (s) { s.delete(res); if (!s.size) feedSubs.delete(id); }
-  });
+  req.on('close', () => { clearInterval(ping); unsubscribe(); });
 });
 
 // Executing client pushes one pi event; fan it out to that session's spectators.
 app.post('/chat/:id/events', (req, res) => {
-  const set = feedSubs.get(req.params.id);
-  if (set && set.size) {
-    const payload = `data: ${JSON.stringify(req.body ?? {})}\n\n`;
-    for (const r of set) { try { r.write(payload); } catch { /* drop on next close */ } }
-  }
-  res.json({ result: { ok: true, subscribers: set?.size ?? 0 } });
+  const n = feed.publish(req.params.id, req.body);
+  res.json({ result: { ok: true, subscribers: n } });
 });
+
+// ── Cron (server-side execution) ─────────────────────────────────────────────
+// Manual "run now": mint a sessionId, return it immediately, run the job in the
+// background (the caller watches via /chat/:id/stream). The scheduler (Phase C)
+// will call runCronJob the same way.
+app.post('/workspace/:id/cron/:job/run', handle(async (req) => {
+  const sessionId = crypto.randomUUID();
+  runCronJob(pool, masterKey, agentRuntime, req.params.id, req.params.job, sessionId)
+    .catch((err) => log.error({ err: err?.message, workspace: req.params.id, job: req.params.job }, 'cron run failed'));
+  return { ok: true, sessionId };
+}));
 
 // ── Workspace identity ───────────────────────────────────────────────────────
 app.get('/workspaces', handle(() => store.listWorkspaces(db)));

@@ -12,6 +12,8 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.80.5",
+    "@earendil-works/pi-coding-agent": "0.80.5",
     "drizzle-orm": "^0.45.2",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
