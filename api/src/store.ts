@@ -10,7 +10,7 @@ import {
   isPlainObject, splitAgentSecret, joinAgentSecret,
 } from './keys.js';
 import {
-  workspace, setting, agentSecret, secretValue, chatSession, chatTranscript, message,
+  workspace, setting, agentSecret, secretValue, chatSession, chatTranscript, message, cronState,
 } from './schema.js';
 import { and, eq, ne, lt, desc, asc, ilike, like, sql, notInArray } from 'drizzle-orm';
 
@@ -345,4 +345,18 @@ export async function putTranscript(db: Db, sessionId: string, content: string):
 export async function getTranscript(db: Db, sessionId: string): Promise<string | null> {
   const rows = await db.select({ content: chatTranscript.content }).from(chatTranscript).where(eq(chatTranscript.sessionId, sessionId));
   return rows[0]?.content ?? null;
+}
+
+// ── Cron run history ─────────────────────────────────────────────────────────
+
+export async function recordCronRun(db: Db, workspaceId: string, jobName: string, o: { sessionId?: string | null; error?: string | null }) {
+  const vals = { workspaceId, jobName, lastRunAt: now(), lastError: o.error ?? null, lastSessionId: o.sessionId ?? null, updatedAt: now() };
+  await db.insert(cronState).values(vals).onConflictDoUpdate({
+    target: [cronState.workspaceId, cronState.jobName],
+    set: { lastRunAt: vals.lastRunAt, lastError: vals.lastError, lastSessionId: vals.lastSessionId, updatedAt: vals.updatedAt },
+  });
+}
+
+export async function getCronState(db: Db, workspaceId: string) {
+  return db.select().from(cronState).where(eq(cronState.workspaceId, workspaceId));
 }

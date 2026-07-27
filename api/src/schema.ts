@@ -93,6 +93,18 @@ export const chatTranscript = pgTable('chat_transcript', {
   updatedAt: epochMs('updated_at').notNull(),
 });
 
+// Cron run HISTORY only (per workspace + job). croner computes next-run in
+// memory, so nothing scheduling-related is persisted here — just what the desktop
+// UI shows: when it last ran, the last error, and which chat it produced.
+export const cronState = pgTable('cron_state', {
+  workspaceId: text('workspace_id').notNull(),
+  jobName: text('job_name').notNull(),
+  lastRunAt: epochMs('last_run_at'),
+  lastError: text('last_error'),
+  lastSessionId: text('last_session_id'),
+  updatedAt: epochMs('updated_at').notNull(),
+}, (t) => [primaryKey({ columns: [t.workspaceId, t.jobName] })]);
+
 // One row per pi message. Keyed by (session_id, seq) — globally unique because
 // session_id is a UUID and a chat has one writer.
 export const message = pgTable('message', {

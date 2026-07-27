@@ -99,6 +99,18 @@ CREATE TABLE IF NOT EXISTS chat_transcript (
   updated_at bigint NOT NULL
 );
 
+-- Cron run history (per workspace + job). croner computes next-run in memory, so
+-- only what the UI shows is persisted: last run / error / chat.
+CREATE TABLE IF NOT EXISTS cron_state (
+  workspace_id    text NOT NULL,
+  job_name        text NOT NULL,
+  last_run_at     bigint,
+  last_error      text,
+  last_session_id text,
+  updated_at      bigint NOT NULL,
+  PRIMARY KEY (workspace_id, job_name)
+);
+
 -- One row per pi message. Keyed by (session_id, seq) — globally unique because
 -- session_id is a UUID and a chat has one writer. No autoincrement needed.
 CREATE TABLE IF NOT EXISTS message (

@@ -12,6 +12,7 @@ import * as store from './store.js';
 import * as feed from './feed.js';
 import { makeCompanionRuntime } from './agentHost.js';
 import { runCronJob } from './cronRun.js';
+import { initScheduler, nextRuns } from './scheduler.js';
 
 const log = pino({ base: undefined });
 
@@ -129,6 +130,12 @@ app.post('/workspace/:id/cron/:job/run', handle(async (req) => {
   return { ok: true, sessionId };
 }));
 
+// Cron run history (per job) + next-run (from croner, in memory) — for the UI.
+app.get('/workspace/:id/cron/state', handle(async (req) => ({
+  history: await store.getCronState(db, req.params.id),
+  next: nextRuns(req.params.id),
+})));
+
 // ── Workspace identity ───────────────────────────────────────────────────────
 app.get('/workspaces', handle(() => store.listWorkspaces(db)));
 app.post('/workspaces', handle((req) => store.upsertWorkspace(db, req.body)));
@@ -142,6 +149,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 (async () => {
   await ensureSchema(pool);
+  initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
   const server = app.listen(PORT, () => log.info({ port: PORT }, 'shockwave-api listening'));
   const shutdown = () => { server.close(() => pool.end().finally(() => process.exit(0))); setTimeout(() => process.exit(0), 5000).unref(); };
   process.on('SIGTERM', shutdown);
