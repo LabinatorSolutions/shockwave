@@ -359,11 +359,10 @@ export interface ShockwaveApi {
     onStatus(cb: (status: SyncStatus) => void): Unsubscribe;
   };
   cron: {
+    /** Compose the schedule view: jobs from the local cron.json + run status from the companion. */
     read(): Promise<CronView>;
-    setEnabled(enabled: boolean): Promise<void>;
-    runNow(name: string): Promise<{ ok?: boolean; busy?: boolean; error?: string }>;
-    setMaxCatchupHours(n: number): Promise<void>;
-    setMaxRunMinutes(n: number): Promise<void>;
+    /** Trigger a manual run on the companion. */
+    runNow(name: string): Promise<{ ok?: boolean; sessionId?: string; error?: string }>;
     onState(cb: (view: CronView) => void): Unsubscribe;
     onChatsChanged(cb: () => void): Unsubscribe;
   };

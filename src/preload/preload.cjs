@@ -548,10 +548,7 @@ contextBridge.exposeInMainWorld('api', {
   // setters mutate cron.json / global settings; onState pushes live updates.
   cron: {
     read: () => ipcRenderer.invoke('cron:read'),
-    setEnabled: (enabled) => ipcRenderer.invoke('cron:setEnabled', enabled),
     runNow: (name) => ipcRenderer.invoke('cron:runNow', { name }),
-    setMaxCatchupHours: (n) => ipcRenderer.invoke('cron:setMaxCatchupHours', n),
-    setMaxRunMinutes: (n) => ipcRenderer.invoke('cron:setMaxRunMinutes', n),
     /** Live cron state (jobs + timing + knobs). @returns {Unsubscribe} */
     onState: (cb) => {
       const listener = (_evt, payload) => cb(payload);

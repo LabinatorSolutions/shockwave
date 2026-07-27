@@ -12,10 +12,10 @@ import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
 import { initDesktopAgent, agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
-import {
-  initCron, cronActivate, cronDeactivate, cronOnFileChanged, cronRead, cronSetEnabled,
-  cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
-} from './cron.js';
+import { initCron, cronActivate, cronDeactivate, cronOnFileChanged } from './cron.js';
+// Cron execution lives on the companion now; the desktop only VIEWS the schedule
+// (from local cron.json + companion run-status) and triggers a manual run.
+import { cronRead, cronRunNow } from './api/cron.js';
 import { CRON_FILE } from './cronScheduler.js';
 import { listSessions, listStarred, searchSessions, getMessages, openSession as openSessionApi, deleteSession, setSessionTitle, setSessionStarred, postEvent } from './api/chats.js';
 import {
@@ -2002,10 +2002,7 @@ initCron({
 });
 
 ipcMain.handle('cron:read', () => cronRead());
-ipcMain.handle('cron:setEnabled', (_e, enabled) => cronSetEnabled(!!enabled));
 ipcMain.handle('cron:runNow', (_e, { name }) => cronRunNow(name));
-ipcMain.handle('cron:setMaxCatchupHours', (_e, n) => cronSetMaxCatchupHours(n));
-ipcMain.handle('cron:setMaxRunMinutes', (_e, n) => cronSetMaxRunMinutes(n));
 
 // Build the desktop agent host. The secret getters re-read settings on every
 // call so user-side edits are picked up mid-conversation. getToken returns a
