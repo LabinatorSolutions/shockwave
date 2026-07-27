@@ -23,11 +23,11 @@ import {
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
 } from './api/workspaces.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
-import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from './defaults/files.js';
+import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../../agent-core/defaults/files.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
 import { getProviders } from '@earendil-works/pi-ai/compat';
-import { initModelCatalog, getCatalogModels } from './modelCatalog.js';
-import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from './skillLibrary.js';
+import { initModelCatalog, getCatalogModels } from '../../agent-core/modelCatalog.js';
+import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from '../../agent-core/skillLibrary.js';
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
 import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, getFreshToken, PROVIDER_PRESETS } from './oauth.js';

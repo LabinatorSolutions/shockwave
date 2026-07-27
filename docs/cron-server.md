@@ -65,7 +65,7 @@ runTurn(opts, { host, emit, agentDir }): Promise<void>
 |---|---|---|
 | `emit(event)` | **IPC to the renderer AND POST to the companion feed** (one call, both sinks) | **direct in-process SSE fan-out** (the feed's subscriber map) |
 | persistence | HTTP `api/chats` (now dumb — no mapping) | direct drizzle `store` calls |
-| `getAgentSecrets` / `getToken` | HTTP `/settings` + desktop OAuth refresh | direct `store` + server-side OAuth refresh (Phase D) |
+| `getAgentSecrets` / `getToken` | HTTP to the companion (`/settings`, `/agent-secret/:name/token`) | direct `store` + in-process token mint |
 | `extraTools` | `[open_file]` | `[]` |
 | `agentDir` | one global `<userData>/pi-agent` | **per-run** dir under the server data dir |
 
@@ -207,8 +207,12 @@ file it already has) and overlays run-status from the companion via the state en
   + git-fixer; add `POST …/cron/:job/run`. Prove one job end-to-end, watched live.
 - **C — Scheduler.** croner fire-jobs + the refresh job + boot re-register; `cron_state`
   history; the state endpoint; desktop `CronSection` reads server state.
-- **D — Server-side OAuth refresh** (port `getFreshToken`). Static-token jobs already work
-  from B.
+- **D — Move OAuth token minting to the companion.** Port `getFreshToken` (refresh = pure
+  fetch) into the companion so `GET /agent-secret/:name/token` returns a fresh token for both
+  static and OAuth secrets. The **desktop agent switches from local refresh to fetching from
+  that endpoint** ("calls it remotely to itself") — one refresh implementation, no local/
+  remote divergence. Interactive **connect** stays desktop-only. Static-token jobs already
+  work from B.
 - **E — Retire desktop cron.** Delete `cron.ts` / `cronScheduler.js`; keep the UI.
 
 ## Open items / risks
