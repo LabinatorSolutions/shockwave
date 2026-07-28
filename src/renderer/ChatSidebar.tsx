@@ -517,7 +517,14 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         title={isStarred ? 'Unstar' : 'Star'}
       ><StarIcon size={13} filled={isStarred} /></span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[12.5px] text-foreground">{it.title || 'Untitled chat'}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {/* Source tag for non-desktop chats (cron, telegram, …). bg-foreground/
+              text-background is black-on-white → auto-reverses in dark mode. */}
+          {it.source && it.source !== 'desktop' && (
+            <span className="shrink-0 rounded bg-foreground px-1 py-px text-[9px] font-semibold uppercase leading-none tracking-wide text-background">{it.source}</span>
+          )}
+          <span className="truncate text-[12.5px] text-foreground">{it.title || 'Untitled chat'}</span>
+        </span>
         {searching && it.snippet && <span className="truncate text-[11px] text-muted-2">{it.snippet}</span>}
       </span>
       {runningIds?.has(it.sessionId) ? (
