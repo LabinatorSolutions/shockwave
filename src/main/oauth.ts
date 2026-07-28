@@ -26,7 +26,6 @@ import {
 
 // Refresh this many ms BEFORE the real expiry, so a token handed to the agent
 // isn't already stale by the time the outbound API call lands.
-const EXPIRY_SKEW_MS = 60_000;
 
 // ── Provider presets ────────────────────────────────────────────────────────
 // Endpoints/scopes/quirks baked in (sourced from arctic's provider defs). The
@@ -462,45 +461,10 @@ async function storeConnected(name: string, t: { accessToken: string; refreshTok
 }
 
 // ── Refresh-on-demand ────────────────────────────────────────────────────────
-// The pi bridge calls this for an oauth-kind secret. Returns a LIVE access
-// token, refreshing first if it's within the skew window. Concurrent callers for
-// the same name share one refresh (Google rotates refresh tokens, so a double
-// refresh could invalidate the newer one).
-const inFlightRefresh = new Map<string, Promise<string>>();
-
-export async function getFreshToken(name: string): Promise<string> {
-  const secret = await loadSecret(name);
-  const o = secret?.oauth;
-  if (!o) throw new Error(`No OAuth connection named "${name}"`);
-
-  const fresh = o.expiresAt == null || o.expiresAt - EXPIRY_SKEW_MS > nowMs();
-  if (o.accessToken && fresh) return o.accessToken;
-
-  if (!o.refreshToken) {
-    await patchSecret(name, (x) => ({ ...x, status: 'expired' }));
-    throw new Error(`"${name}" has no refresh token — reconnect it in Settings.`);
-  }
-
-  const existing = inFlightRefresh.get(name);
-  if (existing) return existing;
-
-  const p = (async () => {
-    const cfg = resolveProviderConfig(o);
-    try {
-      const json = await refreshToken(cfg, o.refreshToken);
-      const extracted = extractTokens(json);
-      await storeConnected(name, extracted);
-      return extracted.accessToken;
-    } catch (e: any) {
-      await patchSecret(name, (x) => ({ ...x, status: 'expired' }));
-      throw new Error(`Token refresh failed for "${name}" — reconnect it in Settings. (${e?.message ?? e})`);
-    } finally {
-      inFlightRefresh.delete(name);
-    }
-  })();
-  inFlightRefresh.set(name, p);
-  return p;
-}
+// OAuth token minting (refresh) now lives on the companion (api/src/oauth.ts) —
+// the agent fetches /agent-secret/:name/token there. The desktop only runs the
+// interactive CONNECT flow (above) and persists the result; it no longer
+// refreshes tokens locally.
 
 // ── Disconnect ───────────────────────────────────────────────────────────────
 // Clears the live tokens but keeps client config so the user can re-Connect

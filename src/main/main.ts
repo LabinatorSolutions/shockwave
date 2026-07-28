@@ -1402,6 +1402,8 @@ ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
 
   try {
     const settings = await readSettings();
+    // Unified system timezone → the agent's "current date" (pi reads local tz).
+    if (settings.timezone) process.env.TZ = settings.timezone;
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
     const { provider, model, baseUrl, contextWindow, thinkingLevel, providerKeys } = settings.codingAgent ?? {};
@@ -1963,12 +1965,10 @@ ipcMain.handle('cron:runNow', (_e, { name }) => cronRunNow(name));
 // unknown names / connections needing reconnect.
 initDesktopAgent({
   builtinDir: builtinSkillsDir(),
-  getSecrets: async () => {
-    const settings = await readSettings();
-    return settings.agentSecrets ?? [];
-  },
-  // Token minting (incl. OAuth refresh) lives on the companion — the desktop
-  // agent fetches from it too, so there's one refresh implementation.
+  // Both secret operations go through the companion (it owns getting + responding
+  // to the agent): metadata from /agent-secrets, tokens from /agent-secret/:name/
+  // token (which mints static or fresh-OAuth). The desktop never mints.
+  getSecrets: () => api.get('/agent-secrets'),
   getToken: (name) => api.get(`/agent-secret/${encodeURIComponent(name)}/token`),
 });
 

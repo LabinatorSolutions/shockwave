@@ -65,9 +65,10 @@ function JobRow({ job, busy, running, onRun }: { job: CronJobView; busy: boolean
   );
 }
 
-export default function CronModal({ open, onClose, onOpenFile, onOpenSettings }: {
+export default function CronModal({ open, onClose, onOpenFile, onOpenSettings, onRunStarted }: {
   open: boolean; onClose: () => void;
   onOpenFile?: (path: string) => void; onOpenSettings?: () => void;
+  onRunStarted?: (sessionId: string) => void;
 }) {
   const [view, setView] = useState<CronView | null>(null);
 
@@ -85,7 +86,11 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings }:
   const jobs = view?.jobs ?? [];
   const hasWorkspace = !!view?.activeWorkspace;
 
-  const runNow = useCallback(async (name: string) => { await window.api.cron.runNow(name); void refresh(); }, [refresh]);
+  const runNow = useCallback(async (name: string) => {
+    const res = await window.api.cron.runNow(name);
+    void refresh();
+    if (res?.sessionId) onRunStarted?.(res.sessionId); // open the chat so it streams live
+  }, [refresh, onRunStarted]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>

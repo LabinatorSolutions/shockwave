@@ -14,6 +14,7 @@ import ThinSidebar from './ThinSidebar.jsx';
 import WorkspaceSelector from './WorkspaceSelector.jsx';
 import SettingsModal from './SettingsModal.jsx';
 import CronModal from './CronModal.jsx';
+import * as chatStore from './chatStore.js';
 import UrlPromptModal from './UrlPromptModal.jsx';
 import ErrorMessage from './ErrorMessage.jsx';
 import EditorStatusBar from './EditorStatusBar.jsx';
@@ -2170,6 +2171,13 @@ export default function App() {
         onClose={() => setCronOpen(false)}
         onOpenFile={(p) => { if (graphMode) setGraphMode(false); openInActiveTab(p); }}
         onOpenSettings={() => { setCronOpen(false); openSettings(SETTINGS_SECTIONS.CRON); }}
+        onRunStarted={(sessionId) => {
+          // The run executes on the companion — open its chat so it streams here
+          // live (running elsewhere → the composer freezes + subscribes to the feed).
+          setCronOpen(false);
+          void chatStore.openChat(sessionId, workspacePath);
+          if (!chatSidebarOpenRef.current) toggleChatSidebar();
+        }}
       />
 
       {settingsOpen && (

@@ -14,6 +14,7 @@ import { makeCompanionRuntime } from './agentHost.js';
 import { runCronJob } from './cronRun.js';
 import { initScheduler, nextRuns } from './scheduler.js';
 import { mintToken } from './oauth.js';
+import { initSweeper } from './sweeper.js';
 
 const log = pino({ base: undefined });
 
@@ -151,6 +152,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 (async () => {
   await ensureSchema(pool);
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
+  initSweeper();                                // reclaims idle per-run working dirs (TTL)
   const server = app.listen(PORT, () => log.info({ port: PORT }, 'shockwave-api listening'));
   const shutdown = () => { server.close(() => pool.end().finally(() => process.exit(0))); setTimeout(() => process.exit(0), 5000).unref(); };
   process.on('SIGTERM', shutdown);

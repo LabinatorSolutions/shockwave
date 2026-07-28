@@ -10,25 +10,37 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { createAgentRuntime } from '../../agent-core/agent.js';
 import type { AgentHost } from '../../agent-core/agent.js';
+import { initModelCatalog } from '../../agent-core/modelCatalog.js';
 import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import { mintToken } from './oauth.js';
 
 const DATA_BASE = process.env.AGENT_DATA_DIR || path.join(os.tmpdir(), 'shockwave-agent');
+// Bundled built-in skills, shipped into the image (BUILTIN_SKILLS_DIR) so the
+// server agent has the SAME skills as the desktop; falls back to an empty dir.
 const BUILTIN_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(DATA_BASE, 'builtins');
+
+// Per-run pi scratch dirs (hold the JSONL) live here, keyed by sessionId. Kept
+// across runs (reused on re-run); the TTL sweeper reclaims old ones.
+export const RUNS_BASE = path.join(DATA_BASE, 'runs');
+export function runScratchDir(sessionId: string): string {
+  return path.join(RUNS_BASE, sessionId);
+}
 
 export function makeCompanionRuntime(pool: DB, key: Buffer) {
   const db = getDb(pool);
-  // An (empty) builtins dir so listBuiltinSkills has something to read.
+  // Ensure the builtins dir exists (shipped one, or empty fallback) + seed the
+  // model-catalog disk cache, same as the desktop does at startup.
   try { fs.mkdirSync(BUILTIN_DIR, { recursive: true }); } catch { /* ok */ }
+  initModelCatalog(DATA_BASE);
 
   const host: AgentHost = {
     builtinDir: BUILTIN_DIR,
     machine: os.hostname(),
     extraTools: [],
     // Per-run scratch dir so concurrent runs don't share pi's settings.json.
-    dataDir: (sessionId) => path.join(DATA_BASE, 'runs', sessionId),
+    dataDir: (sessionId) => runScratchDir(sessionId),
     getSession: (id) => store.getSession(db, id),
     upsertSession: (row) => store.upsertSession(db, { ...row, now: Date.now() } as any),
     persistMessages: (id, rows) => store.persistMessages(db, id, rows as any),

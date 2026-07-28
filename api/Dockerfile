@@ -20,6 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/init.sql ./init.sql
+# Same bundled built-in skills the desktop ships, so the server agent is identical.
+COPY resources/built-in-skills/ ./built-in-skills/
+ENV BUILTIN_SKILLS_DIR=/app/built-in-skills
 RUN chown -R node:node /app
 USER node
 EXPOSE 8080

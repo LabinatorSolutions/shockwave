@@ -108,7 +108,7 @@ function toPiThinkingLevel(level: string): string {
 
 // Resolve a (provider, model) to a runnable pi Model. Pi's bundled catalog wins;
 // otherwise synthesize from models.dev by cloning a sibling's provider wiring.
-async function resolveModel(provider: any, model: any) {
+export async function resolveModel(provider: any, model: any) {
   if (!provider || !model) return null;
   const real = getModel(provider, model);
   if (real) return real;

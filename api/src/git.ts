@@ -15,7 +15,7 @@ import path from 'node:path';
 
 const exec = promisify(execFile);
 
-const WORK_BASE = process.env.CRON_WORK_DIR || path.join(os.tmpdir(), 'shockwave-cron');
+export const WORK_BASE = process.env.CRON_WORK_DIR || path.join(os.tmpdir(), 'shockwave-cron');
 
 function remoteUrl(owner: string, repo: string, pat: string): string {
   return `https://x-access-token:${pat}@github.com/${owner}/${repo}.git`;
@@ -25,16 +25,31 @@ async function git(cwd: string, args: string[]): Promise<{ stdout: string; stder
   return exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024 });
 }
 
-// Fresh shallow clone for one run. Returns the checkout dir.
-export async function cloneForRun(
+// Prepare a checkout for a run, keyed by sessionId. If the dir already exists
+// (a prior run of this chat), REUSE it — but bring it to a pristine, up-to-date
+// state first: fetch + reset --hard + clean, so no stale files or half-committed
+// work carries over. Otherwise a fresh shallow clone. The dir is kept after the
+// run (the TTL sweeper reclaims old ones) so a re-run can reuse it. Mirrors
+// knack's init/fetch/reset reuse.
+export async function prepareCheckout(
   sessionId: string,
   owner: string, repo: string, branch: string, pat: string,
 ): Promise<string> {
   const dir = path.join(WORK_BASE, sessionId);
+  const hasGit = await fs.access(path.join(dir, '.git')).then(() => true).catch(() => false);
+
+  if (hasGit) {
+    // Reuse — refresh the remote (the PAT may have rotated) and reset to origin.
+    await git(dir, ['remote', 'set-url', 'origin', remoteUrl(owner, repo, pat)]).catch(() => {});
+    await git(dir, ['fetch', '--depth=1', 'origin', branch]);
+    await git(dir, ['reset', '--hard', `origin/${branch}`]);
+    await git(dir, ['clean', '-fd']);
+    return dir;
+  }
+
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(dir), { recursive: true });
   await exec('git', ['clone', '--depth=1', '--branch', branch, remoteUrl(owner, repo, pat), dir], { maxBuffer: 32 * 1024 * 1024 });
-  // Identity for the commit the check-in makes.
   await git(dir, ['config', 'user.name', 'Shockwave Cron']);
   await git(dir, ['config', 'user.email', 'cron@shockwave.local']);
   return dir;
