@@ -154,6 +154,10 @@ export interface Settings {
   agentSecrets: AgentSecret[];
   transcription: { provider: string; apiKey: string };
   sync: { pat: string; pullIntervalSeconds: number };
+  // The one unified system timezone (synced). The companion uses it for cron
+  // schedules and the agent's "current date"; the desktop uses it for display.
+  // IANA name, e.g. "America/New_York"; default "UTC".
+  timezone: string;
   // Scheduled runs (cron). Machine-local and global: `enabled` is the master
   // on/off (gates FIRING only — watching/validation/UI stay live when off), and
   // cron follows the active workspace. Job definitions live per-workspace in

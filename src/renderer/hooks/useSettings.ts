@@ -21,6 +21,7 @@ const DEFAULT_CANONICAL: Settings = {
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
   sync: { pat: '', pullIntervalSeconds: 10 },
+  timezone: 'UTC',
   // Cron is managed in main via window.api.cron.* (main persists the slice); the
   // renderer never writes it through persistSettings. Present here only to satisfy
   // the Settings type + hydrate a default before disk load.
@@ -310,6 +311,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       agentSecrets: secrets,
       transcription: tr,
       sync: sy,
+      timezone: typeof disk.timezone === 'string' ? disk.timezone : 'UTC',
       // Main-owned (MAIN_OWNED_KEYS) — mirrored here only so settingsRef matches
       // the Settings type; the renderer never writes it back.
       cron: disk.cron ?? { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },

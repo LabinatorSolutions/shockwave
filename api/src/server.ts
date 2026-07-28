@@ -13,6 +13,7 @@ import * as feed from './feed.js';
 import { makeCompanionRuntime } from './agentHost.js';
 import { runCronJob } from './cronRun.js';
 import { initScheduler, nextRuns } from './scheduler.js';
+import { mintToken } from './oauth.js';
 
 const log = pino({ base: undefined });
 
@@ -70,7 +71,7 @@ app.patch('/settings', handle((req) => store.writeSettings(db, masterKey, req.bo
 app.get('/agent-secrets', handle(() => store.listAgentSecretMeta(db)));
 // A static agent-secret's usable token. (OAuth fresh-token endpoint lands with
 // the oauth phase.)
-app.get('/agent-secret/:name/token', handle((req) => store.getSecret(db, masterKey, req.params.name, 'token')));
+app.get('/agent-secret/:name/token', handle((req) => mintToken(db, masterKey, req.params.name)));
 // Targeted OAuth write (desktop persists exchange/refresh results here).
 app.post('/oauth/:name', handle((req) => store.patchOAuth(db, masterKey, req.params.name, req.body)));
 

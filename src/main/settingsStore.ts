@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS = {
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
   sync: { pat: '', pullIntervalSeconds: 10 },
+  timezone: 'UTC',
   cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
   chatSidebarOpen: false,
   chatSidebarWidth: 360,

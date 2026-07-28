@@ -12,11 +12,9 @@ import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
 import { initDesktopAgent, agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
-import { initCron, cronActivate, cronDeactivate, cronOnFileChanged } from './cron.js';
-// Cron execution lives on the companion now; the desktop only VIEWS the schedule
-// (from local cron.json + companion run-status) and triggers a manual run.
+// Cron execution lives entirely on the companion now; the desktop only VIEWS the
+// schedule (from local cron.json + companion run-status) and triggers a manual run.
 import { cronRead, cronRunNow } from './api/cron.js';
-import { CRON_FILE } from './cronScheduler.js';
 import { listSessions, listStarred, searchSessions, getMessages, openSession as openSessionApi, deleteSession, setSessionTitle, setSessionStarred, postEvent } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
@@ -29,7 +27,7 @@ import { getProviders } from '@earendil-works/pi-ai/compat';
 import { initModelCatalog, getCatalogModels } from '../../agent-core/modelCatalog.js';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from '../../agent-core/skillLibrary.js';
 import { installOpenFileBridge } from './openFileExtension.js';
-import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, getFreshToken, PROVIDER_PRESETS } from './oauth.js';
+import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, PROVIDER_PRESETS } from './oauth.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
 // Settings + secrets live in the `setting` table (see settingsStore.ts). The old
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
@@ -1846,17 +1844,6 @@ async function onParcelEvents(err, events) {
     console.warn('[watcher] subscribe error', err?.message ?? err);
     return;
   }
-  // Promptness only: tell the cron controller when this workspace's cron.json
-  // changes (the 60s tick would catch it anyway). Reconcile is idempotent, so
-  // our own write to cron.json self-echoing here is harmless.
-  if (watcherRootDir) {
-    for (const e of events) {
-      if (path.basename(e.path) === CRON_FILE && path.dirname(e.path) === watcherRootDir) {
-        cronOnFileChanged();
-        break;
-      }
-    }
-  }
   if (watchDispatch) await watchDispatch.handleBatch(events);
 }
 
@@ -1890,8 +1877,6 @@ async function stopWatcher() {
   watchDispatch = null;
   watcherRootDir = null;
   watcherWindowId = null;
-  // Cron follows the active workspace, whose lifetime is the watcher's lifetime.
-  cronDeactivate();
 }
 
 ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
@@ -1925,10 +1910,6 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
       if (path.basename(e.path) === 'workspace.json') { w.webContents.send('bookmarks:changed'); return; }
     }
   });
-
-  // Cron is active-workspace-only; its lifetime rides the watcher's. Starting
-  // here (after stopWatcher cleared the previous one) retargets it on switch.
-  cronActivate(dirPath);
 });
 
 ipcMain.handle('fs:watchStop', stopWatcher);
@@ -1971,35 +1952,6 @@ nativeTheme.on('updated', () => {
 // longer needs a writeSettings dep.
 initOAuth({ readSettings });
 
-// Cron scheduler: fire a run exactly like the `agent:send` handler, but with an
-// EXPLICIT workspace (not the active-workspace lookup) + the cron fields. This
-// is the one place cron builds agentSend opts; the scheduler in cron.ts calls it.
-async function runAgentTurnForCron(
-  { workspacePath, sessionId, text, unattended, source, cronTitle }:
-    { workspacePath: string; sessionId: string; text: string; unattended: boolean; source: string; cronTitle: string },
-  emit: (event: any) => void,
-) {
-  const settings = await readSettings();
-  const { provider, model, baseUrl, contextWindow, thinkingLevel, providerKeys } = settings.codingAgent ?? {};
-  const apiKey = providerKeys?.[provider] ?? '';
-  const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
-  const wsRow = await findWorkspaceByPath(workspacePath);
-  await agentSend(
-    {
-      sessionId, text, workspaceId: wsRow?.id ?? workspacePath, workspacePath,
-      provider, model, apiKey, baseUrl, contextWindow, thinkingLevel,
-      wsBuiltinSkills: wsData?.builtinSkills ?? {},
-      unattended, source, cronTitle,
-    },
-    emit,
-  );
-}
-initCron({
-  readSettings,
-  writeSettings,
-  runAgentTurn: runAgentTurnForCron,
-  getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
-});
 
 ipcMain.handle('cron:read', () => cronRead());
 ipcMain.handle('cron:runNow', (_e, { name }) => cronRunNow(name));
@@ -2015,13 +1967,9 @@ initDesktopAgent({
     const settings = await readSettings();
     return settings.agentSecrets ?? [];
   },
-  getToken: async (name) => {
-    const settings = await readSettings();
-    const secret = (settings.agentSecrets ?? []).find((s) => s.name === name);
-    if (!secret) throw new Error(`No secret named "${name}". Call list_agent_secrets to see available names.`);
-    if (secret.oauth) return getFreshToken(name);
-    return secret.token ?? '';
-  },
+  // Token minting (incl. OAuth refresh) lives on the companion — the desktop
+  // agent fetches from it too, so there's one refresh implementation.
+  getToken: (name) => api.get(`/agent-secret/${encodeURIComponent(name)}/token`),
 });
 
 // Bridge for the open-file pi extension: validate the agent's path against the

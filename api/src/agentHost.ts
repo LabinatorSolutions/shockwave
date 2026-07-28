@@ -13,6 +13,7 @@ import type { AgentHost } from '../../agent-core/agent.js';
 import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
+import { mintToken } from './oauth.js';
 
 const DATA_BASE = process.env.AGENT_DATA_DIR || path.join(os.tmpdir(), 'shockwave-agent');
 const BUILTIN_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(DATA_BASE, 'builtins');
@@ -36,13 +37,7 @@ export function makeCompanionRuntime(pool: DB, key: Buffer) {
     getTranscript: (id) => store.getTranscript(db, id),
     putTranscript: (id, content) => store.putTranscript(db, id, content),
     getAgentSecrets: async () => (await store.readSettings(db, key)).agentSecrets ?? [],
-    getToken: async (name: string) => {
-      const secrets = (await store.readSettings(db, key)).agentSecrets ?? [];
-      const s = secrets.find((x: any) => x.name === name);
-      if (!s) throw new Error(`No secret named "${name}". Call list_agent_secrets to see available names.`);
-      if (s.oauth) throw new Error(`OAuth token minting for "${name}" is not available on the server yet.`);
-      return s.token ?? '';
-    },
+    getToken: (name: string) => mintToken(db, key, name), // static or fresh OAuth
   };
   return createAgentRuntime(host);
 }
