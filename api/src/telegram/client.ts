@@ -25,8 +25,22 @@ export class TelegramClient {
   }
 
   getMe() { return this.call('getMe'); }
-  setWebhook(url: string, secretToken: string) {
-    return this.call('setWebhook', { url, secret_token: secretToken, allowed_updates: ['message'], drop_pending_updates: true });
+  // With a self-signed cert, Telegram needs its public PEM uploaded (multipart);
+  // with a real/ngrok cert, plain JSON. `certificatePem` selects the path.
+  async setWebhook(url: string, secretToken: string, certificatePem?: string) {
+    if (!certificatePem) {
+      return this.call('setWebhook', { url, secret_token: secretToken, allowed_updates: ['message'], drop_pending_updates: true });
+    }
+    const form = new FormData();
+    form.set('url', url);
+    form.set('secret_token', secretToken);
+    form.set('allowed_updates', JSON.stringify(['message']));
+    form.set('drop_pending_updates', 'true');
+    form.set('certificate', new Blob([certificatePem], { type: 'application/x-pem-file' }), 'cert.pem');
+    const res = await fetch(`https://api.telegram.org/bot${this.token}/setWebhook`, { method: 'POST', body: form });
+    const json = await res.json().catch(() => ({}));
+    if (!(res.ok && json.ok)) throw new Error(`telegram setWebhook failed: ${json.description || res.status}`);
+    return json.result;
   }
   deleteWebhook() { return this.call('deleteWebhook', { drop_pending_updates: true }); }
   sendMessage(chatId: number, text: string) { return this.call('sendMessage', { chat_id: chatId, text }); }

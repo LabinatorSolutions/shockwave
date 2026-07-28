@@ -31,12 +31,12 @@ const BOT_COMMANDS = [
 
 // ── Setup (called by the desktop Settings tab via companion endpoints) ────────
 
-export async function connect(pool: DB, key: Buffer, opts: { botToken: string; authorizedTgUserId: number; publicUrl: string }) {
+export async function connect(pool: DB, key: Buffer, opts: { botToken: string; authorizedTgUserId: number; publicUrl: string; certificatePem?: string }) {
   const client = new TelegramClient(opts.botToken);
   const me = await client.getMe(); // validates the token
   const secret = crypto.randomBytes(32).toString('hex');
   const webhookUrl = `${opts.publicUrl.replace(/\/$/, '')}/telegram/webhook`;
-  await client.setWebhook(webhookUrl, secret);
+  await client.setWebhook(webhookUrl, secret, opts.certificatePem);
   await client.setMyCommands(BOT_COMMANDS).catch(() => {});
   const db = getDb(pool);
   await store.saveTelegramAccount(db, key,

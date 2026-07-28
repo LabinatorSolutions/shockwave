@@ -9,6 +9,11 @@ set -eu
 
 OUT="${OUT:-/out/router.yml}"
 BACKEND="http://api:8080"
+DIR="$(dirname "$OUT")"
+
+# The api (uid 1000, non-root) writes the self-signed cert + tls.yml into this
+# shared dir on connect, so it must be writable by that uid. Traefik (root) reads.
+chown 1000:1000 "$DIR" 2>/dev/null || chmod 777 "$DIR" 2>/dev/null || true
 
 if [ -n "${COMPANION_DOMAIN:-}" ]; then
   echo "gen-router: domain '$COMPANION_DOMAIN' -> Let's Encrypt (real cert)"

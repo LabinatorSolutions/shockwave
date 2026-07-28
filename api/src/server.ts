@@ -16,6 +16,7 @@ import { initScheduler, nextRuns } from './scheduler.js';
 import { mintToken } from './oauth.js';
 import { initSweeper } from './sweeper.js';
 import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus } from './telegram/webhook.js';
+import { detectPublicIp, ensureSelfSignedCert } from './telegram/selfSigned.js';
 
 const log = pino({ base: undefined });
 
@@ -154,12 +155,27 @@ app.patch('/workspaces', handle((req) => store.updateWorkspaceOrder(db, req.body
 app.delete('/workspaces/:id', handle((req) => store.deleteWorkspace(db, req.params.id)));
 
 // ── Telegram (desktop Settings triggers these companion actions) ─────────────
-app.post('/telegram/connect', handle((req) => {
-  if (!process.env.TELEGRAM_PUBLIC_URL) throw new Error('TELEGRAM_PUBLIC_URL is not set on the server.');
+app.post('/telegram/connect', handle(async (req) => {
+  // COMPANION_DOMAIN set -> a real domain (Let's Encrypt) or an ngrok host: the
+  // cert is already trusted, so just register the URL. Unset -> a public server
+  // with no domain: detect our public IP, mint a self-signed cert Traefik serves,
+  // and upload its PEM so Telegram trusts it.
+  const domain = process.env.COMPANION_DOMAIN;
+  let publicUrl: string;
+  let certificatePem: string | undefined;
+  if (domain) {
+    publicUrl = `https://${domain}`;
+  } else {
+    const ip = await detectPublicIp();
+    certificatePem = await ensureSelfSignedCert(ip);
+    await new Promise((r) => setTimeout(r, 2000)); // let Traefik's file watcher load the cert
+    publicUrl = `https://${ip}`;
+  }
   return tgConnect(pool, masterKey, {
     botToken: String(req.body?.botToken ?? ''),
     authorizedTgUserId: Number(req.body?.authorizedTgUserId),
-    publicUrl: process.env.TELEGRAM_PUBLIC_URL,
+    publicUrl,
+    certificatePem,
   });
 }));
 app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, masterKey); return { ok: true }; }));
