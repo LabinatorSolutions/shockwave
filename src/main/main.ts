@@ -33,7 +33,7 @@ import { ensureCliShims, prependPath } from './cliTools.js';
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
 // encryption were replaced wholesale; the signatures here are unchanged, so
 // every call site below (and in oauth.ts / cron.ts) is untouched.
-import { DEFAULT_SETTINGS, readSettings, readSettingsSafe, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
+import { readSettings, readSettingsSafe, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
 import { readApiConfig, writeApiConfig } from './api/config.js';
 import os from 'node:os';
 import { api } from './api/client.js';

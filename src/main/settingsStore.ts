@@ -18,23 +18,22 @@ import {
   isLocalKey, readLocalSettings, patchLocalSettings, getWorkspaceLocal, pruneWorkspaceLocal,
 } from './api/localSettings.js';
 
-export const DEFAULT_SETTINGS = {
-  workspaces: [],
-  activeWorkspaceId: null,
-  appearance: { themeMode: 'system', hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
-  codingAgent: { provider: 'anthropic', model: 'claude-sonnet-4-5', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium' },
-  agentSecrets: [],
-  transcription: { provider: 'assemblyai', apiKey: '' },
-  sync: { pat: '', pullIntervalSeconds: 10 },
-  timezone: 'UTC',
-  cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
-  chatSidebarOpen: false,
-  chatSidebarWidth: 360,
+// The ONLY defaults the desktop holds — for machine-local settings, which live in
+// a userData file and never touch the DB. DB settings have NO desktop defaults:
+// the companion is the source of truth, and what it returns IS the value. A DB
+// setting is either set (a row exists) or unset (no row); nothing here invents
+// one, so the desktop can never show a value the DB — and every other reader
+// (Telegram, cron) — doesn't have. That mismatch was the provider bug.
+const LOCAL_KEYS = ['windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen', 'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'cron'] as const;
+const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
+  windowBounds: null,
   sidebarWidth: 260,
+  chatSidebarWidth: 360,
+  chatSidebarOpen: false,
   viewMode: 'live',
   treeSortOrder: 'name-asc',
   bookmarkFilterActive: false,
-  windowBounds: null,
+  cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
 };
 
 // Broadcasts changed top-level keys + a fresh read to the renderer, for
@@ -51,19 +50,13 @@ async function emitChanged(keys: string[]) {
   }
 }
 
-function isObj(v: any): boolean { return v !== null && typeof v === 'object' && !Array.isArray(v); }
-function deepMerge(base: any, over: any) {
-  for (const [k, v] of Object.entries(over ?? {})) {
-    if (isObj(v) && isObj(base[k])) deepMerge(base[k], v);
-    else base[k] = v;
-  }
-}
-
-// Merge the machine-local overlay onto a base settings object.
+// Overlay the machine-local settings (userData file) onto the DB settings. Each
+// local key takes its file value if present, else its local default. This is the
+// only place defaults are applied, and only for local keys — never DB settings.
 function overlayLocal(merged: any, identities: any[]) {
   const local = readLocalSettings();
-  for (const k of ['windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen', 'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'cron'] as const) {
-    if ((local as any)[k] !== undefined) (merged as any)[k] = (local as any)[k];
+  for (const k of LOCAL_KEYS) {
+    (merged as any)[k] = (local as any)[k] !== undefined ? (local as any)[k] : LOCAL_DEFAULTS[k];
   }
   merged.activeWorkspaceId = local.activeWorkspaceId ?? null;
   pruneWorkspaceLocal(identities.map((w: any) => w.id));
@@ -74,26 +67,25 @@ function overlayLocal(merged: any, identities: any[]) {
   return merged;
 }
 
-// Synced from the API + machine-local from userData. THROWS if the server is
-// unreachable — the caller (settings:read IPC) degrades to defaults for boot.
+// DB settings from the companion (the source of truth) + machine-local from
+// userData. Returns exactly what the companion holds — no default layer, so an
+// unset DB value reads as unset, not faked. THROWS if the server is unreachable;
+// the caller (settings:read IPC) degrades via readSettingsSafe for boot.
 export async function readSettings(): Promise<any> {
-  const merged: any = structuredClone(DEFAULT_SETTINGS);
   const synced = await api.get('/settings');
   const identities = Array.isArray(synced?.workspaces) ? synced.workspaces : [];
-  const rest = { ...synced }; delete rest.workspaces;
-  deepMerge(merged, rest);
-  return overlayLocal(merged, identities);
+  const rest: any = { ...synced }; delete rest.workspaces;
+  return overlayLocal(rest, identities);
 }
 
-// Boot/UI-safe read: never throws. On an unconfigured/offline server it returns
-// DEFAULT_SETTINGS (+ machine-local, which needs no server) so the app still
-// boots and can show a "connect your server" state.
+// Boot/UI-safe read: never throws. On an unconfigured/offline server there are no
+// DB settings to us, so it returns only the machine-local settings (which need no
+// server) and the app boots to a "connect your companion" state.
 export async function readSettingsSafe(): Promise<{ settings: any; online: boolean }> {
   try {
     return { settings: await readSettings(), online: true };
   } catch {
-    const merged: any = structuredClone(DEFAULT_SETTINGS);
-    return { settings: overlayLocal(merged, []), online: false };
+    return { settings: overlayLocal({}, []), online: false };
   }
 }
 

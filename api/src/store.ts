@@ -12,7 +12,7 @@ import {
 import {
   workspace, setting, agentSecret, secretValue, chatSession, chatTranscript, message, cronState, telegramAccount,
 } from './schema.js';
-import { and, eq, ne, lt, desc, asc, ilike, like, sql, notInArray } from 'drizzle-orm';
+import { and, eq, lt, desc, asc, ilike, like, sql, inArray } from 'drizzle-orm';
 
 const KEY_VERSION = 1;
 const now = () => Date.now();
@@ -148,12 +148,16 @@ async function reconcileProviderKeys(c: Tx, key: Buffer, map: Record<string, any
 
 async function writeAgentSecrets(c: Tx, key: Buffer, list: any[]) {
   const keep = list.filter((s) => s?.name).map((s) => s.name as string);
-  if (keep.length) {
-    await c.delete(agentSecret).where(notInArray(agentSecret.name, keep));
-    await c.delete(secretValue).where(notInArray(secretValue.owner, [...keep, SETTINGS_SECRET_OWNER]));
-  } else {
-    await c.delete(agentSecret);
-    await c.delete(secretValue).where(ne(secretValue.owner, SETTINGS_SECRET_OWNER));
+  // Delete ONLY the agent secrets that are gone from the list, and only their
+  // own encrypted rows (owner = the agent-secret name). Never a table-wide wipe:
+  // secret_value is shared with the `settings` and `telegram` owners, and a
+  // "delete everything not in this list" reconcile clobbered the telegram token
+  // on every save.
+  const existing = (await c.select({ name: agentSecret.name }).from(agentSecret)).map((r) => r.name);
+  const removed = existing.filter((n) => !keep.includes(n));
+  if (removed.length) {
+    await c.delete(agentSecret).where(inArray(agentSecret.name, removed));
+    await c.delete(secretValue).where(inArray(secretValue.owner, removed));
   }
   for (const entry of list) {
     if (!entry?.name) continue;

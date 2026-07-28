@@ -36,7 +36,7 @@ export async function runCronJob(
 
   const settings = await store.readSettings(db, key);
   // Unified system timezone → the agent's "current date" (pi reads local tz).
-  if (settings.timezone) process.env.TZ = settings.timezone;
+  process.env.TZ = settings.timezone || 'UTC';   // optional setting → fallback at point of use
   const ca = settings.codingAgent ?? {};
   const apiKey = (ca.providerKeys ?? {})[ca.provider] ?? '';
 
@@ -59,7 +59,7 @@ export async function runCronJob(
       {
         sessionId, text: job.prompt, workspaceId, workspacePath: dir,
         provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl,
-        contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel,
+        contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
         wsBuiltinSkills,
         unattended: true, source: 'cron', cronTitle: jobName,
       },

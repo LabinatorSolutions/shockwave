@@ -87,6 +87,18 @@ async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msg: any) 
   const dm = acc.dmChatId as number;
   const text = String(msg.text ?? '');
 
+  // Any failure in the turn (bad provider key, clone failure, agent/API error,
+  // timeout) must surface IN the chat — a silent failure looks like the bot is
+  // ignoring the user. We still rethrow so the caller logs it server-side.
+  try {
+    await runTurnInner(db, key, runtime, acc, client, dm, text);
+  } catch (err: any) {
+    await client.sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
+    throw err;
+  }
+}
+
+async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number, text: string) {
   if (text.startsWith('/')) { await handleCommand(db, client, dm, text); return; }
   if (!text.trim()) { await client.sendMessage(dm, 'Send me a text message and I\'ll get to work.'); return; }
 
@@ -102,7 +114,7 @@ async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msg: any) 
   const dir = await prepareCheckout(sessionId, ws.repoOwner, ws.repoName, ws.defaultBranch, pat);
 
   const settings = await store.readSettings(db, key);
-  if (settings.timezone) process.env.TZ = settings.timezone;
+  process.env.TZ = settings.timezone || 'UTC';   // optional setting → fallback at point of use
   const ca = settings.codingAgent ?? {};
   let wsBuiltinSkills: Record<string, any> = {};
   try { wsBuiltinSkills = JSON.parse(await fs.readFile(path.join(dir, '.shockwave', 'workspace.json'), 'utf8'))?.builtinSkills ?? {}; } catch { /* defaults */ }
@@ -121,7 +133,7 @@ async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msg: any) 
     await runtime.agentSend({
       sessionId, text, workspaceId: ws.id, workspacePath: dir,
       provider: ca.provider, model: ca.model, apiKey: (ca.providerKeys ?? {})[ca.provider] ?? '',
-      baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel,
+      baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
     }, emit);
   } finally { clearTimeout(wd); }

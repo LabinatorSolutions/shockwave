@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSyncRef } from './useSyncRef';
 import { buildPatch } from '../settingsDiff.js';
-import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS, DEFAULT_PROVIDER_SLUG } from '../constants';
+import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS } from '../constants';
 import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
 
 // dailyNote + templates moved to the per-workspace WorkspaceData.
@@ -11,13 +11,15 @@ type Templates = WorkspaceData['templates'];
 type Transcription = Settings['transcription'];
 type SyncSettings = Settings['sync'];
 
-// Default canonical object — mirrors main's DEFAULT_SETTINGS + the renderer
-// fallbacks. Seeded for real from disk via hydrate() before any user action.
+// Empty-shaped placeholder to satisfy the Settings type before hydrate() seeds
+// the real values from the companion. DB settings start UNSET here — no provider,
+// no model — so the renderer never invents a value the DB doesn't have (that fake
+// `anthropic` was the provider bug). hydrate() overwrites this wholesale on boot.
 const DEFAULT_CANONICAL: Settings = {
   workspaces: [],
   activeWorkspaceId: null,
   appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
-  codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium' },
+  codingAgent: { provider: '', model: '', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium' },
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
   sync: { pat: '', pullIntervalSeconds: 10 },
