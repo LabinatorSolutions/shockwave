@@ -49,16 +49,25 @@ export async function runCronJob(
     wsBuiltinSkills = JSON.parse(wsRaw)?.builtinSkills ?? {};
   } catch { /* no workspace file → defaults */ }
 
-  await runtime.agentSend(
-    {
-      sessionId, text: job.prompt, workspaceId, workspacePath: dir,
-      provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl,
-      contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel,
-      wsBuiltinSkills,
-      unattended: true, source: 'cron', cronTitle: jobName,
-    },
-    (event: any) => feed.publish(event.sessionId, event),
-  );
+  // Hung-run watchdog: abort a turn that exceeds CRON_MAX_RUN_MINUTES so a stuck
+  // provider or runaway tool loop can't wedge the run forever (the aborted turn's
+  // partial output is still persisted + checked in below).
+  const maxRunMs = (Number(process.env.CRON_MAX_RUN_MINUTES) || 30) * 60_000;
+  const watchdog = setTimeout(() => { runtime.agentAbort(sessionId).catch(() => {}); }, maxRunMs);
+  try {
+    await runtime.agentSend(
+      {
+        sessionId, text: job.prompt, workspaceId, workspacePath: dir,
+        provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl,
+        contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel,
+        wsBuiltinSkills,
+        unattended: true, source: 'cron', cronTitle: jobName,
+      },
+      (event: any) => feed.publish(event.sessionId, event),
+    );
+  } finally {
+    clearTimeout(watchdog);
+  }
 
   const stamp = new Date().toISOString();
   let result = await checkIn(dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`);
