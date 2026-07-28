@@ -2,9 +2,8 @@
 // add-workspace flow asks before it decides anything else.
 //
 // Plain `.js` with no electron import, so `node --test` can exercise it against
-// real git repos in tmp dirs. Same split as `cronScheduler.js` vs `cron.ts` and
-// `settingsKeys.js` vs `settingsStore.ts`: the decision is pure and testable,
-// the wiring around it isn't.
+// real git repos in tmp dirs. Same split as `cronScheduler.js` vs `cron.ts`: the
+// decision is pure and testable, the wiring around it isn't.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';

@@ -1,14 +1,18 @@
 // The persisted settings schema — the single typed source of truth shared by
 // main (readSettings/writeSettings) and the renderer (settingsRef).
 //
-// This is the shape the renderer sees. On disk it spans four sqlite tables —
-// `setting` (scalar prefs), `workspace`, `agent_secret`, `secret_value` (all
-// encrypted values) — but readSettings/writeSettings hide that entirely.
-// `DEFAULT_SETTINGS` lives beside the store in src/main/settingsStore.ts, and a
-// key with no row falls back to it. Keep the two in sync when adding a field —
-// and if the field holds a credential, add its key pattern to
-// SETTINGS_SECRET_PATTERNS in src/main/settingsKeys.js, or it lands in the
-// `setting` table in plaintext.
+// This is the shape the renderer sees. The data lives on the COMPANION server
+// (Postgres) — the single source of truth — and the desktop reaches it through
+// the API client (src/main/api/client.ts). readSettings/writeSettings hide that.
+//
+// No defaults are merged on read: a DB setting is either set (a row exists) or
+// unset, and consumers that need a value either require it (error if unset) or
+// fall back at the point of use. The ONE exception is machine-local settings
+// (window/view state, cron, the active workspace), which live in a userData file
+// and DO have desktop defaults — see LOCAL_DEFAULTS in src/main/settingsStore.ts.
+//
+// Credentials are never stored here in the clear: the companion encrypts them in
+// its `secret_value` table (see api/CLAUDE.md), keyed by owner + field.
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 // What the quick-access panel pinned below the file tree shows (Explorer and
@@ -77,7 +81,7 @@ export interface CodingAgentSettings {
 // OAuth connection state carried by an `oauth`-kind AgentSecret. The three
 // secret-bearing fields (clientSecret, accessToken, refreshToken) are encrypted
 // at rest like `token` — they live in `secret_value`, keyed by this entry's
-// name; see AGENT_SECRET_FIELDS in src/main/settingsKeys.js. The token lifecycle
+// name; see AGENT_SECRET_FIELDS in the companion's api/src/keys.js. The lifecycle
 // fields (accessToken/refreshToken/expiresAt/status/accountEmail) are written
 // ONLY by oauth.ts via patchAgentSecretOAuth; a bulk settings save cannot author
 // them (OAUTH_OWNED_FIELDS / OAUTH_OWNED_COLUMNS), which is what stops a stale

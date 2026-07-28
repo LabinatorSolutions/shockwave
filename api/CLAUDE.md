@@ -1,0 +1,109 @@
+# CLAUDE.md — companion server (`api/`)
+
+The **companion** is the backend the desktop app talks to over HTTP. It is the **single source of truth** for everything synced: settings, secrets, workspaces (identity), chats + transcripts, and Telegram/cron state. It also *runs the coding agent server-side* for Telegram messages and scheduled (cron) jobs, using the same `agent-core` runtime the desktop bundles. Postgres is private to the compose network; the companion holds the one master encryption key. Read the root `CLAUDE.md` first for terminology and the desktop side.
+
+Node 22 + Express 5 + Postgres (drizzle). Source is TypeScript + a couple of pure `.js` policy modules; esbuild bundles `src/` **and** `../agent-core` into `dist/server.js`.
+
+## Deploy model (`docker-compose.yml`)
+
+Four services, three volumes:
+
+- **postgres** (`postgres:16-alpine`) — private to the compose network, **not** port-mapped by default. `init.sql` is mounted into `/docker-entrypoint-initdb.d` (runs once on a fresh `pg-data` volume); `ensureSchema` re-applies it idempotently on every boot.
+- **api** — built from the **repo root** (`context: ..`, `dockerfile: api/Dockerfile`) so the build can pull in `../agent-core`. Bound to **`127.0.0.1:8080` only** — localhost, never a public surface. Reaches Postgres over the compose net. Shares the `traefik-dynamic` volume (writes a self-signed cert + `tls.yml` there in self-signed mode).
+- **traefik-config** (`alpine`, `restart: no`) — one-shot sidecar; `gen-router.sh` writes the Traefik dynamic router from `$COMPANION_DOMAIN`, then exits.
+- **traefik** (`traefik:v3.3`) — the **only** public surface; `:80`→`:443`, terminates TLS, reverse-proxies to `http://api:8080`. Self-signed by default; real Let's Encrypt when `COMPANION_DOMAIN` is a domain.
+
+**Three exposure modes:** (a) localhost dev on `127.0.0.1:8080`; (b) public via Traefik TLS on `:443` — self-signed IP cert with no domain, Let's Encrypt with `COMPANION_DOMAIN`; (c) **ngrok raw tunnel** straight to `127.0.0.1:8080` (ngrok brings its own trusted cert, so set `COMPANION_DOMAIN` to the ngrok host and Traefik/self-signed is bypassed).
+
+**Env (`.env`, see `.env.example`):** required `POSTGRES_PASSWORD`, `MASTER_KEY` (32 bytes base64 — validated at boot, process exits if missing/wrong length), `API_KEY` (bearer token; the server stores only its SHA-256 hash). Optional `COMPANION_DOMAIN` (domain or ngrok host; empty ⇒ self-signed IP mode), `TELEGRAM_DEFAULT_WORKSPACE` (workspace id a Telegram message runs against), `ACME_EMAIL`, plus tunables `PORT`, `CRON_ENABLED`, `CRON_REFRESH_SCHEDULE`, `CRON_MAX_RUN_MINUTES`, `RUN_DIR_TTL_DAYS`. `api/.env` is git-ignored — never commit it.
+
+## Files
+
+- `server.ts` — Express app: boots the pool + companion agent runtime, registers all routes + the bearer-auth middleware, the SSE feed, scheduler + sweeper, graceful shutdown.
+- `db.ts` — pg `Pool` + drizzle wiring; `int8`→`Number` parser (epoch-ms); `ensureSchema` (idempotent `init.sql` re-apply on boot).
+- `schema.ts` — drizzle table definitions (source of truth); `bytea` custom type + `epochMs` bigint helper.
+- `store.ts` — the data layer: every drizzle query; seals/unseals secrets; `readSettings`/`writeSettings`, chats, transcripts, cron history, telegram account.
+- `crypto.ts` — AES-256-GCM `seal`/`unseal` under `MASTER_KEY`; fresh 12-byte IV per write; returns `''` on decrypt failure.
+- `keys.js` — **pure** key policy (no db/electron import, unit-testable): which `(owner, field)` pairs are secret, agent-secret field lists, OAuth-owned fields, settings flatten/`setPath`, agent-secret split/join, value encode/decode.
+- `oauth.ts` — server-side token minting: `mintToken(name)` → a static token or a fresh (refreshed) OAuth access token; `patchOAuth` writes tokens back. (The desktop runs the *interactive* OAuth browser flow; the companion stores + mints.)
+- `agentHost.ts` — builds the companion `AgentHost` for `agent-core`: persistence → store, events → feed, per-run scratch dir, `send_message` tool, `getToken` → `mintToken`.
+- `feed.ts` — in-memory ephemeral SSE pub/sub keyed by `sessionId` (lets the desktop watch a server-side run live).
+- `scheduler.ts` — croner scheduler: one fire-cron per `cron.json` entry + a refresh cron that reconciles registrations non-destructively (ETag).
+- `cronRun.ts` — executes one cron run: checkout → agent turn (stream to feed) → deterministic check-in (git-fixer on conflict).
+- `git.ts` — server-side git CLI: `prepareCheckout` (reuse-or-shallow-clone), `checkIn` (add/commit/merge/push, one retry), `cleanup`. PAT embedded in the remote URL for the child only.
+- `gitFixer.ts` — bounded LLM tool-loop (single `run_git` tool, `MAX_STEPS=12`) that recovers merge conflicts and independently verifies clean+pushed — trusting nothing the model claims.
+- `github.ts` — `fetchCronJson` over the GitHub Contents API, ETag-conditional (304 = unchanged, free).
+- `sweeper.ts` — boot + hourly TTL sweep of per-run working dirs (checkouts + pi scratch), keyed by mtime.
+- `telegram/webhook.ts` — connect/disconnect/status + the webhook handler and out-of-band turn runner.
+- `telegram/client.ts` — minimal Telegram Bot API client over `fetch` (one 429 retry) + `splitMessage` (4096-char chunker that carries code fences).
+- `telegram/stream.ts` — renders the agent event stream to Telegram (typing indicator, per-tool line, in-place streamed text, authoritative final from `agent_end`).
+- `telegram/selfSigned.ts` — public-IP detection + self-signed cert + Traefik dynamic-TLS config (public server, no domain).
+- `telegram/sendTool.ts` — the `send_message` agent tool (a server-side run proactively DMs the user).
+
+## HTTP API (`server.ts`)
+
+**Public (no bearer):**
+- `GET /health` — `SELECT 1`; 200/503. Registered before auth.
+- `POST /telegram/webhook` — Telegram inbound. Auth is the per-account `X-Telegram-Bot-Api-Secret-Token` header, checked **inside** `handleWebhook`. Registered before the bearer middleware, with its own JSON parser.
+
+**Auth:** `authed` middleware compares `Bearer <token>` SHA-256 against the stored `API_KEY` hash with `timingSafeEqual` (401 otherwise). `app.use(authed, limiter, express.json())` protects + rate-limits (600/60s) + parses everything below.
+
+**Protected:** `GET/PATCH /settings`; `GET /agent-secrets`, `GET /agent-secret/:name/token` (mint), `POST /oauth/:name`; chats (`GET /chats`, `/chats/starred`, `/chats/search`, `/chat/:id`(+`/messages`,`/transcript`,`/running`), `POST /chat`, `POST /chat/:id/messages`, `PATCH /chat/:id/{title,starred}`, `DELETE /chat/:id`); live feed (`GET /chat/:id/stream` SSE, `POST /chat/:id/events`); cron (`POST /workspace/:id/cron/:job/run`, `GET /workspace/:id/cron/state`); workspaces (`GET/POST/PATCH /workspaces`, `DELETE /workspaces/:id`); telegram (`POST /telegram/{connect,disconnect}`, `GET /telegram/status`). The `handle()` wrapper returns `{result}` and never leaks error detail (`500 {error:'request failed'}`).
+
+## Data model (`schema.ts` / `init.sql`)
+
+- **workspace** — identity = a GitHub repo: `id`, `name`, `repo_owner`, `repo_name`, `default_branch`, `sort_order`. (Checkout path / active / sync-toggle are machine-local — they live on the desktop, not here.)
+- **setting** — non-secret scalar settings, one row per dotted leaf key: `key`, `value`, `type` (`string|number|boolean|json`), `updated_at`.
+- **agent_secret** — agent-secret entity metadata (no crypto columns): `name`, `description`, `kind` (`static|oauth`), the `oauth_*` columns, timestamps.
+- **secret_value** — **every** encrypted value: PK `(owner, field)`, `ciphertext` (base64), `iv`+`tag` (`bytea`, `NOT NULL`), `key_version`, `updated_at`. `owner` ∈ {`settings`, `telegram`, an `agent_secret.name`}.
+- **chat_session** / **chat_transcript** / **message** — chats: session metadata + `source` (`desktop|cron|telegram`)/`source_id`/`machine` provenance + `running`/`running_machine` cross-client flag; the whole pi JSONL (one row); and per-message rows `(session_id, seq)`.
+- **telegram_account** — single row (`id='default'`): authorized user, dm chat id, active session, `last_update_id` (dedup), bot username, enabled. Token + webhook secret are encrypted in `secret_value` under owner `telegram`.
+- **cron_state** — run **history** only, PK `(workspace_id, job_name)`: `last_run_at`/`last_error`/`last_session_id`. Next-run is computed in memory by croner, never persisted.
+
+## Settings + secrets
+
+`readSettings` builds the object from `setting` rows (decoded by `type`), splices decrypted `secret_value` rows owned by `settings` at their field paths, and attaches `agentSecrets` + `workspaces`. **No defaults are applied — it returns exactly what is stored.** (The desktop merged defaults on read and faked unset values; that is gone. See "Defaults" below.)
+
+`writeSettings` flattens a patch to dotted leaf keys and, in one transaction, routes each via `isSettingsSecretKey` → `putSecret(owner='settings', field=key)` or an upserted `setting` row, then reconciles `codingAgent.providerKeys` and `agentSecrets`. `putSecret` with empty plaintext **deletes** the row (absent = unset), else `seal` + upsert on `(owner, field)`.
+
+**Encryption (`crypto.ts`):** AES-256-GCM under the single `MASTER_KEY`. Fresh 12-byte IV per write; `iv`/`tag` are `NOT NULL` in `secret_value`, so a plaintext credential is structurally unrepresentable. `unseal` returns `''` on failure so one bad row can't fail a whole read.
+
+**Routing policy (`keys.js`):** `SETTINGS_SECRET_PATTERNS` = `codingAgent.providerKeys.<slug>`, `transcription.apiKey`, `sync.pat` (owner `settings`). `AGENT_SECRET_FIELDS` = `token`, `oauth.{clientSecret,accessToken,refreshToken}` (owner = the secret's `name`). `OAUTH_OWNED_FIELDS` (`oauth.accessToken`/`refreshToken`) are written **only** by the OAuth flow — a bulk `writeSettings` can't author them, so a client echoing pre-refresh state can't clobber a token the server just rotated.
+
+### `secret_value` is shared — reconciliation must be SCOPED
+
+`secret_value` holds three owner kinds: `settings`, `telegram`, and each agent-secret `name`. Any reconciliation must delete **only its own owners** — never "everything not in this list". Two guards, both in `store.ts`:
+
+- **`writeAgentSecrets`** deletes only the agent secrets *removed from the incoming list*: it reads existing `agent_secret` names, computes `removed = existing − keep`, and deletes strictly `agent_secret`/`secret_value WHERE owner IN removed`. It is **not** a table-wide wipe. A previous version deleted every `secret_value` row except a hardcoded safelist, which clobbered the `telegram` `botToken`/`webhookSecret` on every settings save and broke the bot. **Never reintroduce a "delete all owners except X" here.**
+- **`reconcileProviderKeys`** is likewise confined to owner `settings` + `like 'codingAgent.providerKeys.%'`.
+
+## Defaults — there are none on read
+
+The companion applies **no** defaults. A setting is set (a row exists) or unset. Consumers handle it in two ways:
+
+- **Required** — no default; error if unset. `sync.pat` → `cronRun.ts` throws, `webhook.ts` replies in-chat, `scheduler.ts` skips. `codingAgent.provider`/`model` + the provider API key are read straight through; `agent-core` errors if empty ("provider not configured").
+- **Optional** — fall back **at the point of use** in the consumer, not on read: `timezone → 'UTC'` and `thinkingLevel → 'off'` in both `cronRun.ts` and `telegram/webhook.ts` (and `scheduler.ts` for timezone).
+
+Do **not** add a defaults object or seed default rows. The desktop learned this the hard way — a client-side default layer made an unset value look configured while the server (reading the DB directly) saw the hole and failed.
+
+## Telegram
+
+**Setup** (desktop Settings → `/telegram/{connect,disconnect,status}`): `connect` validates the token (`getMe`), mints a random webhook secret, registers the webhook (`allowed_updates:['message']`), and saves the account (botToken + webhookSecret encrypted under owner `telegram`; `dmChatId = authorizedTgUserId`, since private chats). `server.ts` resolves the public URL/cert first: `COMPANION_DOMAIN` set → `https://<domain>` (trusted, no PEM); unset → detect public IP + self-signed cert (Traefik serves it) → `https://<ip>` with the PEM uploaded to Telegram.
+
+**Webhook (`handleWebhook`):** account enabled? → secret-token header timing-safe-checked (403 on mismatch) → sender must be `authorizedTgUserId` (single user, DM-only; unknown senders silently 200) → `markTelegramUpdate` dedups retries → **fast-ack 200**, then run the turn out-of-band.
+
+**Turn (`runTurn` → `runTurnInner`):** `runTurn` wraps the inner run in try/catch so **any failure replies in-chat** (`⚠️ Something went wrong running the agent:\n<message>`) and then rethrows for server logging — a silent failure reads as the bot ignoring you. `runTurnInner` handles `/new`,`/status`,`/help`; picks the workspace by `TELEGRAM_DEFAULT_WORKSPACE` (in-chat error if unset/missing); requires `sync.pat` (in-chat error if absent); `prepareCheckout` clones/refreshes via `git.ts`; runs `runtime.agentSend` under a `CRON_MAX_RUN_MINUTES` watchdog; dual-publishes each event to the `feed` (desktop watches live) and the Telegram sink; `checkIn`s the work afterward. `source: 'telegram'`, `sourceId` = DM chat id.
+
+## Cron
+
+`scheduler.ts` (gated by `CRON_ENABLED`): one croner per enabled `cron.json` entry (`protect:true`, workspace timezone), plus a refresh croner that `reconcileAll`s — fetches each workspace's `cron.json` via `fetchCronJson` (ETag/304) and updates registrations **non-destructively** (unchanged jobs keep running; changed schedules are replaced; vanished jobs dropped). `fireJob` mints a sessionId, runs `runCronJob`, records history to `cron_state`. `cronRun.ts` is shared by the scheduler and the manual `POST …/cron/:job/run`: checkout → read the job prompt from the checkout's `cron.json` → agent turn streamed to the feed (watchdog) → deterministic `checkIn`, handing a `'conflict'` to `gitFix`. Checkout dirs are keyed by sessionId (re-runs reuse) and reclaimed by `sweeper.ts`.
+
+## Agent execution (`agentHost.ts`)
+
+`makeCompanionRuntime(pool, key)` builds an `AgentHost` and calls `agent-core`'s `createAgentRuntime` — the same runtime the desktop implements, but wired to direct I/O instead of IPC: persistence → the drizzle store, events → `feed`, a per-run scratch `dataDir` keyed by sessionId (isolates concurrent runs' pi `settings.json`), `extraTools = [send_message]`, `getAgentSecrets` from `readSettings`, `getToken` → `mintToken`. Both cron and Telegram drive it via `runtime.agentSend(payload, emit)` / `runtime.agentAbort(sessionId)`. The git-fixer (`gitFixer.ts`) runs a **separate** pi session from the turn.
+
+## When you touch this
+
+- **Adding a settings field:** it's just a `setting` row (or a `secret_value` row if it's a credential — add its pattern to `SETTINGS_SECRET_PATTERNS` / `AGENT_SECRET_FIELDS` in `keys.js`). No default to register anywhere — required fields error at their consumer, optional fields fall back at point of use.
+- **Adding a `secret_value` owner category:** every reconciliation that deletes from `secret_value` must be scoped to its own owners (see the boxed rule above).
+- **Schema change:** edit `schema.ts` *and* `init.sql` (both are re-applied idempotently). Keep them in sync.
