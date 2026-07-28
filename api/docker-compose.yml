@@ -37,8 +37,46 @@ services:
       # and the public HTTPS base URL (e.g. an ngrok tunnel) for the webhook.
       TELEGRAM_DEFAULT_WORKSPACE: ${TELEGRAM_DEFAULT_WORKSPACE:-}
       TELEGRAM_PUBLIC_URL: ${TELEGRAM_PUBLIC_URL:-}
+    # NOT a public surface. Bound to localhost only, for local dev / an
+    # ngrok->raw tunnel. Public traffic goes through traefik (TLS, :443); it
+    # reaches this container over the compose network as `api:8080`.
     ports:
-      - "8080:8080"        # the ONLY public surface; front with TLS in prod
+      - "127.0.0.1:8080:8080"
+
+  # One-shot: writes the Traefik dynamic router (self-signed vs Let's Encrypt)
+  # from $COMPANION_DOMAIN into the shared config volume, then exits.
+  traefik-config:
+    image: alpine:3.20
+    environment:
+      COMPANION_DOMAIN: ${COMPANION_DOMAIN:-}
+    volumes:
+      - ./traefik/gen-router.sh:/gen-router.sh:ro
+      - traefik-dynamic:/out
+    command: ["sh", "/gen-router.sh"]
+    restart: "no"
+
+  # TLS terminator + reverse proxy — the ONLY public surface. :80 redirects to
+  # :443. Self-signed by default; a real Let's Encrypt cert when COMPANION_DOMAIN
+  # is set (see traefik/traefik.yml + traefik/gen-router.sh).
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    depends_on:
+      traefik-config:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - traefik-dynamic:/etc/traefik/dynamic:ro
+      - letsencrypt:/letsencrypt
 
 volumes:
   pg-data:
+  traefik-dynamic:
+  letsencrypt:

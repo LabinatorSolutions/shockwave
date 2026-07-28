@@ -4,6 +4,7 @@
 // local fallback — no local DB).
 
 import { readApiConfig } from './config.js';
+import { companionFetch } from './net.js';
 
 export type ApiErrorKind = 'unreachable' | 'unauthorized' | 'server' | 'config';
 
@@ -31,7 +32,7 @@ async function request(method: string, pathname: string, body?: any): Promise<an
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(target, {
+    res = await companionFetch(target, {
       method,
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -61,7 +62,7 @@ export const api = {
   async health(url: string, apiKey: string): Promise<boolean> {
     const t = new URL('health', url.endsWith('/') ? url : `${url}/`).href;
     try {
-      const r = await fetch(t, { headers: { Authorization: `Bearer ${apiKey}` } });
+      const r = await companionFetch(t, { headers: { Authorization: `Bearer ${apiKey}` } });
       return r.ok;
     } catch { return false; }
   },
@@ -74,7 +75,7 @@ export const api = {
     const ctrl = new AbortController();
     (async () => {
       try {
-        const res = await fetch(target, {
+        const res = await companionFetch(target, {
           headers: { Authorization: `Bearer ${apiKey}`, Accept: 'text/event-stream' },
           signal: ctrl.signal,
         });

@@ -1,0 +1,33 @@
+# Traefik v3 static config — TLS termination in front of the api service.
+#
+#   COMPANION_DOMAIN unset -> Traefik serves its built-in self-signed cert for
+#                             any host/IP (private / self-hosted companion).
+#   COMPANION_DOMAIN set   -> Let's Encrypt issues a real cert (TLS-ALPN-01 on
+#                             :443). Email comes from ACME_EMAIL (compose env).
+#
+# The router+service that selects between those two modes is generated into
+# /etc/traefik/dynamic by the traefik-config sidecar (gen-router.sh) at startup.
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      # every plain-HTTP request 301s to HTTPS
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  le:
+    acme:
+      storage: /letsencrypt/acme.json
+      # email is injected via TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL
+      tlsChallenge: {}
