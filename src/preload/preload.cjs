@@ -231,6 +231,10 @@ contextBridge.exposeInMainWorld('api', {
     apiRead: () => ipcRenderer.invoke('api:read'),
     apiWrite: (patch) => ipcRenderer.invoke('api:write', patch),
     apiTest: (args) => ipcRenderer.invoke('api:test', args),
+    // Telegram connect/disconnect/status — actions run on the companion.
+    telegramStatus: () => ipcRenderer.invoke('telegram:status'),
+    telegramConnect: (opts) => ipcRenderer.invoke('telegram:connect', opts),
+    telegramDisconnect: () => ipcRenderer.invoke('telegram:disconnect'),
     /** Writes only the keys present in `patch`; secrets are encrypted before write.
      *  @param {object} obj @returns {Promise<void>} */
     write: (obj) => ipcRenderer.invoke('settings:write', obj),

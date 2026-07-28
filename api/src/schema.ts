@@ -93,6 +93,22 @@ export const chatTranscript = pgTable('chat_transcript', {
   updatedAt: epochMs('updated_at').notNull(),
 });
 
+// Telegram integration — a single account (one authorized user, DM-only). The
+// bot token + webhook secret are encrypted in secret_value (owner 'telegram'),
+// same as every other credential; this holds the non-secret metadata. active
+// session_id makes a Telegram conversation continue one chat; last_update_id
+// dedups webhook retries.
+export const telegramAccount = pgTable('telegram_account', {
+  id: text('id').primaryKey().default('default'),
+  authorizedTgUserId: bigint('authorized_tg_user_id', { mode: 'number' }),
+  dmChatId: bigint('dm_chat_id', { mode: 'number' }),
+  activeSessionId: text('active_session_id'),
+  lastUpdateId: bigint('last_update_id', { mode: 'number' }).notNull().default(0),
+  botUsername: text('bot_username'),
+  enabled: boolean('enabled').notNull().default(false),
+  updatedAt: epochMs('updated_at').notNull(),
+});
+
 // Cron run HISTORY only (per workspace + job). croner computes next-run in
 // memory, so nothing scheduling-related is persisted here — just what the desktop
 // UI shows: when it last ran, the last error, and which chat it produced.

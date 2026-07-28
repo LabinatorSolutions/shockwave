@@ -99,6 +99,20 @@ CREATE TABLE IF NOT EXISTS chat_transcript (
   updated_at bigint NOT NULL
 );
 
+-- Telegram integration (single account, one authorized user, DM-only). The bot
+-- token + webhook secret live encrypted in secret_value (owner 'telegram'); this
+-- holds the non-secret metadata + dedup high-water mark + active session.
+CREATE TABLE IF NOT EXISTS telegram_account (
+  id                    text PRIMARY KEY DEFAULT 'default',
+  authorized_tg_user_id bigint,
+  dm_chat_id            bigint,
+  active_session_id     text,
+  last_update_id        bigint NOT NULL DEFAULT 0,
+  bot_username          text,
+  enabled               boolean NOT NULL DEFAULT false,
+  updated_at            bigint NOT NULL
+);
+
 -- Cron run history (per workspace + job). croner computes next-run in memory, so
 -- only what the UI shows is persisted: last run / error / chat.
 CREATE TABLE IF NOT EXISTS cron_state (

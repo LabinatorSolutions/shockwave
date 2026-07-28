@@ -33,6 +33,10 @@ services:
       MASTER_KEY: ${MASTER_KEY:?set in .env — 32 bytes base64}
       API_KEY: ${API_KEY:?set in .env}
       PORT: 8080
+      # Telegram (optional): default workspace id a Telegram message runs against,
+      # and the public HTTPS base URL (e.g. an ngrok tunnel) for the webhook.
+      TELEGRAM_DEFAULT_WORKSPACE: ${TELEGRAM_DEFAULT_WORKSPACE:-}
+      TELEGRAM_PUBLIC_URL: ${TELEGRAM_PUBLIC_URL:-}
     ports:
       - "8080:8080"        # the ONLY public surface; front with TLS in prod
 

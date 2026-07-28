@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import CompanionSection from './settings/CompanionSection.jsx';
+import TelegramSection from './settings/TelegramSection.jsx';
 import { SETTINGS_SECTIONS } from './constants.js';
 import { CheckCircleIcon } from './Icons.jsx';
 import {
@@ -49,6 +50,7 @@ function buildNav(workspaceLabel) {
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
     { kind: 'item', id: SETTINGS_SECTIONS.CRON, label: 'Cron Settings' },
+    { kind: 'item', id: SETTINGS_SECTIONS.TELEGRAM, label: 'Telegram' },
   ];
 }
 
@@ -265,6 +267,7 @@ export default function SettingsModal({
             />
           )}
           {effectiveActive === SETTINGS_SECTIONS.CRON && <CronSection onOpenCronPanel={onOpenCronPanel} />}
+          {effectiveActive === SETTINGS_SECTIONS.TELEGRAM && <TelegramSection />}
         </div>
       </DialogContent>
     </Dialog>

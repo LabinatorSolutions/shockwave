@@ -26,6 +26,7 @@ export const SETTINGS_SECTIONS = Object.freeze({
   AGENT_LLM: 'agent-llm',
   AGENT_SECRETS: 'agent-secrets',
   CRON: 'cron',
+  TELEGRAM: 'telegram',
 });
 
 export const THEME_MODES = Object.freeze({

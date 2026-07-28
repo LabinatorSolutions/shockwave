@@ -57,7 +57,7 @@ export interface RunOpts {
   provider: string; model: string; apiKey: string;
   baseUrl?: string; contextWindow?: number; thinkingLevel?: string;
   wsBuiltinSkills?: Record<string, any>;
-  unattended?: boolean; source?: string; cronTitle?: string;
+  unattended?: boolean; source?: string; sourceId?: string; cronTitle?: string;
 }
 
 type Entry = {
@@ -235,7 +235,7 @@ export function createAgentRuntime(host: AgentHost) {
 
     await host.upsertSession({
       sessionId, workspaceId: opts.workspaceId, systemPrompt: promptOverride,
-      model: model ?? null, source: source ?? 'desktop', sourceId: cronTitle ?? null, machine: host.machine,
+      model: model ?? null, source: source ?? 'desktop', sourceId: opts.sourceId ?? cronTitle ?? null, machine: host.machine,
     });
 
     if (cronTitle) {

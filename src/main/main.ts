@@ -917,6 +917,21 @@ ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
   const ok = await api.health(url, key);
   return ok ? { ok: true } : { ok: false, error: 'Could not reach the server with that URL and key.' };
 });
+
+// Telegram — the desktop UI triggers these; the actions (setWebhook, token
+// storage) happen on the companion, which owns the bot.
+ipcMain.handle('telegram:status', async () => {
+  try { return { ok: true, ...(await api.get('/telegram/status')) }; }
+  catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
+});
+ipcMain.handle('telegram:connect', async (_evt, { botToken, authorizedTgUserId }) => {
+  try { return { ok: true, ...(await api.post('/telegram/connect', { botToken, authorizedTgUserId })) }; }
+  catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
+});
+ipcMain.handle('telegram:disconnect', async () => {
+  try { await api.post('/telegram/disconnect'); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
+});
 // OAuth for agent secrets. The whole flow (system browser + loopback callback +
 // token exchange/refresh) lives in main; the renderer only kicks it off and
 // reads status back off the persisted secret. `oauth:listPresets` feeds the

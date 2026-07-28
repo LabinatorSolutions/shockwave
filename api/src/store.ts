@@ -10,7 +10,7 @@ import {
   isPlainObject, splitAgentSecret, joinAgentSecret,
 } from './keys.js';
 import {
-  workspace, setting, agentSecret, secretValue, chatSession, chatTranscript, message, cronState,
+  workspace, setting, agentSecret, secretValue, chatSession, chatTranscript, message, cronState, telegramAccount,
 } from './schema.js';
 import { and, eq, ne, lt, desc, asc, ilike, like, sql, notInArray } from 'drizzle-orm';
 
@@ -359,4 +359,57 @@ export async function recordCronRun(db: Db, workspaceId: string, jobName: string
 
 export async function getCronState(db: Db, workspaceId: string) {
   return db.select().from(cronState).where(eq(cronState.workspaceId, workspaceId));
+}
+
+// ── Telegram account ─────────────────────────────────────────────────────────
+
+const TG = 'telegram'; // secret_value owner
+
+export async function getTelegramAccount(db: Db) {
+  const rows = await db.select().from(telegramAccount).where(eq(telegramAccount.id, 'default'));
+  return rows[0] ?? null;
+}
+
+// The bot token / webhook secret (encrypted). field: 'botToken' | 'webhookSecret'.
+export async function getTelegramSecret(db: Db, key: Buffer, field: string): Promise<string> {
+  return getSecret(db, key, TG, field);
+}
+
+// Connect/update: encrypt token + secret, upsert the metadata row.
+export async function saveTelegramAccount(
+  db: Db, key: Buffer,
+  meta: { authorizedTgUserId: number; dmChatId: number; botUsername: string | null; enabled: boolean },
+  secrets: { botToken: string; webhookSecret: string },
+) {
+  await db.transaction(async (c) => {
+    await putSecret(c, key, TG, 'botToken', secrets.botToken);
+    await putSecret(c, key, TG, 'webhookSecret', secrets.webhookSecret);
+    await c.insert(telegramAccount).values({
+      id: 'default', authorizedTgUserId: meta.authorizedTgUserId, dmChatId: meta.dmChatId,
+      botUsername: meta.botUsername, enabled: meta.enabled, lastUpdateId: 0, updatedAt: now(),
+    }).onConflictDoUpdate({
+      target: telegramAccount.id,
+      set: { authorizedTgUserId: meta.authorizedTgUserId, dmChatId: meta.dmChatId, botUsername: meta.botUsername, enabled: meta.enabled, updatedAt: now() },
+    });
+  });
+}
+
+export async function clearTelegramAccount(db: Db) {
+  await db.transaction(async (c) => {
+    await c.delete(secretValue).where(eq(secretValue.owner, TG));
+    await c.delete(telegramAccount).where(eq(telegramAccount.id, 'default'));
+  });
+}
+
+export async function setTelegramActiveSession(db: Db, sessionId: string | null) {
+  await db.update(telegramAccount).set({ activeSessionId: sessionId, updatedAt: now() }).where(eq(telegramAccount.id, 'default'));
+}
+
+// Dedup: advance the high-water mark only if this update_id is newer. Returns
+// true if it's new (process it), false if a duplicate/replay (drop it).
+export async function markTelegramUpdate(db: Db, updateId: number): Promise<boolean> {
+  const res = await db.update(telegramAccount)
+    .set({ lastUpdateId: updateId })
+    .where(and(eq(telegramAccount.id, 'default'), lt(telegramAccount.lastUpdateId, updateId)));
+  return (res.rowCount ?? 0) > 0;
 }

@@ -15,6 +15,7 @@ import { runCronJob } from './cronRun.js';
 import { initScheduler, nextRuns } from './scheduler.js';
 import { mintToken } from './oauth.js';
 import { initSweeper } from './sweeper.js';
+import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus } from './telegram/webhook.js';
 
 const log = pino({ base: undefined });
 
@@ -45,6 +46,14 @@ app.use(helmet());
 app.get('/health', async (_req, res) => {
   try { await pool.query('SELECT 1'); res.json({ ok: true }); }
   catch { res.status(503).json({ ok: false }); }
+});
+
+// Telegram webhook — PUBLIC (Telegram sends no bearer token; gated by a per-
+// account secret header, checked inside handleWebhook). Registered BEFORE the
+// bearer middleware, with its own body parser.
+app.post('/telegram/webhook', express.json({ limit: '1mb' }), (req, res) => {
+  handleWebhook(pool, masterKey, agentRuntime, req, res, log)
+    .catch((e: any) => { log.error({ err: e?.message }, 'telegram webhook error'); if (!res.headersSent) res.sendStatus(200); });
 });
 
 function authed(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -143,6 +152,18 @@ app.get('/workspaces', handle(() => store.listWorkspaces(db)));
 app.post('/workspaces', handle((req) => store.upsertWorkspace(db, req.body)));
 app.patch('/workspaces', handle((req) => store.updateWorkspaceOrder(db, req.body)));
 app.delete('/workspaces/:id', handle((req) => store.deleteWorkspace(db, req.params.id)));
+
+// ── Telegram (desktop Settings triggers these companion actions) ─────────────
+app.post('/telegram/connect', handle((req) => {
+  if (!process.env.TELEGRAM_PUBLIC_URL) throw new Error('TELEGRAM_PUBLIC_URL is not set on the server.');
+  return tgConnect(pool, masterKey, {
+    botToken: String(req.body?.botToken ?? ''),
+    authorizedTgUserId: Number(req.body?.authorizedTgUserId),
+    publicUrl: process.env.TELEGRAM_PUBLIC_URL,
+  });
+}));
+app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, masterKey); return { ok: true }; }));
+app.get('/telegram/status', handle(() => tgStatus(pool)));
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   log.error({ err: err?.message }, 'error');

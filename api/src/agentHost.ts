@@ -15,6 +15,7 @@ import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import { mintToken } from './oauth.js';
+import { makeSendMessageTool } from './telegram/sendTool.js';
 
 const DATA_BASE = process.env.AGENT_DATA_DIR || path.join(os.tmpdir(), 'shockwave-agent');
 // Bundled built-in skills, shipped into the image (BUILTIN_SKILLS_DIR) so the
@@ -38,7 +39,8 @@ export function makeCompanionRuntime(pool: DB, key: Buffer) {
   const host: AgentHost = {
     builtinDir: BUILTIN_DIR,
     machine: os.hostname(),
-    extraTools: [],
+    // Server-side runs (cron/telegram) can proactively DM the user on Telegram.
+    extraTools: [makeSendMessageTool(pool, key)],
     // Per-run scratch dir so concurrent runs don't share pi's settings.json.
     dataDir: (sessionId) => runScratchDir(sessionId),
     getSession: (id) => store.getSession(db, id),
