@@ -8,8 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run build` — production build to `out/` (main, preload, renderer).
 - `npm start` — `electron-vite preview` against the production build.
 - `npm run dist` — build then `electron-builder` (produces dmg/nsis/AppImage per `build` block in `package.json`).
-- `npm test` — run the test suite (node:test, no install needed).
-- `npx eslint .` — lint (config in `eslint.config.js`). No npm script; run via `npx`.
+- `npm test` — run the test suite (`node --test "tests/**/*.test.js"`, no install needed).
+- `npm run lint` — ESLint over `src/**` + `tests/**` (config in `eslint.config.js`).
+- `npm run typecheck` — `tsc --noEmit` (permissive TS; see below).
+- **Companion** (`api/`) is a separate server with its own scripts + Docker deploy — see `api/CLAUDE.md`. Local dev: `cd api && docker compose up -d --build` (postgres + api + traefik), or bare `npm run build && node dist/server.js`. Schema tooling: `npm run db:push` / `db:generate` (drizzle-kit).
 
 ## TypeScript
 
@@ -30,7 +32,7 @@ Electron app with a Vite + React 19 renderer. The renderer is a markdown-workspa
 
 ### Process boundary
 
-- **Main** (`src/main/`): filesystem, dialogs, context menus, settings (a thin client over the companion API + a machine-local userData file — no local DB), `nativeTheme`, the file watcher + rename correlator, the `app://media/...` protocol for serving workspace images, window-bounds persistence, the pi coding-agent sessions (one live session per chat, concurrent), skill-library management, the agent-tokens pi extension, the AssemblyAI voice-token mint. All IPC handlers are registered here. Entry: `src/main/main.ts`. **Deep doc: `src/main/CLAUDE.md`.**
+- **Main** (`src/main/`): filesystem, dialogs, context menus, settings (a thin client over the companion API + a machine-local userData file — no local DB), `nativeTheme`, the file watcher + rename correlator, the `app://media/...` protocol for serving workspace images, window-bounds persistence, the desktop host for the shared **`agent-core`** coding-agent runtime (one live pi session per chat, concurrent; the turn logic lives in `agent-core`, this side supplies I/O), the AssemblyAI voice-token mint, auto-update. All IPC handlers are registered here. Entry: `src/main/main.ts`. **Deep doc: `src/main/CLAUDE.md`.**
 - **Preload** (`src/preload/preload.cjs`): exposes a single `window.api` surface (typed in `src/shared/api.d.ts`). The renderer never touches Node — every fs/dialog/agent call goes through `window.api.*`. Also exposes `webUtils.getPathForFile` so the renderer can resolve drag-dropped folder paths (skill import).
 - **Renderer** (`src/renderer/`): React app rooted at `main.tsx` → `App.tsx`. App.tsx is thin orchestration; heavy state lives in hooks under `src/renderer/hooks/`. Vite root is `src/renderer/` (configured in `electron.vite.config.js`); build output goes to `out/renderer/`. Built main/preload land at `out/main/index.js` and `out/preload/index.cjs`. **Deep doc: `src/renderer/CLAUDE.md`.**
 - **Companion** (`api/`): a separate Node/Express + Postgres server the desktop talks to over HTTP — the source of truth for synced settings, secrets, workspaces, and chats, and the host that runs the coding agent for Telegram and cron. Runs in Docker (compose: postgres + api + traefik). Not part of the Electron app; the desktop reaches it via `src/main/api/`. **Deep doc: `api/CLAUDE.md`.**
@@ -42,6 +44,7 @@ Electron app with a Vite + React 19 renderer. The renderer is a markdown-workspa
 | Main-process internals (watcher, IPC, settings, app://, coding agent, voice token, GitHub sync engine) | `src/main/*.ts` | `src/main/CLAUDE.md` |
 | Renderer internals (hooks, editor decorations, chat sidebar, voice, bookmarks, daily notes, quick search, sync UI) | `src/renderer/**` | `src/renderer/CLAUDE.md` |
 | Companion server (settings/secrets/chats storage, server-side agent for Telegram + cron, Docker deploy) | `api/**` | `api/CLAUDE.md` |
+| Shared coding-agent runtime (pi wrapper — bundled into BOTH the desktop and the companion) | `agent-core/**` | `agent-core/CLAUDE.md` |
 | GitHub sync (merge-based; in-app conflict resolution) | `src/main/sync.ts`, `src/main/syncEngine.ts`, `src/renderer/settings/WorkspacesSection.tsx`, `src/renderer/settings/AddWorkspaceDialog.tsx`; conflict view in `src/renderer/{App.tsx, SortBar.tsx, FileTree.tsx}` | "GitHub sync" sections in both subdocs |
 | Cross-process types + constants | `src/shared/{api.d.ts, settings.ts, constants.ts}` | this file, below |
 | Tests | `tests/*.test.js` | `tests/CLAUDE.md` |
@@ -52,7 +55,7 @@ The canonical names. Use these in UI strings, comments, docs, agent prompts — 
 
 - **File** — a `.md` document in the workspace. The user-facing noun for the thing you create / open / edit / delete. **Never use "page" or "note"** — both were earlier conventions that have been retired.
 - **Basename** — a file's name with no folder path and no `.md` extension. For `notes/projects/Foo.md`, the basename is `Foo`. This is what wiki-links use, and what the link index is keyed by.
-- **Workspace** — a GitHub repo plus its checkout on this machine. Migration 0007 carries existing workspaces across (their remote is resolved by a JS pass before the migration); only those whose folder has no GitHub remote at all are dropped, since that state is unrepresentable now. Everything inside the folder (files, images, other assets) is part of the workspace. A workspace cannot exist without a repo: `workspace.repo_owner`/`repo_name` are `NOT NULL`, and the two setup flows both clone. Code sometimes still says "vault" (Obsidian-inherited); new code uses "workspace".
+- **Workspace** — a GitHub repo plus its checkout on this machine. Everything inside the folder (files, images, other assets) is part of the workspace. A workspace cannot exist without a repo: the companion's `workspace.repo_owner`/`repo_name` columns are `NOT NULL` (`api/src/schema.ts`, `api/init.sql`), and the two setup flows both clone. The repo *identity* lives on the companion; each machine's checkout path + sync toggle are machine-local (`local-settings.json`). Code sometimes still says "vault" (Obsidian-inherited); new code uses "workspace".
 - **Wiki-link** — the `[[Some File]]` syntax linking one file to another by basename. The term comes from MediaWiki/Obsidian/etc. Variants: `[[File#Heading]]`, `[[File|Display]]`. Resolution is workspace-wide, case-insensitive, basename-only — never include a folder path. The parser + index live in `src/renderer/linkIndex.js` (mirrored in main at `src/main/linkParser.js`).
 - **External link** — the `[label](https://…)` markdown form. Always means an off-workspace URL. Opens in the system browser. Not to be confused with wiki-links.
 - **Backlink** — a wiki-link that points *at* a given file from elsewhere. The link index maintains backlinks per file; the backlinks panel under the editor reads from that.

@@ -1,29 +1,32 @@
 # CLAUDE.md — renderer
 
-React 19 + Vite renderer. Vite root is `src/renderer/` (configured in `electron.vite.config.js`'s `renderer` section); build output goes to `out/renderer/`. Entry: `index.html` → `main.jsx` → `App.jsx`.
+React 19 + Vite renderer. Vite root is `src/renderer/` (configured in `electron.vite.config.js`'s `renderer` section); build output goes to `out/renderer/`. Entry: `index.html` → `main.tsx` → `App.tsx`.
 
-`main.jsx` also installs a window-level dragover/drop preventer for `Files` drags so a stray drop outside an explicit handler doesn't navigate the renderer away to the file URL.
+`main.tsx` also installs a window-level dragover/drop preventer for `Files` drags so a stray drop outside an explicit handler doesn't navigate the renderer away to the file URL.
 
 Cross-cutting invariants (terminology, link-index rules, parser parity, save-before-mutate) live in the **root `CLAUDE.md`** — read that first.
 
 ## State model
 
-`App.jsx` is the orchestrator. Three custom hooks in `hooks/` own the heavy state, plus a small helper:
+`App.tsx` is the orchestrator. Heavy state lives in hooks under `hooks/`:
 
-- `useTabs` — tabs, `activeTabId`, per-path view state, per-tab back/forward history. Tabs may be drafts (`isDraft: true, path: null`); `promoteTabPath(tabId, newPath)` flips a draft to a real file once the caller has created it on disk. The actual create-on-disk happens inside `writeNow` in `App.jsx` (see "Save lifecycle" below) — a draft has no file until its first save fires.
+- `useTabs` — tabs, `activeTabId`, per-path view state, per-tab back/forward history. Tabs may be drafts (`isDraft: true, path: null`); `promoteTabPath(tabId, newPath)` flips a draft to a real file once the caller has created it on disk. The actual create-on-disk happens inside `writeNow` in `App.tsx` (see "Save lifecycle" below) — a draft has no file until its first save fires.
 - `useLinkIndex` — wraps `createMetadataCache()` (in `metadataCache.js`, modeled on and named after Obsidian's) behind a ref + a `version` counter, `bump()`ed after every mutation. The cache owns `resolvedLinks` (source→dest paths), `unresolvedLinks`, the reverse backlinks, and a PRIVATE basename→paths "phone book"; it resolves links itself via `getFirstLinkpathDest` (rules in the pure `linkResolver.js`). There is no public `pageIndex` — consumers call `cache.getFirstLinkpathDest` / `candidatesFor` / `getBacklinksForFile`. Rename/move reference rewrites (`renameOps.js`) capture a context snapshot (`captureRewriteContext`) before the cache re-keys so resolution stays correct regardless of order.
 - `useFileOps` — rename/duplicate/delete/link-click, and the `treeAndIndexChanged()` helper that re-reads the tree and bumps the link index after any structural change.
 - `useSyncRef` — keeps a ref in sync with a value/callback so a stable closure (e.g. `writeNow`) can read fresh state without being rebuilt.
+- `useSettings` — owns all persisted settings: the canonical `settingsRef`, `persistSettings` (diffs via `settingsDiff.js`, sends a minimal patch to main), `hydrateSettings` (seeds from the companion read at boot), the per-field setters, and the `settings:changed` listener. **No default-merge** — its `DEFAULT_CANONICAL` placeholder starts UNSET for DB-backed values (empty provider/model) so the renderer never invents a value the DB doesn't have; `hydrateSettings` fills from the companion. See "Settings sub-folder" below.
+- `useFsWatcher` — the external-change (`fs:changed`) listener; see its own section below.
+- `useBookmarks`, `useDailyNote`, `useSendToAgent`, `useAppUpdate` — bookmarks, per-workspace daily-note config, the "send file to agent" flow, and the auto-update status.
 
-The **Editor** (`Editor.jsx`) is imperative: parent gets a ref with `setContent / getText / getViewState / clear / flashRanges / setReadOnly / focus`. `App.jsx` loads content into the editor via an effect that watches `activeFile` — this decouples load timing from React state-update ordering. The `dark` prop recreates the EditorView (theme can't be reconfigured live). `viewMode` toggles the live-preview decoration bundle via a Compartment — cursor, history, and scroll all survive a reconfigure.
+The **Editor** (`Editor.tsx`) is imperative: parent gets a ref with `setContent / getText / getViewState / clear / flashRanges / setReadOnly / focus`. `App.tsx` loads content into the editor via an effect that watches `activeFile` — this decouples load timing from React state-update ordering. The `dark` prop recreates the EditorView (theme can't be reconfigured live). `viewMode` toggles the live-preview decoration bundle via a Compartment — cursor, history, and scroll all survive a reconfigure.
 
 ## Save lifecycle
 
-Edits are debounced (`SAVE_DEBOUNCE_MS = 500` in `App.jsx`) via `dirtyTabIdRef` + `saveTimerRef`. `writeNow()` flushes immediately and is awaited before any operation that would change `activeFile` (tab switch, workspace switch, rename, delete, graph toggle, `beforeunload`). When you add a new place that changes the active file, call `writeNow()` first or you'll lose unsaved edits.
+Edits are debounced (`SAVE_DEBOUNCE_MS = 500` in `App.tsx`) via `dirtyTabIdRef` + `saveTimerRef`. `writeNow()` flushes immediately and is awaited before any operation that would change `activeFile` (tab switch, workspace switch, rename, delete, graph toggle, `beforeunload`). When you add a new place that changes the active file, call `writeNow()` first or you'll lose unsaved edits.
 
 `writeNow` is the **only** place a file gets created from a draft. The dirty marker holds a *tab id*, not a path. When the timer fires (or anything awaits `writeNow`), it looks up the tab: if `isDraft`, it creates the file via `window.api.createFile(newFileDir(), titleDraft || 'Untitled', buffer)` and calls `promoteTabPath(tabId, newPath)` to flip the tab to a real file; otherwise it writes through to `tab.path`. A per-tab in-flight map inside `writeNow` coalesces concurrent calls so two near-simultaneous saves can't both fire `createFile` and leave an orphan disambiguated file behind. On failure the dirty marker is re-armed so the next attempt retries the same tab. Drafts have no file on disk until the first save fires — typing into a draft, pasting an image, committing a title, or switching tabs are all events that eventually call `writeNow`, which creates the file as a side-effect of saving.
 
-The load effect (App.jsx) tracks the last-loaded `(tabId, path, isDark)` and skips the disk read when the same tab transitions from `null` → real path. That's how draft promotion doesn't clobber the buffer: same tab id, previous path was null → don't reload.
+The load effect (App.tsx) tracks the last-loaded `(tabId, path, isDark)` and skips the disk read when the same tab transitions from `null` → real path. That's how draft promotion doesn't clobber the buffer: same tab id, previous path was null → don't reload.
 
 ## In-app rename
 
@@ -37,7 +40,7 @@ The watcher will echo a `rename` event ~350ms later (see `src/main/CLAUDE.md`); 
 
 ## Renderer-side `fs:changed` listener discipline
 
-External fs changes (terminal, pi coding agent, other apps) reach the renderer through the `fs:changed` listener in `App.jsx`. That listener subscribes **once per `workspacePath`** and accesses every dependency (`linkIndex`, `refreshTree`, `renameTabsPath`, `showError`, `activeFile`, `activeIsDraft`) **via refs**.
+External fs changes (terminal, pi coding agent, other apps) reach the renderer through the `fs:changed` listener, which lives in **`hooks/useFsWatcher.ts`** (wired from `App.tsx`). It subscribes **once per `workspacePath`** and accesses every dependency (`linkIndex`, `refreshTree`, `renameTabsPath`, `showError`, `activeFile`, `activeIsDraft`) **via refs**.
 
 Do NOT add `linkIndex` (or any per-render object) to the listener's `useEffect` deps. The handlers call `linkIndex.bump()` synchronously, which triggers a re-render; if the effect re-ran on that, its cleanup would clear the 80ms `refreshTimer` set inside the listener, and external `.md` adds would silently never refresh the sidebar.
 
@@ -45,20 +48,20 @@ In-app file operations call `fileOps.treeAndIndexChanged()` directly AND get ech
 
 ## Wiki-link UX inside the editor
 
-- `wikiLinks.js` — CodeMirror `ViewPlugin` that replaces `[[…]]` ranges with a clickable `LinkWidget` (calls back into `onLinkClick`, which opens or creates the target via `useFileOps.onLinkClick`).
-- `wikiCompletions.js` — autocomplete source triggered by `[[`; reads `pageIndex` and `workspacePath` through refs so completions see live data without re-creating the editor.
-- `taskCheckboxes.js` — interactive `- [ ]` / `- [x]` rendering.
-- `autoLinks.js` / `headingStyles.js` / `hideMarkdownMarkers.js` / `bulletPoints.js` — live-preview decorations that style markdown syntax in place.
-- `markdownLinks.js` — renders `[text](url)` as a clickable link showing just `text`; reveals raw syntax when the cursor touches it. Also exports `findLinkAtPos` so the editor context menu can offer Edit / Remove for the link under the cursor (handles both plain text links and image-wrapping links like `[![alt](src)](url)`).
-- `imageWidgets.js` — replaces `![alt](url)` ranges with an `<img>`. URLs resolve relative to the active file's folder (or absolute, or `http(s)://`) and are served via the `app://media/<rel>` protocol — see "Image pipeline" below.
-- `diffFlash.js` — accent-color (indigo) flash decoration applied when the watcher reloads the active file and the renderer wants to highlight what changed (word-level diff via the `diff` npm package).
+- `wikiLinks.ts` — CodeMirror `ViewPlugin` that replaces `[[…]]` ranges with a clickable `LinkWidget` (calls back into `onLinkClick`, which opens or creates the target via `useFileOps.onLinkClick`).
+- `wikiCompletions.ts` — autocomplete source triggered by `[[`; reads the link index's basename candidates and `workspacePath` through refs so completions see live data without re-creating the editor.
+- `taskCheckboxes.ts` — interactive `- [ ]` / `- [x]` rendering.
+- `autoLinks.ts` / `headingStyles.ts` / `hideMarkdownMarkers.ts` / `bulletPoints.ts` — live-preview decorations that style markdown syntax in place.
+- `markdownLinks.ts` — renders `[text](url)` as a clickable link showing just `text`; reveals raw syntax when the cursor touches it. Also exports `findLinkAtPos` so the editor context menu can offer Edit / Remove for the link under the cursor (handles both plain text links and image-wrapping links like `[![alt](src)](url)`).
+- `imageWidgets.ts` — replaces `![alt](url)` ranges with an `<img>`. URLs resolve relative to the active file's folder (or absolute, or `http(s)://`) and are served via the `app://media/<rel>` protocol — see "Image pipeline" below.
+- `diffFlash.ts` — accent-color (indigo) flash decoration applied when the watcher reloads the active file and the renderer wants to highlight what changed (word-level diff via the `diff` npm package).
 
 ## View mode + editor status bar
 
-`EditorStatusBar.jsx` is a pure-presentation strip pinned to the bottom of the editor pane, visible only when a tab is active. It shows: backlink count, view-mode toggle (live ↔ raw), word count, character count, and save state. All state lives in `App.jsx`:
+`EditorStatusBar.tsx` is a pure-presentation strip pinned to the bottom of the editor pane, visible only when a tab is active. It shows: backlink count, view-mode toggle (live ↔ raw), word count, character count, and save state. All state lives in `App.tsx`:
 
-- `viewMode` (`VIEW_MODES.LIVE` | `VIEW_MODES.RAW` in `constants.js`) is persisted to settings and passed into `<Editor>`. The Editor toggles a CodeMirror Compartment carrying the live-preview decoration bundle without rebuilding the view — cursor, history, and scroll all survive a reconfigure. Only the `dark` prop forces an editor recreation. The `markdown()` extension always loads with `SetextHeading` removed (ATX headings only — `=== / ---` underline headings are intentionally unsupported).
-- `editorStats` (`{ words, chars }`) is computed inside `Editor.jsx` (`computeStats`) and pushed up via the `onStats` callback (rAF-throttled).
+- `viewMode` (`VIEW_MODES.LIVE` | `VIEW_MODES.RAW` in `constants.ts`) is persisted to settings and passed into `<Editor>`. The Editor toggles a CodeMirror Compartment carrying the live-preview decoration bundle without rebuilding the view — cursor, history, and scroll all survive a reconfigure. Only the `dark` prop forces an editor recreation. The `markdown()` extension always loads with `SetextHeading` removed (ATX headings only — `=== / ---` underline headings are intentionally unsupported).
+- `editorStats` (`{ words, chars }`) is computed inside `Editor.tsx` (`computeStats`) and pushed up via the `onStats` callback (rAF-throttled).
 - `saveState` (`SAVE_STATES.SAVED` | `SAVE_STATES.UNSAVED`) is set to UNSAVED on every editor change and flipped back to SAVED inside `writeNow()` — but only if `dirtyTabIdRef.current === null` after the write, so a write that races a subsequent edit doesn't flash SAVED prematurely.
 - "Hide line numbers" (appearance setting) doesn't remove the gutter — it keeps the reserved width so the text column doesn't shift. The host element class drives CSS that hides the digits + active-line highlight.
 
@@ -66,20 +69,20 @@ In-app file operations call `fileOps.treeAndIndexChanged()` directly AND get ech
 
 For the `app://media/...` protocol see `src/main/CLAUDE.md`. Renderer pieces:
 
-- **`imageWidgets.js`** — replaces `![alt](url)` ranges with an `ImageWidget` (`Decoration.replace`). Builds decorations by regex-scanning the visible ranges; rebuilds on `docChanged || viewportChanged || selectionSet` so that placing the cursor on the image's range reveals the raw markdown (same convention as `markdownLinks.js`). `resolveImageUrl` handles relative URLs (against active file's folder), absolute paths (workspace-root-relative), `http(s)://`, `data:`, `app:`, `file:`. Anything that resolves outside the workspace returns null and the source stays visible. The widget detects a wrapping `[…](url)` link via the syntax tree and, if present, makes the image click-open the link; otherwise its `ignoreEvent` lets CM place the cursor on a single click so the user can select/edit.
-- **`imagePaste.js`** — handles both clipboard paste and drag-drop into the editor. Pasted screenshots arrive without a name → fall back to a timestamped `"Pasted image …"`; dropped files use their original basename. Multiple images get one `![](filename)` per line. The main-process `fs:writeImage` handler runs the chosen base through `uniquePath` (same-dir uniqueness) so collisions get `" 1"`, `" 2"`, … appended. For draft tabs (no file on disk yet), the plugin calls `flushDraftToDisk` to force the pending save through the normal `writeNow` path — the draft turns into a real file, the image lands next to it. The load effect's "same tab, last path was null → skip" rule keeps the buffer intact across the resulting `activeFile` change.
+- **`imageWidgets.ts`** — replaces `![alt](url)` ranges with an `ImageWidget` (`Decoration.replace`). Builds decorations by regex-scanning the visible ranges; rebuilds on `docChanged || viewportChanged || selectionSet` so that placing the cursor on the image's range reveals the raw markdown (same convention as `markdownLinks.ts`). `resolveImageUrl` handles relative URLs (against active file's folder), absolute paths (workspace-root-relative), `http(s)://`, `data:`, `app:`, `file:`. Anything that resolves outside the workspace returns null and the source stays visible. The widget detects a wrapping `[…](url)` link via the syntax tree and, if present, makes the image click-open the link; otherwise its `ignoreEvent` lets CM place the cursor on a single click so the user can select/edit.
+- **`imagePaste.ts`** — handles both clipboard paste and drag-drop into the editor. Pasted screenshots arrive without a name → fall back to a timestamped `"Pasted image …"`; dropped files use their original basename. Multiple images get one `![](filename)` per line. The main-process `fs:writeImage` handler runs the chosen base through `uniquePath` (same-dir uniqueness) so collisions get `" 1"`, `" 2"`, … appended. For draft tabs (no file on disk yet), the plugin calls `flushDraftToDisk` to force the pending save through the normal `writeNow` path — the draft turns into a real file, the image lands next to it. The load effect's "same tab, last path was null → skip" rule keeps the buffer intact across the resulting `activeFile` change.
 
-**Sidebar→editor image drag**: dragging an image from the file tree into the editor inserts a relative `![](…)` reference to that workspace file. react-arborist's react-dnd backend is **scoped to the tree element** via the `<Tree dndRootElement={wrapRef.current}>` prop (`FileTree.jsx`), so it no longer owns window-wide drag events — the editor receives the native drop cleanly. The tree row sets the workspace-absolute path under a custom dataTransfer MIME (`SIDEBAR_IMAGE_MIME`, exported from `imagePaste.js`) on `dragstart`; the editor's `dropPlugin` reads it back via `getData` on `drop`. The drop is still attached via `view.contentDOM.addEventListener` (not CM6's `domEventHandlers`) so it can `stopImmediatePropagation` before CM6's built-in drop handler runs — CM6 would otherwise `readAsText` the image bytes and insert garbage (this is about CM6's own behavior, unrelated to react-dnd). The image-row `dragstart` still `stopPropagation`s react-arborist's drag source so image rows drag-to-embed rather than tree-reorder.
+**Sidebar→editor image drag**: dragging an image from the file tree into the editor inserts a relative `![](…)` reference to that workspace file. react-arborist's react-dnd backend is **scoped to the tree element** via the `<Tree dndRootElement={wrapRef.current}>` prop (`FileTree.tsx`), so it no longer owns window-wide drag events — the editor receives the native drop cleanly. The tree row sets the workspace-absolute path under a custom dataTransfer MIME (`SIDEBAR_IMAGE_MIME`, exported from `imagePaste.ts`) on `dragstart`; the editor's `dropPlugin` reads it back via `getData` on `drop`. The drop is still attached via `view.contentDOM.addEventListener` (not CM6's `domEventHandlers`) so it can `stopImmediatePropagation` before CM6's built-in drop handler runs — CM6 would otherwise `readAsText` the image bytes and insert garbage (this is about CM6's own behavior, unrelated to react-dnd). The image-row `dragstart` still `stopPropagation`s react-arborist's drag source so image rows drag-to-embed rather than tree-reorder.
 
 ## Coding agent (renderer side: chat sidebar)
 
 Right-side chat sidebar (`ChatSidebar.tsx`) backed by `@earendil-works/pi-coding-agent`. The sidebar is collapsed to a 28px strip by default; clicking the strip expands it. State (`chatSidebarOpen`, `chatSidebarWidth`) is persisted to settings.
 
-For the main-side session lifecycle (per-chat session map, steering, skills, agent-tokens bridge, failed-image guard, system prompt) see `src/main/CLAUDE.md`.
+For the agent session lifecycle (per-chat session map, steering, failed-image guard, the system prompt, skills, agent-tokens) see **`agent-core/CLAUDE.md`**; the desktop host wiring is in `src/main/CLAUDE.md`.
 
 ### chatStore.ts — per-chat state outside the React tree
 
-Chats run **concurrently** in main, so their state can't live in component state (the sidebar unmounts on collapse and remounts on workspace switch). `chatStore.ts` is a module store (consumed via `useSyncExternalStore`) holding one entry per chat, keyed by sessionId: transcript, `running`, tokens/elapsed, error, composer draft + attachments, streaming cursors, and `activeByWorkspace` (which chat each workspace shows). Rules:
+Chats run **concurrently** — in the desktop's `agent-core` host, or on the **companion** (Telegram/cron, or the same chat open on another machine) — so their state can't live in component state (the sidebar unmounts on collapse and remounts on workspace switch). `chatStore.ts` is a module store (consumed via `useSyncExternalStore`) holding one entry per chat, keyed by sessionId: transcript, `running`, tokens/elapsed, error, composer draft + attachments, streaming cursors, and `activeByWorkspace` (which chat each workspace shows). Rules:
 
 - **One event subscription for the whole app**, made lazily inside the store, never torn down. Main stamps every `agent:event` / `agent:error` with its `sessionId`; the store routes it into that chat's entry whether or not it's on screen. The on-screen transcript is always just `chats[activeId].messages` — there is **no DB merge on switch**; the DB is only for cold loads (`openChat`, first touch of a saved chat this app run).
 - **New chats mint their sessionId here** (`crypto.randomUUID`) — main hands it to pi, so events are routable before the first byte streams back.
@@ -87,6 +90,7 @@ Chats run **concurrently** in main, so their state can't live in component state
 - `ChatSidebar` is a view over the active entry. Its only local state is view-stuff (popover open, rename draft, drag-over, voice partials). "New chat" just mints a fresh entry — the previous chat keeps running in the background (spinner on its row in the history popover; switching into it mid-turn shows the live stream).
 - **Sending while the chat is running steers** — main queues the message into the running turn; the composer never locks, and Stop + Send coexist while running. `queue_update` events drive the "N queued" hint on the Working line.
 - After a window reload the store reseeds running flags from `agent:runningSessions`.
+- **Remote / companion runs.** A chat can execute on the companion or another machine (a Telegram/cron turn, or the same chat open on a second desktop). Those entries carry a `remote` / `wasRemote` flag; the store spectates the companion's SSE feed via `window.api.chat.watchStart(sessionId)` / `watchStop(sessionId)`, and `window.api.app.machineId()` distinguishes this machine's runs from others'. Cold-loading a saved chat uses `window.api.chat.openSession(sessionId)`.
 
 ### Event protocol consumed by the store
 
@@ -98,7 +102,7 @@ Chats run **concurrently** in main, so their state can't live in component state
 
 The chat sidebar is mounted with `key={workspacePath ?? 'no-workspace'}` in `App.tsx`, so switching workspaces remounts it — but the store survives, so transcripts, drafts, and running chats are all intact; the remounted sidebar simply shows the new workspace's active chat (`activeByWorkspace`). Chats running in another workspace keep streaming into the store.
 
-### Attachments (`chatAttachments.js`)
+### Attachments (`chatAttachments.ts`)
 
 The composer accepts images (PNG/JPEG/GIF/WebP) and a long list of text/code file extensions, via the paperclip button, paste, or drag-drop onto the sidebar. Images are sent as pi's `ImageContent[]` shape; text files are inlined into the prompt as `<file name="…">…</file>` blocks before the user's typed message. Rejected files (unsupported format or read error) surface a dismissible inline error.
 
@@ -109,20 +113,20 @@ The composer's microphone button uses `voice/useVoiceInput.js`, which streams 16
 1. Renderer asks main for a short-lived (60s) streaming token via `voice:getToken`. The long-lived AssemblyAI API key never leaves main.
 2. `useVoiceInput` prefetches a token on mount and caches it for 50s; on click it consumes the cached token instantly and kicks off a background refresh so the next click is also instant. Without this, every click would pay the renderer→main→AssemblyAI round-trip.
 3. `navigator.mediaDevices.getUserMedia({audio: true})` opens the mic, fed into an `AudioContext({sampleRate: 16000})` and through an `AudioWorkletNode` running a tiny PCM-buffering processor registered inline via a Blob URL (no separate static file).
-4. The worklet posts 4096-sample Float32 chunks back to the main thread; we convert to `Int16` and send over the WebSocket, while emitting per-chunk RMS volume for the `VoiceBars` visualization (`voice/VoiceBars.jsx`).
+4. The worklet posts 4096-sample Float32 chunks back to the main thread; we convert to `Int16` and send over the WebSocket, while emitting per-chunk RMS volume for the `VoiceBars` visualization (`voice/VoiceBars.tsx`).
 5. AssemblyAI returns `Turn` messages — partials (`end_of_turn: false`) call `onPartialTranscript`; finals (`end_of_turn: true`) call `onTranscript`. The composer renders partials in a faded color and commits finals into the text.
 
-**Mic permission gotcha**: Electron prompts for microphone access on the first `getUserMedia` call and persistently grants it for the origin. The Settings → Transcription "Test microphone" button (`settings/TranscriptionSection.jsx`) exists primarily so users can trigger that one-time prompt in Settings, where they expect it — without it, the first click of the chat composer's mic would prompt mid-conversation. The "Test microphone" UI also verifies the key works end-to-end.
+**Mic permission gotcha**: Electron prompts for microphone access on the first `getUserMedia` call and persistently grants it for the origin. The Settings → Transcription "Test microphone" button (`settings/TranscriptionSection.tsx`) exists primarily so users can trigger that one-time prompt in Settings, where they expect it — without it, the first click of the chat composer's mic would prompt mid-conversation. The "Test microphone" UI also verifies the key works end-to-end.
 
 ## GitHub sync (renderer side)
 
 The engine lives in main (see `src/main/CLAUDE.md`); the renderer just bridges three things.
 
-**Mount-only subscription.** `App.jsx` subscribes once on mount (no workspace dep) to two push events: `sync.onFlushRequest` and `sync.onStatus`. Same discipline as the `fs:changed` listener — do NOT add per-render objects (`writeNow`, `linkIndex`, etc.) to deps. `writeNow` is read via `writeNowRef.current()`, so the closure stays stable. If the listener tore down per render, an in-flight tick could lose its flush ack.
+**Mount-only subscription.** `App.tsx` subscribes once on mount (no workspace dep) to two push events: `sync.onFlushRequest` and `sync.onStatus`. Same discipline as the `fs:changed` listener — do NOT add per-render objects (`writeNow`, `linkIndex`, etc.) to deps. `writeNow` is read via `writeNowRef.current()`, so the closure stays stable. If the listener tore down per render, an in-flight tick could lose its flush ack.
 
 **Engine start on workspace switch.** `loadWorkspace` calls `window.api.sync.engineStart({ workspacePath, intervalSeconds })` after `watchStart`. The engine looks the workspace row up by path and reads repo + branch from it; a missing PAT or an unknown path emits `unconfigured`, so the renderer doesn't gate on those locally. The mount-effect cleanup calls `engineStop` so a full reload doesn't leave a tick running against a torn-down window.
 
-**Status icon.** `EditorStatusBar.jsx`'s `SyncStatusIcon` maps the 6 statuses to one icon each (`paused` is handled unconditionally — gating it on a non-empty conflict list let a stopped engine render a green "Synced"): `unconfigured` → **hidden**; `idle` + `lastSyncAt===null` → gray `Cloud` ("not synced yet"); `idle` + set → `CloudCheck`; `syncing` → spinning `Refresh`; `offline` → `CloudAlert` (amber, "retrying"); `paused` → yellow `AlertTriangle` (click → conflict view via `onOpenConflicts`); `disabled` → `Stop` (click → a small popover with the reason + an **Enable** button → `onEnableSync` → `setWorkspaceDisabled(false)`). Idle/syncing/offline still click through to the repo URL when known.
+**Status icon.** `EditorStatusBar.tsx`'s `SyncStatusIcon` maps the 6 statuses to one icon each (`paused` is handled unconditionally — gating it on a non-empty conflict list let a stopped engine render a green "Synced"): `unconfigured` → **hidden**; `idle` + `lastSyncAt===null` → gray `Cloud` ("not synced yet"); `idle` + set → `CloudCheck`; `syncing` → spinning `Refresh`; `offline` → `CloudAlert` (amber, "retrying"); `paused` → yellow `AlertTriangle` (click → conflict view via `onOpenConflicts`); `disabled` → `Stop` (click → a small popover with the reason + an **Enable** button → `onEnableSync` → `setWorkspaceDisabled(false)`). Idle/syncing/offline still click through to the repo URL when known.
 
 ### Conflict-resolution view
 
@@ -145,7 +149,7 @@ A row whose `path` is null is a workspace that exists but **isn't checked out on
 
 ## Send to Agent
 
-The editor context menu offers "Message Agent" when the active file has a path on disk (`EDITOR_ACTIONS.SEND_TO_AGENT`; drafts opt out). It builds a framing snippet (`buildSendToAgentSnippet` in `App.jsx`) with a `[cwd]/...` workspace-relative path plus selection or cursor coordinates, fences any selected text in `~~~`, and injects it into the chat composer:
+The editor context menu offers "Message Agent" when the active file has a path on disk (`EDITOR_ACTIONS.SEND_TO_AGENT`; drafts opt out). It builds a framing snippet (`buildSendToAgentSnippet` in `App.tsx`) with a `[cwd]/...` workspace-relative path plus selection or cursor coordinates, fences any selected text in `~~~`, and injects it into the chat composer:
 
 - Sidebar closed → expand it, queue the injection in `pendingComposerInjection`, drain via an effect once the sidebar's imperative ref attaches (`chatSidebarReady` flag flips on a callback ref).
 - Sidebar open with empty composer → inject directly.
@@ -155,9 +159,9 @@ The chat sidebar exposes `setComposerText(text, { append })`, `getComposerText()
 
 ## Bookmarks
 
-**Bookmarks are `.md`-only and identified by basename, not path.** Only `.md` files can be bookmarked (the context menu offers it only for `.md`); the link index already guarantees `.md` basenames are workspace-unique, so the name alone identifies the file and its location is resolved on click via `linkIndex.pageIndex` (basename → path). **Tracking the name is what makes moves free** — moving a file between folders doesn't change its basename, so there is no per-move bookmark bookkeeping. Only a *rename* (which changes the basename) re-keys, and that rides along with the existing wiki-link rename rewrite.
+**Bookmarks are `.md`-only and identified by basename, not path.** Only `.md` files can be bookmarked (the context menu offers it only for `.md`); the basename is the key, and its location is resolved on click through the link index (`getFirstLinkpathDest` — when two files share a basename across folders the resolver's tiebreaker picks one). **Tracking the name is what makes moves free** — moving a file between folders doesn't change its basename, so there is no per-move bookmark bookkeeping. Only a *rename* (which changes the basename) re-keys, and that rides along with the existing wiki-link rename rewrite.
 
-Stored at `<workspace>/.shockwave/bookmarks.json` as `{ version: 1, names: ["recipes", ...] }` (lowercased basenames). The `.shockwave/` segment matches the watcher's dotfile-ignore predicate so our own writes don't echo back. The renderer keeps an in-memory `Set<basenameKey>` (`bookmarkKey(path)` = basename, no `.md`, lowercased — the same key `pageIndex` uses). On workspace load `seedBookmarks(names, resolvableKeys)` prunes names whose `.md` file is gone and rewrites if pruned. No migration from the old path format — by design.
+Stored at `<workspace>/.shockwave/bookmarks.json` as `{ version: 1, names: ["recipes", ...] }` (lowercased basenames). The `.shockwave/` segment matches the watcher's dotfile-ignore predicate so our own writes don't echo back. The renderer keeps an in-memory `Set<basenameKey>` (`bookmarkKey(path)` = basename, no `.md`, lowercased — the same basename key the link index resolves on). On workspace load `seedBookmarks(names, resolvableKeys)` prunes names whose `.md` file is gone and rewrites if pruned. No migration from the old path format — by design.
 
 Toggle via the file context menu (`FILE_ACTIONS.TOGGLE_BOOKMARK`, `.md` only) or the bookmark icon in the sort bar. `renameBookmarkName(oldKey, newKey)` / `removeBookmarkName(key)` / `persistBookmarks` keep the set in sync; the watcher's `fs:changed` rename/unlink handlers and the two in-app rename spots (`onTreeRename` file branch, `onTitleCommit` → `performRename`) call them — a *move* hits `renameBookmarkName` with equal keys and no-ops. The sort bar's bookmark button toggles a filter mode that prunes the tree to only bookmarked files (and the folders that contain them); right-click opens a picker — App resolves each bookmarked name → current path (`bookmarkItems`) so the picker can open it and show its folder.
 
@@ -167,29 +171,30 @@ Calendar button in the `ThinSidebar`:
 - Click → open today's daily note (create if missing).
 - Right-click → opens `JournalDatePicker` (a `react-day-picker` popover anchored at the cursor) to pick any date.
 
-Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD`, `YYYY.MM.DD`, `YYYY/MM/DD`, `YYYY/MM/YYYY-MM-DD`, or custom) and a workspace-relative folder via `FolderCombobox`. `dailyNote.js` formats the date and computes `{ dir, name, absPath }` — slashes in the format become subfolder boundaries beneath the configured folder. `openJournal` in `App.jsx` looks the basename up in `pageIndex` first (so an existing note anywhere in the workspace is opened in place, regardless of where the format would put it), and only `ensureDir` + `createFile` when it doesn't exist.
+Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD`, `YYYY.MM.DD`, `YYYY/MM/DD`, `YYYY/MM/YYYY-MM-DD`, or custom) and a workspace-relative folder via `FolderCombobox`. This config is **per-workspace** (`.shockwave/workspace.json` via `workspaceSettings:update`), not a global setting. `dailyNote.ts` formats the date and computes `{ dir, name, absPath }` — slashes in the format become subfolder boundaries beneath the configured folder. `openJournal` in `App.tsx` looks the basename up in the link index first (so an existing note anywhere in the workspace is opened in place, regardless of where the format would put it), and only `ensureDir` + `createFile` when it doesn't exist.
 
 ## Quick search & sort bar
 
-- **`SortBar`** (above the file tree): bookmark filter toggle, quick-search opener, sort menu, collapse-all. The sort menu offers Name asc/desc, Modified new→old/old→new, Created new→old/old→new (`TREE_SORT_ORDERS` in `constants.js`). Folders always stay first in A→Z order; the sort only re-orders files inside their folder. Sort is persisted to settings. `buildTree` in main stats every file for `mtimeMs` and `birthtimeMs` so the renderer can sort without re-statting.
-- **`QuickSearch`** (`QuickSearch.jsx`): modal launched from the sort bar. Empty query → top 10 files by the active sort order. With a query → `fuzzysort` ranks every file by workspace-relative path so typing `j/2026` finds `Journal/2026-05-24.md`. Matches are highlighted via `segmentsFromIndexes`. Arrow keys + Enter; Esc closes.
+- **`SortBar`** (above the file tree): bookmark filter toggle, quick-search opener, sort menu, collapse-all. The sort menu offers Name asc/desc, Modified new→old/old→new, Created new→old/old→new (`TREE_SORT_ORDERS` in `constants.ts`). Folders always stay first in A→Z order; the sort only re-orders files inside their folder. Sort is persisted to settings. `buildTree` in main stats every file for `mtimeMs` and `birthtimeMs` so the renderer can sort without re-statting.
+- **`QuickSearch`** (`QuickSearch.tsx`): modal launched from the sort bar. Empty query → top 10 files by the active sort order. With a query → `fuzzysort` ranks every file by workspace-relative path so typing `j/2026` finds `Journal/2026-05-24.md`. Matches are highlighted via `segmentsFromIndexes`. Arrow keys + Enter; Esc closes.
 
 ## Settings sub-folder
 
-`SettingsModal.jsx` is the host; each section lives in `settings/`:
+`SettingsModal.tsx` is the host; each section lives in `settings/` and is listed in `SETTINGS_SECTIONS` (`constants.ts`). **The modal gates every non-Companion page** until the companion is confirmed reachable — an `apiReady` state forces the Companion page and disables the other nav items ("Connect to your server first"). The gate is modal-scoped; `App.tsx` has no full-app block, it just reads settings at boot.
 
-- `AppearanceSection.jsx` — theme mode, hide-line-numbers.
+- `CompanionSection.tsx` — the companion connection every other page depends on: URL (plaintext) + API key via `window.api.settings.apiRead()` / `apiWrite()` / `apiTest({url, apiKey})`. `apiRead` returns only `{ url, hasApiKey }` — the key never comes back to the renderer (it's `safeStorage`-wrapped in main).
+- `AppearanceSection.tsx` — theme mode, hide-line-numbers.
 - `WorkspacesSection.tsx` — the workspace list (open / rename / remove / per-row sync switch / set-up-here). "Add workspace" opens `AddWorkspaceDialog`.
-- `GitHubSection.tsx` — PAT (encrypted at rest) + `sync:verifyPat`, sync interval, `sync:checkGit` presence check. Everything global; nothing per-workspace.
+- `GitHubSection.tsx` — PAT (encrypted at rest on the companion) + `sync:verifyPat`, sync interval, `sync:checkGit` presence check.
 - `AddWorkspaceDialog.tsx` — the one way to add a workspace. **The folder is asked FIRST**, because it decides what's left to ask: `workspace:inspectFolder` classifies it as `clone` (already a checkout — the repo is known, so only a name is needed), `empty` (the Create new / Clone existing choice appears), or `occupied` (refused). That's why there's no "adopt existing folder" mode to hunt for — it's just what happens when you pick a folder that already is one.
-- `DailyNoteSection.jsx` — format presets + custom format + `FolderCombobox` for the target folder.
-- `TranscriptionSection.jsx` — AssemblyAI API key + "Test microphone" button (see Voice input above).
-- `AgentChatSection.jsx` — provider/model/API key + reasoning level. The system prompt is no longer editable here — it's assembled from the workspace's `SOUL.md` + the internal helper (see `src/main/defaults/`); the section just points users at `SOUL.md` / `AGENTS.md`. Provider + model lists are fetched live from main via `agent:listProviders` / `agent:listModels`.
-- `AiSkillsTab.jsx` (Global Skills) — drop folder / pick folder to import a SKILL.md-bearing folder into the library; enable/disable each skill globally; remove.
-- `WorkspaceSkillsTab.jsx` (Workspace Skills) — per-workspace override: `inherit` / `enabled` / `disabled`. Workspace picker defaults to the active workspace.
-- `AgentSecretsSection.jsx` — two credential kinds. **Static tokens** (`Add token`): `{name, description, token}`, edited inline. **OAuth connections** (`Connect account`): a provider `Select` (from `oauth:listPresets`) + a dependent **Setup** `Select` of curated scope bundles (`preset.setups`, e.g. "Gmail — read") that fills the always-editable scopes field ("Custom scopes…" / hand-editing = free-form) + client id/secret; submit persists the connection then kicks `oauth:startConnect` (system browser). Reconnect/expired reuse the stored config (client id/secret/scopes preserved on disconnect + refresh-failure), so re-auth needs no re-typing. Rows show a `StatusBadge` (connected/expired/not-connected) + Connect/Reconnect + Disconnect. Names are unique case-insensitive; all secret material encrypted at rest. Connect/Disconnect write tokens from main, so the section calls `onReload` (→ `useSettings.reloadAgentSecrets`) to refresh status **without** re-persisting (a re-persist would clobber the main-written tokens).
+- `TranscriptionSection.tsx` — AssemblyAI API key + "Test microphone" button (see Voice input above).
+- `AgentChatSection.tsx` — provider, model, and a **per-provider API key map** (`codingAgent.providerKeys`, a `MAP_KEY` in `settingsDiff.js`, so a whole map travels on save), plus reasoning level (`agent:listThinkingLevels`) and, for openai-compatible, an endpoint check (`agent:validateConnection`). The system prompt isn't editable here — it's assembled from the workspace's `SOUL.md` + the helper (see `agent-core/CLAUDE.md`); the section points users at `SOUL.md` / `AGENTS.md`. Provider + model lists come from `agent:listProviders` / `agent:listModels`.
+- `AgentSecretsSection.tsx` — two credential kinds. **Static tokens** (`Add token`): `{name, description, token}`, edited inline. **OAuth connections** (`Connect account`): a provider `Select` (from `oauth:listPresets`) + a dependent **Setup** `Select` of curated scope bundles (`preset.setups`, e.g. "Gmail — read") that fills the always-editable scopes field + client id/secret; submit persists the connection then kicks `oauth:startConnect` (system browser). Reconnect/expired reuse the stored config, so re-auth needs no re-typing. Rows show a `StatusBadge` + Connect/Reconnect + Disconnect. Names unique case-insensitive; all secret material encrypted at rest **on the companion**. The OAuth connect/disconnect writes tokens on the companion, so the section calls `onReload` (→ `useSettings.reloadAgentSecrets`) to refresh status **without** re-persisting (which would clobber the companion-written tokens).
+- `WorkspaceSkillsSection.tsx` ("Manage Skills") — per-workspace: import a `SKILL.md`-bearing folder into the workspace, and toggle each **built-in** skill on/off for this workspace (the `builtinSkills` map, absent ⇒ enabled, via `workspaceSettings:update`). Replaces the old global/workspace skills tabs.
+- `TemplatesSection.tsx` — per-workspace template folder. `DailyNoteSection.tsx` — daily-note format + target folder (also per-workspace). Both persist via `workspaceSettings:update`, not global settings.
+- `CronSection.tsx` — the cron master toggle + windows (opens the cron panel). `TelegramSection.tsx` — connect/disconnect the Telegram bot (`telegram:*`; the companion owns it). `UpdatesSection.tsx` — auto-update status (`useAppUpdate`). `AdvancedSection.tsx` — maintenance actions (e.g. rebuild the link cache).
 
-The modal's title-bar shows a small `Saving…` / `Saved` / `Save failed` badge driven by `saveStatus` in `App.jsx` (`persistSettings` increments an in-flight counter so overlapping writes don't flash `saved` early). The save badge fades back to idle 1.5s after the last write completes.
+The modal's title-bar shows a small `Saving…` / `Saved` / `Save failed` badge driven by `saveStatus` in `App.tsx` (`persistSettings` increments an in-flight counter so overlapping writes don't flash `saved` early). The save badge fades back to idle 1.5s after the last write completes.
 
 ## Theme & design tokens
 
@@ -231,10 +236,10 @@ shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest 
 - Entity lists (workspaces, secrets): rows as `flex items-center justify-between rounded-lg border border-border px-3 py-2.5`.
 - Paths/URLs/tokens/commands render in `font-mono` (JetBrains Mono).
 
-## Path helpers (`pathUtils.js`)
+## Path helpers (`pathUtils.ts`)
 
 POSIX-only helpers: `basenameOf`, `dirOf`, `toRelPath`, `toAbsPath`. The renderer always uses forward slashes regardless of OS (workspace paths come in this form from main, and we keep them that way for link parsing, sidebar drag-drop, etc.). **Do not import `node:path`** — it's unavailable behind contextIsolation.
 
-## Renderer-only constants (`constants.js`)
+## Renderer-only constants (`constants.ts`)
 
-Re-exports cross-process constants (`APP_NAME`, `FILE_ACTIONS`, `FOLDER_ACTIONS`, `EDITOR_ACTIONS`, `SUPPORTED_PROVIDER_SLUGS`, `DEFAULT_PROVIDER_SLUG`) from `src/shared/constants.js`. Renderer-only additions: `SETTINGS_SECTIONS`, `THEME_MODES`, `VIEW_MODES`, `SAVE_STATES`, `TREE_SORT_ORDERS`, `TREE_SORT_LABELS`.
+Re-exports cross-process constants (`APP_NAME`, `FILE_ACTIONS`, `FOLDER_ACTIONS`, `EDITOR_ACTIONS`, `SUPPORTED_PROVIDER_SLUGS`, `DEFAULT_PROVIDER_SLUG`) from `src/shared/constants.ts`. Renderer-only additions: `SETTINGS_SECTIONS`, `THEME_MODES`, `VIEW_MODES`, `SAVE_STATES`, `TREE_SORT_ORDERS`, `TREE_SORT_LABELS`.
