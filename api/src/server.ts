@@ -69,8 +69,8 @@ app.patch('/settings', handle((req) => store.writeSettings(db, masterKey, req.bo
 
 // ── Secrets / agent tools ────────────────────────────────────────────────────
 app.get('/agent-secrets', handle(() => store.listAgentSecretMeta(db)));
-// A static agent-secret's usable token. (OAuth fresh-token endpoint lands with
-// the oauth phase.)
+// A usable credential for one secret: static → the stored token; oauth → a fresh
+// access token (refreshed server-side). Both the desktop agent and cron use this.
 app.get('/agent-secret/:name/token', handle((req) => mintToken(db, masterKey, req.params.name)));
 // Targeted OAuth write (desktop persists exchange/refresh results here).
 app.post('/oauth/:name', handle((req) => store.patchOAuth(db, masterKey, req.params.name, req.body)));
