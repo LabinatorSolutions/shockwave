@@ -967,7 +967,9 @@ ipcMain.handle('oauth:disconnect', async (_evt, name) => {
 // encrypted in settings and never crosses to the renderer — only the 60s temp
 // token does, which is just the WebSocket session credential.
 ipcMain.handle('voice:getToken', async () => {
-  const settings = await readSettings();
+  // readSettingsSafe (not readSettings) so an unreachable companion returns a
+  // clean {error} result instead of rejecting the IPC — voice is optional.
+  const { settings } = await readSettingsSafe();
   const apiKey = settings.transcription?.apiKey;
   if (!apiKey) return { error: 'Voice transcription not configured' };
   try {

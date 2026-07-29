@@ -51,8 +51,20 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
   const tokenTimeRef = useRef(0);
   const TOKEN_MAX_AGE = 50_000;
 
+  // Consumers pass a fresh `getToken` arrow every render; keep it in a ref so
+  // fetchVoiceToken can stay stable (empty deps) and the mount effect runs once.
+  // Without this the effect re-fired on every render and spammed voice:getToken.
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+
   const fetchVoiceToken = useCallback(async () => {
-    const result = await getToken();
+    let result;
+    try {
+      result = await getTokenRef.current();
+    } catch (err) {
+      // IPC rejects (not a {error} result) when the server is unreachable.
+      result = { error: err instanceof Error ? err.message : String(err) };
+    }
     if (!result.error) {
       tokenRef.current = result.token;
       tokenTimeRef.current = Date.now();
@@ -61,7 +73,7 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       setVoiceAvailable(false);
     }
     return result;
-  }, [getToken]);
+  }, []);
 
   useEffect(() => {
     fetchVoiceToken();
