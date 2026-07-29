@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import CompanionUpdateDialog from '../CompanionUpdateDialog.jsx';
 import { SettingsSection, SettingsGroup } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
@@ -26,8 +27,15 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  // Companion-vs-desktop version check (runs after a successful connection).
+  const [verCheck, setVerCheck] = useState<{ status: string; desktop?: string; companion?: string } | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
 
   const emitReady = (ready: boolean) => onReadyChange?.(ready);
+
+  const refreshVersionCheck = () => {
+    window.api.settings.apiCheckVersion().then(setVerCheck).catch(() => setVerCheck(null));
+  };
 
   // Load the stored config + verify reachability on open.
   useEffect(() => {
@@ -41,8 +49,9 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
         const r = await window.api.settings.apiTest({ url: c.url });
         if (!alive) return;
         setStatus(r.ok ? 'ok' : 'error');
-        setMessage(r.ok ? 'Connected.' : (r.error || 'Could not reach the companion.'));
+        setMessage(r.ok ? `Connected${r.version ? ` — companion ${r.version}` : ''}.` : (r.error || 'Could not reach the companion.'));
         emitReady(!!r.ok);
+        if (r.ok) refreshVersionCheck();
       } else {
         setStatus('unknown');
         emitReady(false);
@@ -87,8 +96,9 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
       if (apiKey) args.apiKey = apiKey;
       const r = await window.api.settings.apiTest(args);
       setStatus(r.ok ? 'ok' : 'error');
-      setMessage(r.ok ? 'Connected.' : (r.error || 'Could not reach the companion.'));
+      setMessage(r.ok ? `Connected${r.version ? ` — companion ${r.version}` : ''}.` : (r.error || 'Could not reach the companion.'));
       emitReady(!!r.ok);
+      if (r.ok) refreshVersionCheck(); else setVerCheck(null);
     } catch (err: any) {
       setStatus('error');
       setMessage(err?.message || 'Connection test failed.');
@@ -159,7 +169,32 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
           {status === 'error' && <span className="text-xs text-destructive">{message}</span>}
           {status === 'unknown' && message && <span className="text-xs text-muted-foreground">{message}</span>}
         </div>
+
+        {verCheck?.status === 'companion-older' && (
+          <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+            <div className="text-sm">
+              Update available — companion <span className="font-mono">{verCheck.companion}</span> →{' '}
+              <span className="font-mono">v{String(verCheck.desktop ?? '').replace(/^v/, '')}</span>
+            </div>
+            <Button type="button" size="sm" variant="outline" onClick={() => setUpdateOpen(true)}>
+              Update companion
+            </Button>
+          </div>
+        )}
+        {verCheck?.status === 'companion-newer' && (
+          <p className="text-xs text-muted-foreground">
+            The companion ({verCheck.companion}) is newer than this app — update the desktop app to match.
+          </p>
+        )}
       </SettingsGroup>
+
+      <CompanionUpdateDialog
+        open={updateOpen}
+        onClose={() => setUpdateOpen(false)}
+        desktop={verCheck?.desktop}
+        companion={verCheck?.companion}
+        onUpdated={() => { refreshVersionCheck(); onTest(); }}
+      />
     </SettingsSection>
   );
 }

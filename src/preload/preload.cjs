@@ -231,6 +231,9 @@ contextBridge.exposeInMainWorld('api', {
     apiRead: () => ipcRenderer.invoke('api:read'),
     apiWrite: (patch) => ipcRenderer.invoke('api:write', patch),
     apiTest: (args) => ipcRenderer.invoke('api:test', args),
+    // Companion version check + remote upgrade (the updater sidecar).
+    apiCheckVersion: () => ipcRenderer.invoke('api:checkVersion'),
+    apiUpgradeCompanion: () => ipcRenderer.invoke('api:upgradeCompanion'),
     // Telegram connect/disconnect/status — actions run on the companion.
     telegramStatus: () => ipcRenderer.invoke('telegram:status'),
     telegramConnect: (opts) => ipcRenderer.invoke('telegram:connect', opts),

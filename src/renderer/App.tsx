@@ -21,6 +21,7 @@ import EditorStatusBar from './EditorStatusBar.jsx';
 import ChatSidebar from './ChatSidebar.jsx';
 import Dialog from './Dialog.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
+import CompanionUpdateDialog from './CompanionUpdateDialog.jsx';
 import JournalDatePicker from './JournalDatePicker.jsx';
 import QuickSearch from './QuickSearch.jsx';
 import { basenameOf, dirOf, toRelPath } from './pathUtils';
@@ -276,6 +277,23 @@ export default function App() {
 
   // App-update status: feeds the editor-pane "Update available" pill + Settings → Updates.
   const appUpdate = useAppUpdate();
+
+  // Companion-version boot check — once per app run. A companion behind this
+  // desktop opens the update dialog; a companion AHEAD means this desktop is
+  // the stale side (electron-updater's job), so just say so. dev/match/
+  // unreachable/unconfigured stay silent.
+  const [companionUpdate, setCompanionUpdate] = useState<{ desktop?: string; companion?: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    window.api.settings.apiCheckVersion().then((r) => {
+      if (!alive) return;
+      if (r.status === 'companion-older') setCompanionUpdate({ desktop: r.desktop, companion: r.companion });
+      else if (r.status === 'companion-newer') {
+        toast.info('Companion is newer than this app', { description: 'Update the desktop app to match your companion server.' });
+      }
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Live ref to the active file's absolute path. Used by the editor's image
   // paste/drop handler (target dir for the saved image) and the inline image
@@ -2110,6 +2128,13 @@ export default function App() {
         destructive
         onConfirm={confirmFolderDelete}
         onClose={cancelFolderDelete}
+      />
+
+      <CompanionUpdateDialog
+        open={!!companionUpdate}
+        onClose={() => setCompanionUpdate(null)}
+        desktop={companionUpdate?.desktop}
+        companion={companionUpdate?.companion}
       />
 
       <ConfirmDialog

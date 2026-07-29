@@ -58,13 +58,36 @@ export const api = {
   patch: (p: string, body: any) => request('PATCH', p, body),
   post: (p: string, body?: any) => request('POST', p, body ?? {}),
   del: (p: string) => request('DELETE', p),
-  // Reachability probe for the connect/test flow.
-  async health(url: string, apiKey: string): Promise<boolean> {
+  // Reachability probe for the connect/test flow. Also surfaces the companion's
+  // release version ('v1.0.21' from a published image, 'dev' for local builds)
+  // so callers can spot a stale companion.
+  async health(url: string, apiKey: string): Promise<{ ok: boolean; version?: string }> {
     const t = new URL('health', url.endsWith('/') ? url : `${url}/`).href;
     try {
       const r = await companionFetch(t, { headers: { Authorization: `Bearer ${apiKey}` } });
-      return r.ok;
-    } catch { return false; }
+      if (!r.ok) return { ok: false };
+      const j = await r.json().catch(() => ({}));
+      return { ok: true, version: typeof j.version === 'string' ? j.version : undefined };
+    } catch { return { ok: false }; }
+  },
+  // Ask the companion to upgrade itself to `tag` (POST /update -> the updater
+  // sidecar). Reads the error body — `updater-unavailable` means a pre-sidecar
+  // deployment that needs one manual install-script re-run.
+  async triggerUpdate(tag: string): Promise<{ ok: boolean; error?: string }> {
+    const { url, apiKey } = base();
+    const target = new URL('update', url.endsWith('/') ? url : `${url}/`).href;
+    try {
+      const res = await companionFetch(target, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag }),
+      });
+      if (res.ok) return { ok: true };
+      const j = await res.json().catch(() => ({}));
+      return { ok: false, error: typeof j.error === 'string' ? j.error : `HTTP ${res.status}` };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) };
+    }
   },
   // Open a long-lived Server-Sent Events stream. `onEvent` fires per `data:`
   // frame (parsed JSON); `onClose` fires once when the stream ends for any

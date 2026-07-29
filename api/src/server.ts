@@ -3,6 +3,8 @@
 // key; Postgres is private (never exposed to clients).
 
 import crypto from 'node:crypto';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -224,6 +226,28 @@ app.post('/telegram/workspace', handle(async (req) => {
   await store.setTelegramActiveWorkspace(db, workspaceId);
   return { ok: true };
 }));
+
+// ── Remote upgrade ───────────────────────────────────────────────────────────
+// Drops the requested release tag where the updater sidecar polls for it
+// (UPDATE_TRIGGER_DIR, a volume shared with the `updater` compose service);
+// the sidecar fetches that tag's runtime files, pulls its image, and restarts
+// the stack — see api/updater/. Distinct `updater-unavailable` (503) tells a
+// pre-sidecar deployment to re-run the install script once.
+app.post('/update', async (req, res) => {
+  const tag = String(req.body?.tag ?? '');
+  if (!/^v\d+\.\d+\.\d+$/.test(tag)) { res.status(400).json({ error: 'invalid tag' }); return; }
+  const dir = process.env.UPDATE_TRIGGER_DIR || '';
+  try {
+    if (!dir) throw new Error('UPDATE_TRIGGER_DIR not set');
+    await fsp.writeFile(path.join(dir, 'request'), `${tag}\n`);
+  } catch (err: any) {
+    log.error({ err: err?.message, tag }, 'update trigger failed');
+    res.status(503).json({ error: 'updater-unavailable' });
+    return;
+  }
+  log.info({ tag }, 'update requested');
+  res.json({ result: { ok: true, tag } });
+});
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   log.error({ err: err?.message }, 'error');

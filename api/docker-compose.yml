@@ -24,7 +24,10 @@ services:
     # pull_policy `missing` makes plain `docker compose up -d` PULL this image
     # (the install-script path — no repo checkout on the box); dev overrides
     # with `docker compose up -d --build`, which always builds from source.
-    image: ghcr.io/stephengpope/shockwave-companion:latest
+    # SHOCKWAVE_TAG (written to .env by updater/apply.sh) pins the image to the
+    # same release tag the compose/traefik files were fetched at; fresh installs
+    # run `latest` until their first remote upgrade.
+    image: ghcr.io/stephengpope/shockwave-companion:${SHOCKWAVE_TAG:-latest}
     pull_policy: missing
     build:
       # Repo root so the build can reach ../agent-core (the shared agent runtime).
@@ -45,6 +48,9 @@ services:
       # volume so a rebuild doesn't throw them away — losing them is survivable
       # (they're rebuilt from the stored transcript) but it's a needless refetch.
       AGENT_DATA_DIR: /data/agent
+      # Where POST /update drops the requested release tag for the updater
+      # sidecar (shared volume; the sidecar polls it).
+      UPDATE_TRIGGER_DIR: /trigger
     # NOT a public surface. Bound to localhost only, for local dev / an
     # ngrok->raw tunnel. Public traffic goes through traefik (TLS, :443); it
     # reaches this container over the compose network as `api:8080`.
@@ -60,6 +66,7 @@ services:
       # dynamic TLS config here, which traefik's file provider picks up.
       - traefik-dynamic:/etc/traefik/dynamic
       - agent-data:/data/agent
+      - updater-trigger:/trigger
 
   # One-shot: writes the Traefik dynamic router (self-signed vs Let's Encrypt)
   # from $COMPANION_DOMAIN into the shared config volume, then exits.
@@ -94,6 +101,28 @@ services:
       - traefik-dynamic:/etc/traefik/dynamic:ro
       - letsencrypt:/letsencrypt
 
+  # Remote-upgrade sidecar. Polls the updater-trigger volume for a release tag
+  # written by the api's POST /update, then spawns a detached one-shot helper
+  # (updater/apply.sh) that fetches that tag's compose/traefik/updater files,
+  # pins SHOCKWAVE_TAG in .env, pulls the tag's api image, and `up -d`s the
+  # stack. Holds the docker socket — deliberately has NO network surface; the
+  # trigger is a file. COMPANION_DIR must be the install dir's HOST path (the
+  # helper bind-mounts it, and dockerd resolves bind paths on the host);
+  # default matches install.sh's /opt/shockwave-companion.
+  updater:
+    image: docker:27-cli
+    restart: unless-stopped
+    environment:
+      COMPANION_DIR: ${COMPANION_DIR:-/opt/shockwave-companion}
+      # Test hook — overrides where apply.sh fetches release files from
+      # (file:// or http). Empty in production (raw.githubusercontent.com).
+      SHOCKWAVE_RAW_BASE: ${SHOCKWAVE_RAW_BASE:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./updater:/updater:ro
+      - updater-trigger:/trigger
+    entrypoint: ["sh", "/updater/watch.sh"]
+
   # Restarts any container labeled autoheal=true when Docker marks it
   # unhealthy. Needs the docker socket to do so.
   autoheal:
@@ -109,3 +138,4 @@ volumes:
   agent-data:
   traefik-dynamic:
   letsencrypt:
+  updater-trigger:

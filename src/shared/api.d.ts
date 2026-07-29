@@ -253,8 +253,21 @@ export interface ShockwaveApi {
     apiRead(): Promise<{ url: string; hasApiKey: boolean }>;
     /** Persist URL and/or key. Omit `apiKey` to keep the stored one. */
     apiWrite(patch: { url?: string; apiKey?: string }): Promise<{ ok: boolean; url: string; hasApiKey: boolean }>;
-    /** Health-check a URL + key (falls back to the stored key when omitted). */
-    apiTest(args: { url: string; apiKey?: string }): Promise<{ ok: boolean; error?: string }>;
+    /** Health-check a URL + key (falls back to the stored key when omitted).
+     *  `version` is the companion's release tag ('v1.0.21', 'dev' for local builds). */
+    apiTest(args: { url: string; apiKey?: string }): Promise<{ ok: boolean; error?: string; version?: string }>;
+    /** Compare the desktop version against the companion's. 'companion-older' is
+     *  the only status that offers an upgrade; 'dev' (either side unversioned)
+     *  stays silent. */
+    apiCheckVersion(): Promise<{
+      status: 'match' | 'companion-older' | 'companion-newer' | 'dev' | 'unreachable' | 'unconfigured';
+      desktop?: string;
+      companion?: string;
+    }>;
+    /** Ask the companion to upgrade itself to this desktop's version (POST /update
+     *  -> the updater sidecar). `updater-unavailable` = pre-sidecar deployment;
+     *  the user must re-run the install script once. */
+    apiUpgradeCompanion(): Promise<{ ok: boolean; error?: string }>;
     /** Telegram connection status (from the companion), including the workspace it runs against. */
     telegramStatus(): Promise<{ ok: boolean; connected?: boolean; botUsername?: string | null; activeChatId?: string | null; workspaceId?: string | null; workspaceName?: string | null; error?: string }>;
     /** Connect a Telegram bot — the companion validates the token + registers the webhook. */

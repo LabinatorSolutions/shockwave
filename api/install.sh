@@ -122,8 +122,8 @@ fi
 
 # ── Runtime files ───────────────────────────────────────────────────────────
 say "Fetching companion files into $DIR ..."
-$SUDO mkdir -p "$DIR/traefik"
-for f in docker-compose.yml init.sql traefik/traefik.yml traefik/gen-router.sh; do
+$SUDO mkdir -p "$DIR/traefik" "$DIR/updater"
+for f in docker-compose.yml init.sql traefik/traefik.yml traefik/gen-router.sh updater/watch.sh updater/apply.sh; do
   curl -fsSL "$RAW/$f" | $SUDO tee "$DIR/$f" >/dev/null || fail "failed to fetch $f"
 done
 ok "Files fetched (ref: $REF)"

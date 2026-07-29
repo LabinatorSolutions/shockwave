@@ -37,6 +37,7 @@ import { readSettings, readSettingsSafe, writeSettings, importLegacySettingsIfNe
 import { readApiConfig, writeApiConfig } from './api/config.js';
 import os from 'node:os';
 import { api } from './api/client.js';
+import { classifyVersions } from './versionCompare.js';
 import { readLocalSettings } from './api/localSettings.js';
 import {
   verifyPat as syncVerifyPat,
@@ -914,8 +915,25 @@ ipcMain.handle('api:write', (_evt, patch) => {
 ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
   const key = apiKey || readApiConfig().apiKey;
   if (!url || !key) return { ok: false, error: 'URL and API key are both required.' };
-  const ok = await api.health(url, key);
-  return ok ? { ok: true } : { ok: false, error: 'Could not reach the server with that URL and key.' };
+  const h = await api.health(url, key);
+  return h.ok ? { ok: true, version: h.version } : { ok: false, error: 'Could not reach the server with that URL and key.' };
+});
+
+// ── Companion version check + remote upgrade ────────────────────────────────
+// The desktop and the companion image are cut from the same release tag, so
+// `app.getVersion()` is the upgrade target. 'companion-older' is the only
+// status that offers an upgrade; 'companion-newer' means THIS desktop is the
+// stale side (electron-updater's problem, not ours).
+ipcMain.handle('api:checkVersion', async () => {
+  const c = readApiConfig();
+  if (!c.url || !c.apiKey) return { status: 'unconfigured' };
+  const h = await api.health(c.url, c.apiKey);
+  if (!h.ok) return { status: 'unreachable' };
+  const desktop = app.getVersion();
+  return { status: classifyVersions(desktop, h.version), desktop, companion: h.version };
+});
+ipcMain.handle('api:upgradeCompanion', async () => {
+  return api.triggerUpdate(`v${app.getVersion()}`);
 });
 
 // Telegram — the desktop UI triggers these; the actions (setWebhook, token

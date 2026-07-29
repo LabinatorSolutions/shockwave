@@ -138,4 +138,6 @@ npm test        # run the test suite
 
 Companion server (in `api/`): `cd api && docker compose up -d --build` — see [`api/CLAUDE.md`](api/CLAUDE.md).
 
+> **Note:** prebuilt companion images are published to [`ghcr.io/stephengpope/shockwave-companion`](https://github.com/stephengpope/shockwave/pkgs/container/shockwave-companion) (multi-arch, tagged per release + `latest`).
+
 See [`CLAUDE.md`](CLAUDE.md) for architecture notes.
