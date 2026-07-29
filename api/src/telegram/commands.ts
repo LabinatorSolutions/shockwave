@@ -12,9 +12,9 @@ import { askAboutChat } from './btw.js';
 export const BOT_COMMANDS = [
   { command: 'new', description: 'Start a fresh chat in the same workspace' },
   { command: 'chats', description: 'List recent chats' },
-  { command: 'chat', description: 'Switch chat: /chat 2' },
+  { command: 'chat', description: 'Switch chat by its number in /chats: /chat <number>' },
   { command: 'workspaces', description: 'List workspaces' },
-  { command: 'workspace', description: 'Switch workspace (starts a fresh chat): /workspace 2' },
+  { command: 'workspace', description: 'Switch workspace by its number in /workspaces: /workspace <number>' },
   { command: 'btw', description: 'Ask about this chat without interrupting it' },
   { command: 'status', description: 'Workspace, chat, and whether the agent is busy' },
   { command: 'help', description: 'What this bot can do' },
@@ -30,9 +30,9 @@ const HELP = [
   'Commands:',
   '/new — start a fresh chat in the same workspace',
   '/chats — list recent chats',
-  '/chat 2 — switch to chat 2 and carry on where it left off',
+  '"/chat <number>" — switch to that chat from /chats and carry on where it left off',
   '/workspaces — list workspaces',
-  '/workspace 2 — switch workspace (starts a fresh chat there)',
+  '"/workspace <number>" — switch to that workspace from /workspaces (starts a fresh chat there)',
   '/btw <question> — ask about this chat itself; works while the agent is busy and does not interrupt it',
   '/status — which workspace and chat, and whether the agent is working',
   '/help — this',
@@ -96,16 +96,19 @@ export async function handleCommand(
       const all = await store.listWorkspaces(db);
       if (!all.length) { await reply('No workspaces yet. Add one in the desktop app.'); return true; }
       const current = await activeWorkspace(db);
-      const lines = all.map((w, i) => `${i + 1}. ${w.name}${w.id === current?.id ? '  ← current' : ''}`);
-      await reply(['Workspaces:', ...lines, '', 'Switch with /workspace 2'].join('\n'));
+      const others = all.filter((w) => w.id !== current?.id).slice(0, 10);
+      const lines = others.map((w, i) => `${i + 1}. ${w.name}`);
+      await reply(['Current workspace:', `${current?.name ?? '(none)'}`, '', 'Other workspaces:', ...lines, '', 'Switch with "/workspace <number>"'].join('\n'));
       return true;
     }
 
     case 'workspace': {
       const all = await store.listWorkspaces(db);
-      const idx = parseIndex(rest[0], all.length);
-      if (idx == null) { await reply('Usage: /workspace 2 — see /workspaces for the list.'); return true; }
-      const target = all[idx];
+      const current = await activeWorkspace(db);
+      const others = all.filter((w) => w.id !== current?.id).slice(0, 10);
+      const idx = parseIndex(rest[0], others.length);
+      if (idx == null) { await reply('Usage: /workspace <number> — see /workspaces for the list.'); return true; }
+      const target = others[idx];
       await store.setTelegramActiveWorkspace(db, target.id);
       await reply(`Switched to ${target.name}. Fresh chat started — send a message to begin.`);
       return true;
@@ -116,9 +119,10 @@ export async function handleCommand(
       if (!ws) { await reply('No workspace is set. Try /workspaces.'); return true; }
       const chats = await store.listChats(db, ws.id, { limit: LIST_LIMIT });
       if (!chats.length) { await reply('No chats yet in this workspace. Send a message to start one.'); return true; }
-      const lines = chats.map((c, i) =>
-        `${i + 1}. ${c.title ?? 'Untitled'}${c.id === acc?.activeChatId ? '  ← current' : ''}  (${ago(c.updatedAt)})`);
-      await reply([`Chats in ${ws.name}:`, ...lines, '', 'Switch with /chat 2'].join('\n'));
+      const current = chats.find((c) => c.chatId === acc?.activeChatId);
+      const others = chats.filter((c) => c.chatId !== acc?.activeChatId).slice(0, 10);
+      const lines = others.map((c, i) => `${i + 1}. ${c.title ?? 'Untitled'}  (${ago(c.updatedAt)})`);
+      await reply(['Current chat:', `${current?.title ?? '(none)'}`, '', 'Other chats:', ...lines, '', 'Switch with "/chat <number>"'].join('\n'));
       return true;
     }
 
@@ -126,10 +130,11 @@ export async function handleCommand(
       const ws = await activeWorkspace(db);
       if (!ws) { await reply('No workspace is set. Try /workspaces.'); return true; }
       const chats = await store.listChats(db, ws.id, { limit: LIST_LIMIT });
-      const idx = parseIndex(rest[0], chats.length);
-      if (idx == null) { await reply('Usage: /chat 2 — see /chats for the list.'); return true; }
-      const target = chats[idx];
-      await store.setTelegramActiveChat(db, target.id);
+      const others = chats.filter((c) => c.chatId !== acc?.activeChatId).slice(0, 10);
+      const idx = parseIndex(rest[0], others.length);
+      if (idx == null) { await reply('Usage: /chat <number> — see /chats for the list.'); return true; }
+      const target = others[idx];
+      await store.setTelegramActiveChat(db, target.chatId);
       await reply(`Switched to: ${target.title ?? 'Untitled'}  (${ws.name})\nCarry on — I have the whole conversation.`);
       return true;
     }
@@ -137,7 +142,7 @@ export async function handleCommand(
     case 'status': {
       const ws = await activeWorkspace(db);
       const chat = acc?.activeChatId ? await store.getChat(db, acc.activeChatId) : null;
-      const busy = chat && isBusy(chat.id);
+      const busy = chat && isBusy(chat.chatId);
       await reply([
         `Workspace: ${ws ? ws.name : '(none set — try /workspaces)'}`,
         `Chat: ${chat ? (chat.title ?? 'Untitled') : 'new on your next message'}`,
