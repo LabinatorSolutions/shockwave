@@ -196,14 +196,17 @@ function handleAgentEvent(evt: any) {
     if (evt.message?.role !== 'user') return;
     const text = textOfContent(evt.message.content);
     if (!text) return;
-    // Our own send already drew this bubble. `lastSentUserId` is set per send
-    // (including a steer) and consumed one-for-one here, which beats comparing
-    // text — an attachment send stores the display text locally but hands pi
-    // the prompt with the file blocks inlined, so the two never match.
-    if (state.chats[chatId]?.lastSentUserId) {
-      patchChat(chatId, { lastSentUserId: null });
-      return;
-    }
+    // Turn started HERE → `sendToChat` already drew the bubble. Keyed on the
+    // event's origin machine, not on a per-send flag: `lastSentUserId` survives
+    // a successful turn (only `agent_send_failed` clears it, since the splice
+    // needs it), so a stale one from an earlier desktop send swallowed the next
+    // Telegram message entirely.
+    if (evt.machine && myMachine && evt.machine === myMachine) return;
+    // Steering a REMOTE turn from this composer: the bubble is already drawn
+    // locally, but the echo carries the other machine's name. Text is a fair
+    // test here — a steer is plain text, never an attachment send.
+    const last = state.chats[chatId]?.messages.at(-1);
+    if (last?.kind === 'user' && last.text === text) return;
     appendMessage(chatId, { id: nextId(), kind: 'user', text });
     return;
   }
