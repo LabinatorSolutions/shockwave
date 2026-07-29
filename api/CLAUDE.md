@@ -26,8 +26,8 @@ Four services, three volumes:
 - `crypto.ts` — AES-256-GCM `seal`/`unseal` under `MASTER_KEY`; fresh 12-byte IV per write; returns `''` on decrypt failure.
 - `keys.js` — **pure** key policy (no db/electron import, unit-testable): which `(owner, field)` pairs are secret, agent-secret field lists, OAuth-owned fields, settings flatten/`setPath`, agent-secret split/join, value encode/decode.
 - `oauth.ts` — server-side token minting: `mintToken(name)` → a static token or a fresh (refreshed) OAuth access token; `patchOAuth` writes tokens back. (The desktop runs the *interactive* OAuth browser flow; the companion stores + mints.)
-- `agentHost.ts` — builds the companion `AgentHost` for `agent-core`: persistence → store, events → feed, per-run scratch dir, `send_message` tool, `getToken` → `mintToken`.
-- `feed.ts` — in-memory ephemeral SSE pub/sub keyed by `sessionId` (lets the desktop watch a server-side run live).
+- `agentHost.ts` — builds the companion `AgentHost` for `agent-core`: persistence → store, events → feed, per-run scratch dir (`AGENT_DATA_DIR`, on the `agent-data` volume — the Dockerfile pre-creates + chowns it so the volume inherits `node` ownership), `send_message` tool, `getToken` → `mintToken`.
+- `feed.ts` — in-memory ephemeral SSE pub/sub, ONE global channel (not per chat). A desktop can't subscribe per chat: the point is to hear about turns it doesn't know exist yet (Telegram, cron, another machine). Every event carries its `chatId`, so the client routes. Never stored — it mirrors what the `message` table already holds, so a client that misses events re-reads with `?after=`.
 - `scheduler.ts` — croner scheduler: one fire-cron per `cron.json` entry + a refresh cron that reconciles registrations non-destructively (ETag).
 - `cronRun.ts` — executes one cron run: checkout → agent turn (stream to feed) → deterministic check-in (git-fixer on conflict).
 - `git.ts` — server-side git CLI: `prepareCheckout` (reuse-or-shallow-clone), `checkIn` (add/commit/merge/push, one retry), `cleanup`. PAT embedded in the remote URL for the child only.
@@ -35,10 +35,13 @@ Four services, three volumes:
 - `github.ts` — `fetchCronJson` over the GitHub Contents API, ETag-conditional (304 = unchanged, free).
 - `sweeper.ts` — boot + hourly TTL sweep of per-run working dirs (checkouts + pi scratch), keyed by mtime.
 - `telegram/webhook.ts` — connect/disconnect/status + the webhook handler and out-of-band turn runner.
+- `telegram/commands.ts` — the slash commands (`/help`, `/new`, `/chats`, `/chat n`, `/workspaces`, `/workspace n`, `/status`, `/btw`) + `BOT_COMMANDS` + `activeWorkspace`. Answer in-chat, run no turn.
+- `telegram/btw.ts` — `/btw <question>`: one short model call over the chat's stored messages. Not a turn — it never steers, never joins the conversation, touches no files, and works WHILE a job is running (which is the point). It can see an in-flight job only because messages are stored as pi completes each one.
+- `telegram/transcribe.ts` — AssemblyAI transcription for voice notes, using the same `transcription.apiKey` the desktop mic uses. Telegram sends OGG/Opus, which AssemblyAI takes as-is.
 - `telegram/client.ts` — minimal Telegram Bot API client over `fetch` (one 429 retry) + `splitMessage` (4096-char chunker that carries code fences).
 - `telegram/stream.ts` — renders the agent event stream to Telegram (typing indicator, per-tool line, in-place streamed text, authoritative final from `agent_end`).
 - `telegram/selfSigned.ts` — public-IP detection + self-signed cert + Traefik dynamic-TLS config (public server, no domain).
-- `telegram/sendTool.ts` — the `send_message` agent tool (a server-side run proactively DMs the user).
+- `telegram/sendTool.ts` — `sendTelegramMessage(pool, key, text)`: the one place a DM is actually sent (the bot token lives only here). Two callers — the `send_message` agent tool (`agent-core/sendMessage.ts`) and `POST /telegram/send`, which is how the *desktop's* copy of that tool reaches it.
 
 ## HTTP API (`server.ts`)
 
@@ -48,7 +51,7 @@ Four services, three volumes:
 
 **Auth:** `authed` middleware compares `Bearer <token>` SHA-256 against the stored `API_KEY` hash with `timingSafeEqual` (401 otherwise). `app.use(authed, limiter, express.json())` protects + rate-limits (600/60s) + parses everything below.
 
-**Protected:** `GET/PATCH /settings`; `GET /agent-secrets`, `GET /agent-secret/:name/token` (mint), `POST /oauth/:name`; chats (`GET /chats`, `/chats/starred`, `/chats/search`, `/chat/:id`(+`/messages`,`/transcript`,`/running`), `POST /chat`, `POST /chat/:id/messages`, `PATCH /chat/:id/{title,starred}`, `DELETE /chat/:id`); live feed (`GET /chat/:id/stream` SSE, `POST /chat/:id/events`); cron (`POST /workspace/:id/cron/:job/run`, `GET /workspace/:id/cron/state`); workspaces (`GET/POST/PATCH /workspaces`, `DELETE /workspaces/:id`); telegram (`POST /telegram/{connect,disconnect}`, `GET /telegram/status`). The `handle()` wrapper returns `{result}` and never leaks error detail (`500 {error:'request failed'}`).
+**Protected:** `GET/PATCH /settings`; `GET /agent-secrets`, `GET /agent-secret/:name/token` (mint), `POST /oauth/:name`; chats (`GET /chats`, `/chats/starred`, `/chats/search`, `/chat/:id`(+`/messages` — `?after=<seq>` for just the newer ones, `/transcript`, `/running`), `POST /chat`, `POST /chat/:id/messages`, `PATCH /chat/:id/{title,starred}`, `DELETE /chat/:id`); live feed (**`GET /events`** — one SSE stream for every chat; `POST /chat/:id/events` for a client relaying its own local run); cron (`POST /workspace/:id/cron/:job/run`, `GET /workspace/:id/cron/state`); workspaces (`GET/POST/PATCH /workspaces`, `DELETE /workspaces/:id`); telegram (`POST /telegram/{connect,disconnect,send}`, `GET /telegram/status` — `send` backs the desktop's `send_message` tool: `{text}` in, `{ok}`/`{ok:false,error}` out). The `handle()` wrapper returns `{result}` and never leaks error detail (`500 {error:'request failed'}`).
 
 ## Data model (`schema.ts` / `init.sql`)
 
@@ -56,9 +59,9 @@ Four services, three volumes:
 - **setting** — non-secret scalar settings, one row per dotted leaf key: `key`, `value`, `type` (`string|number|boolean|json`), `updated_at`.
 - **agent_secret** — agent-secret entity metadata (no crypto columns): `name`, `description`, `kind` (`static|oauth`), the `oauth_*` columns, timestamps.
 - **secret_value** — **every** encrypted value: PK `(owner, field)`, `ciphertext` (base64), `iv`+`tag` (`bytea`, `NOT NULL`), `key_version`, `updated_at`. `owner` ∈ {`settings`, `telegram`, an `agent_secret.name`}.
-- **chat_session** / **chat_transcript** / **message** — chats: session metadata + `source` (`desktop|cron|telegram`)/`source_id`/`machine` provenance + `running`/`running_machine` cross-client flag; the whole pi JSONL (one row); and per-message rows `(session_id, seq)`.
-- **telegram_account** — single row (`id='default'`): authorized user, dm chat id, active session, `last_update_id` (dedup), bot username, enabled. Token + webhook secret are encrypted in `secret_value` under owner `telegram`.
-- **cron_state** — run **history** only, PK `(workspace_id, job_name)`: `last_run_at`/`last_error`/`last_session_id`. Next-run is computed in memory by croner, never persisted.
+- **chat** / **message** — chats: session metadata + `source` (`desktop|cron|telegram`)/`source_id`/`machine` provenance + `running`/`running_machine` cross-client flag, plus the whole pi JSONL in a **`transcript` column** (it was a 1:1 `chat_transcript` side table, which bought nothing — Postgres TOASTs a big text column out of line and never reads it unless selected). `message` holds one row per pi session ENTRY, appended as pi completes it; identity is `entry_id` (pi's own id), and `seq` is an ordering/read cursor **assigned by the server**. It also carries a GENERATED `search_text` tsvector (user+assistant content only — tool output is deliberately unindexed) with a GIN index, backing the agent's `search_chats` tool.
+- **telegram_account** — single row (`id='default'`): authorized user, dm chat id, active chat, **active workspace** (switchable via `/workspace`; falls back to `TELEGRAM_DEFAULT_WORKSPACE`), `last_update_id` (dedup), bot username, enabled. Token + webhook secret are encrypted in `secret_value` under owner `telegram`.
+- **cron_state** — run **history** only, PK `(workspace_id, job_name)`: `last_run_at`/`last_error`/`last_chat_id`. Next-run is computed in memory by croner, never persisted.
 
 ## Settings + secrets
 
@@ -88,19 +91,25 @@ Do **not** add a defaults object or seed default rows. The desktop learned this 
 
 ## Telegram
 
+**Commands** (`telegram/commands.ts`, registered with `setMyCommands`): `/help` (what the bot is + every command), `/new`, `/chats` + `/chat n`, `/workspaces` + `/workspace n`, `/status` (workspace, chat, busy or idle, model), `/btw <question>`. Switching workspace starts a fresh chat — a chat belongs to one workspace. Which workspace Telegram runs against is `telegram_account.active_workspace_id`, falling back to `TELEGRAM_DEFAULT_WORKSPACE`; before this it was env-only, so changing it meant editing `.env` and restarting.
+
+**Voice notes**: a message with no text but `voice`/`audio` is downloaded (declined over 20 MB — Telegram's bot ceiling), transcribed, echoed back as `🎤 "…"` so the user sees what was heard, then run as the prompt. No key configured → says so rather than ignoring the message.
+
 **Setup** (desktop Settings → `/telegram/{connect,disconnect,status}`): `connect` validates the token (`getMe`), mints a random webhook secret, registers the webhook (`allowed_updates:['message']`), and saves the account (botToken + webhookSecret encrypted under owner `telegram`; `dmChatId = authorizedTgUserId`, since private chats). `server.ts` resolves the public URL/cert first: `COMPANION_DOMAIN` set → `https://<domain>` (trusted, no PEM); unset → detect public IP + self-signed cert (Traefik serves it) → `https://<ip>` with the PEM uploaded to Telegram.
 
 **Webhook (`handleWebhook`):** account enabled? → secret-token header timing-safe-checked (403 on mismatch) → sender must be `authorizedTgUserId` (single user, DM-only; unknown senders silently 200) → `markTelegramUpdate` dedups retries → **fast-ack 200**, then run the turn out-of-band.
+
+**Concurrency — a second message while the agent is working.** The chat is marked busy for the whole job. A message arriving meanwhile is relayed into the RUNNING turn (pi delivers it at its next step), acknowledged with `⌛ Got it — working that in.` replied under the offending message, and then the handler **returns**. It must not fall through to the finish-up steps: those belong to the turn still in flight, and running them early committed half-edited files and abandoned the first reply mid-sentence. `agent-core` checks for a steer BEFORE validating provider/model, so the relay can pass none.
 
 **Turn (`runTurn` → `runTurnInner`):** `runTurn` wraps the inner run in try/catch so **any failure replies in-chat** (`⚠️ Something went wrong running the agent:\n<message>`) and then rethrows for server logging — a silent failure reads as the bot ignoring you. `runTurnInner` handles `/new`,`/status`,`/help`; picks the workspace by `TELEGRAM_DEFAULT_WORKSPACE` (in-chat error if unset/missing); requires `sync.pat` (in-chat error if absent); `prepareCheckout` clones/refreshes via `git.ts`; runs `runtime.agentSend` under a `CRON_MAX_RUN_MINUTES` watchdog; dual-publishes each event to the `feed` (desktop watches live) and the Telegram sink; `checkIn`s the work afterward. `source: 'telegram'`, `sourceId` = DM chat id.
 
 ## Cron
 
-`scheduler.ts` (gated by `CRON_ENABLED`): one croner per enabled `cron.json` entry (`protect:true`, workspace timezone), plus a refresh croner that `reconcileAll`s — fetches each workspace's `cron.json` via `fetchCronJson` (ETag/304) and updates registrations **non-destructively** (unchanged jobs keep running; changed schedules are replaced; vanished jobs dropped). `fireJob` mints a sessionId, runs `runCronJob`, records history to `cron_state`. `cronRun.ts` is shared by the scheduler and the manual `POST …/cron/:job/run`: checkout → read the job prompt from the checkout's `cron.json` → agent turn streamed to the feed (watchdog) → deterministic `checkIn`, handing a `'conflict'` to `gitFix`. Checkout dirs are keyed by sessionId (re-runs reuse) and reclaimed by `sweeper.ts`.
+`scheduler.ts` (gated by `CRON_ENABLED`): one croner per enabled `cron.json` entry (`protect:true`, workspace timezone), plus a refresh croner that `reconcileAll`s — fetches each workspace's `cron.json` via `fetchCronJson` (ETag/304) and updates registrations **non-destructively** (unchanged jobs keep running; changed schedules are replaced; vanished jobs dropped). `fireJob` mints a chatId, runs `runCronJob`, records history to `cron_state`. `cronRun.ts` is shared by the scheduler and the manual `POST …/cron/:job/run`: checkout → read the job prompt from the checkout's `cron.json` → agent turn streamed to the feed (watchdog) → deterministic `checkIn`, handing a `'conflict'` to `gitFix`. Checkout dirs are keyed by chatId (re-runs reuse) and reclaimed by `sweeper.ts`.
 
 ## Agent execution (`agentHost.ts`)
 
-`makeCompanionRuntime(pool, key)` builds an `AgentHost` and calls `agent-core`'s `createAgentRuntime` — the same runtime the desktop implements, but wired to direct I/O instead of IPC: persistence → the drizzle store, events → `feed`, a per-run scratch `dataDir` keyed by sessionId (isolates concurrent runs' pi `settings.json`), `extraTools = [send_message]`, `getAgentSecrets` from `readSettings`, `getToken` → `mintToken`. Both cron and Telegram drive it via `runtime.agentSend(payload, emit)` / `runtime.agentAbort(sessionId)`. The git-fixer (`gitFixer.ts`) runs a **separate** pi session from the turn.
+`makeCompanionRuntime(pool, key)` builds an `AgentHost` and calls `agent-core`'s `createAgentRuntime` — the same runtime the desktop implements, but wired to direct I/O instead of IPC: persistence → the drizzle store, events → `feed`, a per-run scratch `dataDir` keyed by chatId (isolates concurrent runs' pi `settings.json`), `extraTools = [send_message]` (built from `agent-core/sendMessage.ts` with `sendTelegramMessage` injected — the desktop offers the same tool, backed by `POST /telegram/send`), `getAgentSecrets` from `readSettings`, `getToken` → `mintToken`. Both cron and Telegram drive it via `runtime.agentSend(payload, emit)` / `runtime.agentAbort(chatId)`. The git-fixer (`gitFixer.ts`) runs a **separate** pi session from the turn.
 
 ## When you touch this
 

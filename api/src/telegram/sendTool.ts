@@ -1,40 +1,29 @@
-// The send_message tool — lets a server-side agent run (cron or Telegram)
-// proactively message the user on Telegram (e.g. "the nightly job finished").
-// Reads the account at call time so it works whenever Telegram is connected;
-// returns a clear error when it isn't. Added to the companion host's tools.
+// Sending a Telegram DM to the user, server-side. The bot token lives only here
+// (encrypted, owner `telegram`), so this is the ONE place a message is actually
+// sent — the agent tool wraps it (agent-core/sendMessage.ts) and the desktop
+// reaches it over HTTP (`POST /telegram/send`). Reads the account at call time,
+// so it works whenever Telegram is connected and explains itself when it isn't.
 
 import { TelegramClient, splitMessage } from './client.js';
 import * as store from '../store.js';
 import type { DB } from '../db.js';
 import { getDb } from '../db.js';
 
-export function makeSendMessageTool(pool: DB, key: Buffer): any {
-  const db = getDb(pool);
-  return {
-    name: 'send_message',
-    label: 'Send Message',
-    description: 'Send a message to the user on Telegram. Use this to reach the user proactively — e.g. when a scheduled job finishes or something needs their attention. They receive it as a Telegram DM.',
-    promptSnippet: 'Message the user on Telegram (a result or an alert).',
-    parameters: {
-      type: 'object',
-      properties: { text: { type: 'string', description: 'The message to send.' } },
-      required: ['text'],
-      additionalProperties: false,
-    },
-    async execute(_id: string, params: any) {
-      try {
-        const acc = await store.getTelegramAccount(db);
-        if (!acc || !acc.enabled || acc.dmChatId == null) {
-          return { content: [{ type: 'text', text: 'No Telegram account is connected, so the message was not sent.' }], isError: true };
-        }
-        const token = await store.getTelegramSecret(db, key, 'botToken');
-        if (!token) return { content: [{ type: 'text', text: 'Telegram bot token is missing.' }], isError: true };
-        const client = new TelegramClient(token);
-        for (const c of splitMessage(String(params?.text ?? ''))) await client.sendMessage(acc.dmChatId, c);
-        return { content: [{ type: 'text', text: 'Message sent to the user on Telegram.' }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: 'Could not send the message: ' + (e?.message || e) }], isError: true };
-      }
-    },
-  };
+export type SendResult = { ok: true } | { ok: false; error: string };
+
+export async function sendTelegramMessage(pool: DB, key: Buffer, text: string): Promise<SendResult> {
+  try {
+    const db = getDb(pool);
+    const acc = await store.getTelegramAccount(db);
+    if (!acc || !acc.enabled || acc.dmChatId == null) {
+      return { ok: false, error: 'No Telegram account is connected, so the message was not sent.' };
+    }
+    const token = await store.getTelegramSecret(db, key, 'botToken');
+    if (!token) return { ok: false, error: 'Telegram bot token is missing.' };
+    const client = new TelegramClient(token);
+    for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId, c);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: 'Could not send the message: ' + (e?.message || e) };
+  }
 }

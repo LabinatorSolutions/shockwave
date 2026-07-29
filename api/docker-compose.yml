@@ -37,6 +37,10 @@ services:
       # The webhook URL is derived from COMPANION_DOMAIN (below) — one public host.
       TELEGRAM_DEFAULT_WORKSPACE: ${TELEGRAM_DEFAULT_WORKSPACE:-}
       COMPANION_DOMAIN: ${COMPANION_DOMAIN:-}
+      # pi's per-run scratch (working copies of each chat's session file). On a
+      # volume so a rebuild doesn't throw them away — losing them is survivable
+      # (they're rebuilt from the stored transcript) but it's a needless refetch.
+      AGENT_DATA_DIR: /data/agent
     # NOT a public surface. Bound to localhost only, for local dev / an
     # ngrok->raw tunnel. Public traffic goes through traefik (TLS, :443); it
     # reaches this container over the compose network as `api:8080`.
@@ -46,6 +50,7 @@ services:
       # Shared with traefik: in self-signed mode the api writes the cert + a
       # dynamic TLS config here, which traefik's file provider picks up.
       - traefik-dynamic:/etc/traefik/dynamic
+      - agent-data:/data/agent
 
   # One-shot: writes the Traefik dynamic router (self-signed vs Let's Encrypt)
   # from $COMPANION_DOMAIN into the shared config volume, then exits.
@@ -82,5 +87,6 @@ services:
 
 volumes:
   pg-data:
+  agent-data:
   traefik-dynamic:
   letsencrypt:

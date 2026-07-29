@@ -67,8 +67,8 @@ export const secretValue = pgTable('secret_value', {
 // Chats. `running`/`running_machine` are the cross-client execution flag: the
 // executing machine sets them on agent_start and clears them AFTER uploading the
 // turn (rows + transcript), so running=false means "done and uploaded".
-export const chatSession = pgTable('chat_session', {
-  sessionId: text('session_id').primaryKey(),
+export const chatTable = pgTable('chat', {
+  chatId: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
   title: text('title'),
   systemPrompt: text('system_prompt'),
@@ -83,26 +83,24 @@ export const chatSession = pgTable('chat_session', {
   deleted: boolean('deleted').notNull().default(false),
   running: boolean('running').notNull().default(false),
   runningMachine: text('running_machine'),
-}, (t) => [index('idx_chat_session_ws_updated').on(t.workspaceId, t.updatedAt)]);
-
-// The pi transcript JSONL, whole (Postgres TOAST handles multi-MB text). One row
-// per session.
-export const chatTranscript = pgTable('chat_transcript', {
-  sessionId: text('session_id').primaryKey().references(() => chatSession.sessionId, { onDelete: 'cascade' }),
-  content: text('content').notNull(),
-  updatedAt: epochMs('updated_at').notNull(),
-});
+  // pi's OWN session JSONL, whole — how a chat moves between machines. NOT what
+  // the UI renders (that's `message`). A column, not a 1:1 side table; Postgres
+  // TOASTs it out of line and never reads it unless selected.
+  transcript: text('transcript'),
+  transcriptUpdatedAt: epochMs('transcript_updated_at'),
+}, (t) => [index('idx_chat_ws_updated').on(t.workspaceId, t.updatedAt)]);
 
 // Telegram integration — a single account (one authorized user, DM-only). The
 // bot token + webhook secret are encrypted in secret_value (owner 'telegram'),
 // same as every other credential; this holds the non-secret metadata. active
-// session_id makes a Telegram conversation continue one chat; last_update_id
+// chat id makes a Telegram conversation continue one chat; last_update_id
 // dedups webhook retries.
 export const telegramAccount = pgTable('telegram_account', {
   id: text('id').primaryKey().default('default'),
   authorizedTgUserId: bigint('authorized_tg_user_id', { mode: 'number' }),
   dmChatId: bigint('dm_chat_id', { mode: 'number' }),
-  activeSessionId: text('active_session_id'),
+  activeChatId: text('active_chat_id'),
+  activeWorkspaceId: text('active_workspace_id'),
   lastUpdateId: bigint('last_update_id', { mode: 'number' }).notNull().default(0),
   botUsername: text('bot_username'),
   enabled: boolean('enabled').notNull().default(false),
@@ -117,15 +115,19 @@ export const cronState = pgTable('cron_state', {
   jobName: text('job_name').notNull(),
   lastRunAt: epochMs('last_run_at'),
   lastError: text('last_error'),
-  lastSessionId: text('last_session_id'),
+  lastChatId: text('last_chat_id'),
   updatedAt: epochMs('updated_at').notNull(),
 }, (t) => [primaryKey({ columns: [t.workspaceId, t.jobName] })]);
 
-// One row per pi message. Keyed by (session_id, seq) — globally unique because
-// session_id is a UUID and a chat has one writer.
+// One row per pi message, appended as pi emits it. IDENTITY is `entryId` (pi's
+// own SessionEntry id, unique + stable for the life of the chat); `seq` is only
+// the ordering/read cursor and is assigned server-side. See init.sql for why
+// that split matters.
 export const message = pgTable('message', {
-  sessionId: text('session_id').notNull().references(() => chatSession.sessionId, { onDelete: 'cascade' }),
+  chatId: text('chat_id').notNull().references(() => chatTable.chatId, { onDelete: 'cascade' }),
   seq: integer('seq').notNull(),
+  entryId: text('entry_id'),         // pi SessionEntry.id — null only on pre-existing rows
+  parentId: text('parent_id'),       // pi SessionEntry.parentId
   role: text('role').notNull(),      // 'user' | 'assistant' | 'tool'
   content: text('content'),
   reasoning: text('reasoning'),
@@ -133,4 +135,4 @@ export const message = pgTable('message', {
   toolCallId: text('tool_call_id'),
   toolName: text('tool_name'),
   createdAt: epochMs('created_at').notNull(),
-}, (t) => [primaryKey({ columns: [t.sessionId, t.seq] })]);
+}, (t) => [primaryKey({ columns: [t.chatId, t.seq] })]);

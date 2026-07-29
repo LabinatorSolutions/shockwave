@@ -15,18 +15,19 @@ import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import { mintToken } from './oauth.js';
-import { makeSendMessageTool } from './telegram/sendTool.js';
+import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
+import { sendTelegramMessage } from './telegram/sendTool.js';
 
 const DATA_BASE = process.env.AGENT_DATA_DIR || path.join(os.tmpdir(), 'shockwave-agent');
 // Bundled built-in skills, shipped into the image (BUILTIN_SKILLS_DIR) so the
 // server agent has the SAME skills as the desktop; falls back to an empty dir.
 const BUILTIN_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(DATA_BASE, 'builtins');
 
-// Per-run pi scratch dirs (hold the JSONL) live here, keyed by sessionId. Kept
+// Per-run pi scratch dirs (hold the JSONL) live here, keyed by chatId. Kept
 // across runs (reused on re-run); the TTL sweeper reclaims old ones.
 export const RUNS_BASE = path.join(DATA_BASE, 'runs');
-export function runScratchDir(sessionId: string): string {
-  return path.join(RUNS_BASE, sessionId);
+export function runScratchDir(chatId: string): string {
+  return path.join(RUNS_BASE, chatId);
 }
 
 export function makeCompanionRuntime(pool: DB, key: Buffer) {
@@ -39,19 +40,25 @@ export function makeCompanionRuntime(pool: DB, key: Buffer) {
   const host: AgentHost = {
     builtinDir: BUILTIN_DIR,
     machine: os.hostname(),
-    // Server-side runs (cron/telegram) can proactively DM the user on Telegram.
-    extraTools: [makeSendMessageTool(pool, key)],
+    // Proactively DM the user on Telegram. The bot token lives here, so this
+    // host sends directly; the desktop's copy of the tool posts to /telegram/send.
+    extraTools: [makeSendMessageTool((text) => sendTelegramMessage(pool, key, text))],
     // Per-run scratch dir so concurrent runs don't share pi's settings.json.
-    dataDir: (sessionId) => runScratchDir(sessionId),
-    getSession: (id) => store.getSession(db, id),
-    upsertSession: (row) => store.upsertSession(db, { ...row, now: Date.now() } as any),
-    persistMessages: (id, rows) => store.persistMessages(db, id, rows as any),
-    setSessionTitle: (id, title) => store.setSessionTitle(db, id, title),
+    dataDir: (chatId) => runScratchDir(chatId),
+    getChat: (id) => store.getChat(db, id),
+    upsertChat: (row) => store.upsertChat(db, { ...row, now: Date.now() } as any),
+    appendMessages: (id, rows) => store.appendMessages(db, id, rows as any),
+    setChatTitle: (id, title) => store.setChatTitle(db, id, title),
     setRunning: (id, machine) => store.setRunning(db, id, machine),
     getTranscript: (id) => store.getTranscript(db, id),
     putTranscript: (id, content) => store.putTranscript(db, id, content),
     getAgentSecrets: async () => (await store.readSettings(db, key)).agentSecrets ?? [],
     getToken: (name: string) => mintToken(db, key, name), // static or fresh OAuth
+    chatSearch: {
+      searchChats: (o) => store.searchChatMessages(db, o.workspaceId, o.query, o.limit, o.sort, o.excludeChatId),
+      readChat: (o) => store.readChatWindow(db, o.chatId, o.around, o.window),
+      recentChats: (o) => store.recentChats(db, o.workspaceId, o.limit, o.excludeChatId),
+    },
   };
   return createAgentRuntime(host);
 }

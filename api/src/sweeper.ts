@@ -1,5 +1,5 @@
 // TTL sweep for per-run working dirs (git checkouts + pi scratch). We keep dirs
-// keyed by sessionId so a re-run can reuse them; this reclaims the ones that
+// keyed by chatId so a re-run can reuse them; this reclaims the ones that
 // haven't been touched within the TTL window — the equivalent of knack's
 // snapshot expiry, done ourselves since we use plain temp dirs. Runs on boot and
 // then hourly (croner).

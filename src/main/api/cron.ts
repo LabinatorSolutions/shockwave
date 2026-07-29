@@ -54,20 +54,20 @@ export async function cronRead(): Promise<any> {
     nextRunAt: next[j?.name] ?? null,
     lastRunAt: history[j?.name]?.lastRunAt ?? null,
     lastError: history[j?.name]?.lastError ?? null,
-    lastSessionId: history[j?.name]?.lastSessionId ?? null,
+    lastChatId: history[j?.name]?.lastChatId ?? null,
   }));
 
   return { ...EMPTY, activeWorkspace: wsPath, exists, fileError, jobs: jobViews };
 }
 
-export async function cronRunNow(name: string): Promise<{ ok?: boolean; sessionId?: string; error?: string }> {
+export async function cronRunNow(name: string): Promise<{ ok?: boolean; chatId?: string; error?: string }> {
   const local = readLocalSettings();
   const activeId = local.activeWorkspaceId;
   if (!activeId) return { error: 'No active workspace.' };
   if (!name) return { error: 'No job name.' };
   try {
     const res = await api.post(`/workspace/${encodeURIComponent(activeId)}/cron/${encodeURIComponent(name)}/run`);
-    return { ok: true, sessionId: res?.sessionId };
+    return { ok: true, chatId: res?.chatId };
   } catch (e: any) {
     return { error: e?.message ?? String(e) };
   }

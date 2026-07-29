@@ -25,17 +25,17 @@ async function git(cwd: string, args: string[]): Promise<{ stdout: string; stder
   return exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024 });
 }
 
-// Prepare a checkout for a run, keyed by sessionId. If the dir already exists
+// Prepare a checkout for a run, keyed by chatId. If the dir already exists
 // (a prior run of this chat), REUSE it — but bring it to a pristine, up-to-date
 // state first: fetch + reset --hard + clean, so no stale files or half-committed
 // work carries over. Otherwise a fresh shallow clone. The dir is kept after the
 // run (the TTL sweeper reclaims old ones) so a re-run can reuse it. Mirrors
 // knack's init/fetch/reset reuse.
 export async function prepareCheckout(
-  sessionId: string,
+  chatId: string,
   owner: string, repo: string, branch: string, pat: string,
 ): Promise<string> {
-  const dir = path.join(WORK_BASE, sessionId);
+  const dir = path.join(WORK_BASE, chatId);
   const hasGit = await fs.access(path.join(dir, '.git')).then(() => true).catch(() => false);
 
   if (hasGit) {

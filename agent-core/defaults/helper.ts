@@ -12,6 +12,14 @@
 
 import { TOOL_CATALOG, ToolDescriptor, formatToolList } from './tools.js';
 
+// First line of the helper, and the seam the stored prompt is split on so the
+// helper can be rebuilt on a later run while the workspace's SOUL stays frozen
+// (see `rebuildSystemPrompt` in index.ts). A chat started from Telegram and
+// continued on the desktop must list the tools of whichever side is running it,
+// not the ones its creator had. Keep this string stable — an old stored prompt
+// without it is left alone.
+export const HELPER_MARK = '<!-- shockwave-helper -->';
+
 const BOUNDARIES = `# Boundaries
 
 - **Stay inside the workspace (cwd).** Don't read, write, or run commands outside it.
@@ -190,6 +198,7 @@ export function buildShockwaveHelper(
   { tools = TOOL_CATALOG, unattended = false }: { tools?: ToolDescriptor[]; unattended?: boolean } = {},
 ): string {
   return [
+    HELPER_MARK,
     BOUNDARIES,
     ...(unattended ? [UNATTENDED] : []),
     TOOLS(tools),

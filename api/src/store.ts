@@ -10,9 +10,9 @@ import {
   isPlainObject, splitAgentSecret, joinAgentSecret,
 } from './keys.js';
 import {
-  workspace, setting, agentSecret, secretValue, chatSession, chatTranscript, message, cronState, telegramAccount,
+  workspace, setting, agentSecret, secretValue, chatTable, message, cronState, telegramAccount,
 } from './schema.js';
-import { and, eq, lt, desc, asc, ilike, like, sql, inArray } from 'drizzle-orm';
+import { and, eq, lt, gt, desc, asc, ilike, like, sql, inArray } from 'drizzle-orm';
 
 const KEY_VERSION = 1;
 const now = () => Date.now();
@@ -242,122 +242,148 @@ export async function updateWorkspaceOrder(db: Db, list: Array<{ id: string; nam
 
 // The camelCase session projection returned to clients (includes running state).
 const sessionSelect = {
-  sessionId: chatSession.sessionId, workspaceId: chatSession.workspaceId, title: chatSession.title,
-  systemPrompt: chatSession.systemPrompt, model: chatSession.model, source: chatSession.source,
-  sourceId: chatSession.sourceId, machine: chatSession.machine, createdAt: chatSession.createdAt,
-  updatedAt: chatSession.updatedAt, archived: chatSession.archived, starred: chatSession.starred,
-  running: chatSession.running, runningMachine: chatSession.runningMachine,
+  chatId: chatTable.chatId, workspaceId: chatTable.workspaceId, title: chatTable.title,
+  systemPrompt: chatTable.systemPrompt, model: chatTable.model, source: chatTable.source,
+  sourceId: chatTable.sourceId, machine: chatTable.machine, createdAt: chatTable.createdAt,
+  updatedAt: chatTable.updatedAt, archived: chatTable.archived, starred: chatTable.starred,
+  running: chatTable.running, runningMachine: chatTable.runningMachine,
+  transcriptUpdatedAt: chatTable.transcriptUpdatedAt,
 };
 
-export async function listSessions(db: Db, workspaceId: string, opts: { limit?: number; before?: number } = {}) {
+export async function listChats(db: Db, workspaceId: string, opts: { limit?: number; before?: number } = {}) {
   const limit = Math.min(opts.limit ?? 30, 100);
-  const conds = [eq(chatSession.workspaceId, workspaceId), eq(chatSession.archived, false), eq(chatSession.starred, false), eq(chatSession.deleted, false)];
-  if (typeof opts.before === 'number') conds.push(lt(chatSession.updatedAt, opts.before));
-  return db.select(sessionSelect).from(chatSession).where(and(...conds)).orderBy(desc(chatSession.updatedAt)).limit(limit);
+  const conds = [eq(chatTable.workspaceId, workspaceId), eq(chatTable.archived, false), eq(chatTable.starred, false), eq(chatTable.deleted, false)];
+  if (typeof opts.before === 'number') conds.push(lt(chatTable.updatedAt, opts.before));
+  return db.select(sessionSelect).from(chatTable).where(and(...conds)).orderBy(desc(chatTable.updatedAt)).limit(limit);
 }
 
 export async function listStarred(db: Db, workspaceId: string) {
-  return db.select(sessionSelect).from(chatSession)
-    .where(and(eq(chatSession.workspaceId, workspaceId), eq(chatSession.archived, false), eq(chatSession.starred, true), eq(chatSession.deleted, false)))
-    .orderBy(desc(chatSession.updatedAt));
+  return db.select(sessionSelect).from(chatTable)
+    .where(and(eq(chatTable.workspaceId, workspaceId), eq(chatTable.archived, false), eq(chatTable.starred, true), eq(chatTable.deleted, false)))
+    .orderBy(desc(chatTable.updatedAt));
 }
 
 // Title-only search (content search can come later via tsvector).
-export async function searchSessions(db: Db, workspaceId: string, query: string, opts: { limit?: number } = {}) {
+export async function searchChats(db: Db, workspaceId: string, query: string, opts: { limit?: number } = {}) {
   const limit = Math.min(opts.limit ?? 30, 100);
   const pattern = `%${String(query).replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
-  const rows = await db.select({ sessionId: chatSession.sessionId, title: chatSession.title, updatedAt: chatSession.updatedAt })
-    .from(chatSession)
-    .where(and(eq(chatSession.workspaceId, workspaceId), eq(chatSession.deleted, false), ilike(chatSession.title, pattern)))
-    .orderBy(desc(chatSession.updatedAt)).limit(limit);
-  return rows.map((r) => ({ sessionId: r.sessionId, title: r.title, updatedAt: r.updatedAt, snippet: r.title ?? '' }));
+  const rows = await db.select({ chatId: chatTable.chatId, title: chatTable.title, updatedAt: chatTable.updatedAt })
+    .from(chatTable)
+    .where(and(eq(chatTable.workspaceId, workspaceId), eq(chatTable.deleted, false), ilike(chatTable.title, pattern)))
+    .orderBy(desc(chatTable.updatedAt)).limit(limit);
+  return rows.map((r) => ({ chatId: r.chatId, title: r.title, updatedAt: r.updatedAt, snippet: r.title ?? '' }));
 }
 
-export async function getSession(db: Db, sessionId: string) {
-  const rows = await db.select(sessionSelect).from(chatSession)
-    .where(and(eq(chatSession.sessionId, sessionId), eq(chatSession.deleted, false)));
+export async function getChat(db: Db, chatId: string) {
+  const rows = await db.select(sessionSelect).from(chatTable)
+    .where(and(eq(chatTable.chatId, chatId), eq(chatTable.deleted, false)));
   return rows[0] ?? null;
 }
 
-export async function getMessages(db: Db, sessionId: string) {
+// The whole chat, or — with `after` — only what's newer than a seq the caller
+// already has. One call serves a cold open, a catch-up, and a reconnect gap.
+export async function getMessages(db: Db, chatId: string, after?: number) {
+  const conds = [eq(message.chatId, chatId)];
+  if (typeof after === 'number') conds.push(gt(message.seq, after));
   return db.select({
-    sessionId: message.sessionId, seq: message.seq, role: message.role, content: message.content,
-    reasoning: message.reasoning, toolCalls: message.toolCalls, toolCallId: message.toolCallId,
-    toolName: message.toolName, createdAt: message.createdAt,
-  }).from(message).where(eq(message.sessionId, sessionId)).orderBy(asc(message.seq));
+    chatId: message.chatId, seq: message.seq, entryId: message.entryId, role: message.role,
+    content: message.content, reasoning: message.reasoning, toolCalls: message.toolCalls,
+    toolCallId: message.toolCallId, toolName: message.toolName, createdAt: message.createdAt,
+  }).from(message).where(and(...conds)).orderBy(asc(message.seq));
 }
 
-export async function upsertSession(db: Db, row: {
-  sessionId: string; workspaceId: string; systemPrompt?: string | null; model?: string | null;
+export async function upsertChat(db: Db, row: {
+  chatId: string; workspaceId: string; systemPrompt?: string | null; model?: string | null;
   source?: string | null; sourceId?: string | null; machine?: string | null; now: number;
 }) {
-  await db.insert(chatSession)
+  await db.insert(chatTable)
     .values({
-      sessionId: row.sessionId, workspaceId: row.workspaceId, systemPrompt: row.systemPrompt ?? null,
+      chatId: row.chatId, workspaceId: row.workspaceId, systemPrompt: row.systemPrompt ?? null,
       model: row.model ?? null, source: row.source ?? 'desktop', sourceId: row.sourceId ?? null,
       machine: row.machine ?? null, createdAt: row.now, updatedAt: row.now,
     })
-    .onConflictDoUpdate({ target: chatSession.sessionId, set: { updatedAt: row.now } });
+    .onConflictDoUpdate({ target: chatTable.chatId, set: { updatedAt: row.now } });
 }
 
-export async function setSessionTitle(db: Db, sessionId: string, title: string) {
-  await db.update(chatSession).set({ title }).where(eq(chatSession.sessionId, sessionId));
+export async function setChatTitle(db: Db, chatId: string, title: string) {
+  await db.update(chatTable).set({ title }).where(eq(chatTable.chatId, chatId));
 }
-export async function setSessionStarred(db: Db, sessionId: string, starred: boolean) {
-  await db.update(chatSession).set({ starred }).where(eq(chatSession.sessionId, sessionId));
+export async function setChatStarred(db: Db, chatId: string, starred: boolean) {
+  await db.update(chatTable).set({ starred }).where(eq(chatTable.chatId, chatId));
 }
-export async function deleteSession(db: Db, sessionId: string) {
+export async function deleteChat(db: Db, chatId: string) {
   // Tombstone so a delete propagates to other machines on pull.
-  await db.update(chatSession).set({ deleted: true, updatedAt: now() }).where(eq(chatSession.sessionId, sessionId));
+  await db.update(chatTable).set({ deleted: true, updatedAt: now() }).where(eq(chatTable.chatId, chatId));
 }
 
 // Cross-client execution flag. `machine` non-null → running; null → stopped.
 // Cleared only AFTER the turn's rows + transcript are uploaded (caller ordering),
 // so running=false means "done and uploaded".
-export async function setRunning(db: Db, sessionId: string, machine: string | null) {
-  await db.update(chatSession)
+export async function setRunning(db: Db, chatId: string, machine: string | null) {
+  await db.update(chatTable)
     .set({ running: machine != null, runningMachine: machine, updatedAt: now() })
-    .where(eq(chatSession.sessionId, sessionId));
+    .where(eq(chatTable.chatId, chatId));
 }
 
-// Append new message rows. Idempotent by (session_id, seq). Touches updated_at.
-export async function persistMessages(db: Db, sessionId: string, rows: any[]): Promise<number> {
+// Append message rows, one per pi SessionEntry, as they happen.
+//
+// Idempotent by (session_id, entry_id) — a conflict means "pi already told us
+// about this exact message", so a retry or a bulk re-send is a true no-op. `seq`
+// is assigned HERE (max+1), never by the caller: it is a read cursor, not an
+// identity. The chat_session row is locked for the duration so two concurrent
+// appends to one chat can't pick the same seq.
+export async function appendMessages(db: Db, chatId: string, rows: any[]): Promise<number> {
   if (!Array.isArray(rows) || !rows.length) return 0;
   let inserted = 0;
   await db.transaction(async (c) => {
+    // Serialize per session (also proves the session exists before we insert).
+    const lock = await c.execute(sql`select 1 from chat where id = ${chatId} for update`);
+    if (!lock.rowCount) return;
+    const cur = await c.execute<{ max: number | null }>(
+      sql`select max(seq) as max from message where chat_id = ${chatId}`,
+    );
+    let next = (cur.rows[0]?.max ?? -1) + 1;
     for (const m of rows) {
       const res = await c.insert(message).values({
-        sessionId, seq: m.seq, role: m.role, content: m.content ?? null, reasoning: m.reasoning ?? null,
+        chatId, seq: next, entryId: m.entryId ?? null, parentId: m.parentId ?? null,
+        role: m.role, content: m.content ?? null, reasoning: m.reasoning ?? null,
         toolCalls: m.toolCalls ?? null, toolCallId: m.toolCallId ?? null, toolName: m.toolName ?? null,
         createdAt: m.createdAt ?? now(),
-      }).onConflictDoNothing({ target: [message.sessionId, message.seq] });
-      inserted += res.rowCount ?? 0;
+      }).onConflictDoNothing({ target: [message.chatId, message.entryId] });
+      const n = res.rowCount ?? 0;
+      inserted += n;
+      next += n; // a skipped duplicate must not burn a seq
     }
-    if (inserted) await c.update(chatSession).set({ updatedAt: now() }).where(eq(chatSession.sessionId, sessionId));
+    if (inserted) await c.update(chatTable).set({ updatedAt: now() }).where(eq(chatTable.chatId, chatId));
   });
   return inserted;
 }
 
-// ── Chat transcript (the pi JSONL, whole) ────────────────────────────────────
+// ── Chat transcript (pi's own session JSONL, whole) ──────────────────────────
+// Not what the UI renders — this is what lets another machine continue the chat.
 
-export async function putTranscript(db: Db, sessionId: string, content: string): Promise<void> {
-  await db.insert(chatTranscript)
-    .values({ sessionId, content, updatedAt: now() })
-    .onConflictDoUpdate({ target: chatTranscript.sessionId, set: { content, updatedAt: now() } });
+// Returns the new `transcript_updated_at`. Callers keep it as the version they
+// last wrote, so they can tell when ANOTHER machine has since advanced the chat.
+export async function putTranscript(db: Db, chatId: string, content: string): Promise<number> {
+  const stamp = now();
+  await db.update(chatTable)
+    .set({ transcript: content, transcriptUpdatedAt: stamp })
+    .where(eq(chatTable.chatId, chatId));
+  return stamp;
 }
 
-export async function getTranscript(db: Db, sessionId: string): Promise<string | null> {
-  const rows = await db.select({ content: chatTranscript.content }).from(chatTranscript).where(eq(chatTranscript.sessionId, sessionId));
+export async function getTranscript(db: Db, chatId: string): Promise<string | null> {
+  const rows = await db.select({ content: chatTable.transcript }).from(chatTable).where(eq(chatTable.chatId, chatId));
   return rows[0]?.content ?? null;
 }
 
 // ── Cron run history ─────────────────────────────────────────────────────────
 
-export async function recordCronRun(db: Db, workspaceId: string, jobName: string, o: { sessionId?: string | null; error?: string | null }) {
-  const vals = { workspaceId, jobName, lastRunAt: now(), lastError: o.error ?? null, lastSessionId: o.sessionId ?? null, updatedAt: now() };
+export async function recordCronRun(db: Db, workspaceId: string, jobName: string, o: { chatId?: string | null; error?: string | null }) {
+  const vals = { workspaceId, jobName, lastRunAt: now(), lastError: o.error ?? null, lastChatId: o.chatId ?? null, updatedAt: now() };
   await db.insert(cronState).values(vals).onConflictDoUpdate({
     target: [cronState.workspaceId, cronState.jobName],
-    set: { lastRunAt: vals.lastRunAt, lastError: vals.lastError, lastSessionId: vals.lastSessionId, updatedAt: vals.updatedAt },
+    set: { lastRunAt: vals.lastRunAt, lastError: vals.lastError, lastChatId: vals.lastChatId, updatedAt: vals.updatedAt },
   });
 }
 
@@ -405,8 +431,16 @@ export async function clearTelegramAccount(db: Db) {
   });
 }
 
-export async function setTelegramActiveSession(db: Db, sessionId: string | null) {
-  await db.update(telegramAccount).set({ activeSessionId: sessionId, updatedAt: now() }).where(eq(telegramAccount.id, 'default'));
+export async function setTelegramActiveChat(db: Db, chatId: string | null) {
+  await db.update(telegramAccount).set({ activeChatId: chatId, updatedAt: now() }).where(eq(telegramAccount.id, 'default'));
+}
+
+// Which workspace Telegram runs against. Switching always starts a fresh chat —
+// a chat belongs to one workspace, so carrying the old one over would be wrong.
+export async function setTelegramActiveWorkspace(db: Db, workspaceId: string) {
+  await db.update(telegramAccount)
+    .set({ activeWorkspaceId: workspaceId, activeChatId: null, updatedAt: now() })
+    .where(eq(telegramAccount.id, 'default'));
 }
 
 // Dedup: advance the high-water mark only if this update_id is newer. Returns
@@ -416,4 +450,78 @@ export async function markTelegramUpdate(db: Db, updateId: number): Promise<bool
     .set({ lastUpdateId: updateId })
     .where(and(eq(telegramAccount.id, 'default'), lt(telegramAccount.lastUpdateId, updateId)));
   return (res.rowCount ?? 0) > 0;
+}
+
+// ── Chat search (the agent's `search_chats` tool) ────────────────────────────
+// Postgres full-text over user+assistant text; tool output isn't indexed (see
+// init.sql). Ranked by ts_rank, optionally biased by time.
+
+const SEARCH_POOL = 50; // widened before dedupe, so N results are N distinct chats
+
+/** Messages `window` either side of `around` (or the tail when it's absent). */
+export async function readChatWindow(db: Db, chatId: string, around: number | undefined, window: number) {
+  const chat = await getChat(db, chatId);
+  if (!chat) return null;
+  const all = await getMessages(db, chatId);
+  if (!all.length) return { title: chat.title, updatedAt: chat.updatedAt, total: 0, first: 0, last: 0, messages: [] };
+  const centre = around == null
+    ? all.length - 1
+    : Math.max(0, all.findIndex((m) => m.seq >= around) === -1 ? all.length - 1 : all.findIndex((m) => m.seq >= around));
+  const from = Math.max(0, centre - window);
+  const slice = all.slice(from, Math.min(all.length, centre + window + 1));
+  return {
+    title: chat.title, updatedAt: chat.updatedAt, total: all.length,
+    first: slice[0]?.seq ?? 0, last: slice[slice.length - 1]?.seq ?? 0, messages: slice,
+  };
+}
+
+export async function recentChats(db: Db, workspaceId: string, limit: number, excludeChatId?: string) {
+  const rows = await listChats(db, workspaceId, { limit: limit + 1 });
+  return Promise.all(rows.filter((r) => r.chatId !== excludeChatId).slice(0, limit).map(async (r) => ({
+    chatId: r.chatId, title: r.title, updatedAt: r.updatedAt,
+    total: (await getMessages(db, r.chatId)).length,
+  })));
+}
+
+export async function searchChatMessages(
+  db: Db, workspaceId: string, query: string, limit: number,
+  sort?: 'newest' | 'oldest', excludeChatId?: string,
+) {
+  // websearch_to_tsquery takes what a person would actually type (quoted
+  // phrases, OR, -word) and never throws on odd punctuation the way
+  // to_tsquery does — so a user's words can be passed through as-is.
+  const order = sort === 'newest' ? sql`c.updated_at DESC, rank DESC`
+    : sort === 'oldest' ? sql`c.updated_at ASC, rank DESC`
+    : sql`rank DESC`;
+  const hits = await db.execute<{ chat_id: string; seq: number }>(sql`
+    SELECT m.chat_id, m.seq,
+           ts_rank(m.search_text, websearch_to_tsquery('english', ${query})) AS rank
+      FROM message m JOIN chat c ON c.id = m.chat_id
+     WHERE c.workspace_id = ${workspaceId} AND c.deleted = false
+       AND m.search_text @@ websearch_to_tsquery('english', ${query})
+     ORDER BY ${order}
+     LIMIT ${SEARCH_POOL}
+  `);
+
+  // One result per CONVERSATION — eight hits in one chat is one answer, not eight.
+  const seen = new Map<string, number>();
+  for (const h of hits.rows) {
+    if (h.chat_id === excludeChatId || seen.has(h.chat_id)) continue;
+    seen.set(h.chat_id, h.seq);
+    if (seen.size >= limit) break;
+  }
+
+  return Promise.all([...seen].map(async ([chatId, matchSeq]) => {
+    const chat = await getChat(db, chatId);
+    const all = await getMessages(db, chatId);
+    const at = Math.max(0, all.findIndex((m) => m.seq === matchSeq));
+    // The bookends are what make a mid-conversation hit legible: the opening
+    // says what the chat was about, the closing how it ended.
+    return {
+      chatId, title: chat?.title, updatedAt: chat?.updatedAt, total: all.length, matchSeq,
+      opening: all.slice(0, 3),
+      around: all.slice(Math.max(0, at - 5), at + 6),
+      closing: all.length > 8 ? all.slice(-3) : [],
+    };
+  }));
 }

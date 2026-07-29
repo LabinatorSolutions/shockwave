@@ -43,10 +43,26 @@ export class TelegramClient {
     return json.result;
   }
   deleteWebhook() { return this.call('deleteWebhook', { drop_pending_updates: true }); }
-  sendMessage(chatId: number, text: string) { return this.call('sendMessage', { chat_id: chatId, text }); }
+  sendMessage(chatId: number, text: string, opts: { replyToMessageId?: number } = {}) {
+    return this.call('sendMessage', {
+      chat_id: chatId, text,
+      ...(opts.replyToMessageId ? { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } } : {}),
+    });
+  }
   editMessageText(chatId: number, messageId: number, text: string) { return this.call('editMessageText', { chat_id: chatId, message_id: messageId, text }); }
   sendChatAction(chatId: number, action = 'typing') { return this.call('sendChatAction', { chat_id: chatId, action }); }
   setMyCommands(commands: Array<{ command: string; description: string }>) { return this.call('setMyCommands', { commands }); }
+
+  // Fetch an inbound file (voice note, document, photo). Telegram's getFile caps
+  // at 20 MB — callers check the declared size first so an oversize file is
+  // declined with a clear message instead of failing mid-download.
+  async downloadFile(fileId: string): Promise<Buffer> {
+    const file = await this.call('getFile', { file_id: fileId });
+    if (!file?.file_path) throw new Error('Telegram did not return a file path.');
+    const res = await fetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
+    if (!res.ok) throw new Error(`downloading the file failed (HTTP ${res.status}).`);
+    return Buffer.from(await res.arrayBuffer());
+  }
 }
 
 const LIMIT = 4096; // Telegram's per-message ceiling (UTF-16 units == JS .length)

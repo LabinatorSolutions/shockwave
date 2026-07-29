@@ -58,9 +58,11 @@ The canonical names. Use these in UI strings, comments, docs, agent prompts — 
 - **Workspace** — a GitHub repo plus its checkout on this machine. Everything inside the folder (files, images, other assets) is part of the workspace. A workspace cannot exist without a repo: the companion's `workspace.repo_owner`/`repo_name` columns are `NOT NULL` (`api/src/schema.ts`, `api/init.sql`), and the two setup flows both clone. The repo *identity* lives on the companion; each machine's checkout path + sync toggle are machine-local (`local-settings.json`). Code sometimes still says "vault" (Obsidian-inherited); new code uses "workspace".
 - **Wiki-link** — the `[[Some File]]` syntax linking one file to another by basename. The term comes from MediaWiki/Obsidian/etc. Variants: `[[File#Heading]]`, `[[File|Display]]`. Resolution is workspace-wide, case-insensitive, basename-only — never include a folder path. The parser + index live in `src/renderer/linkIndex.js` (mirrored in main at `src/main/linkParser.js`).
 - **External link** — the `[label](https://…)` markdown form. Always means an off-workspace URL. Opens in the system browser. Not to be confused with wiki-links.
+- **Chat** — one conversation with the agent. The user-facing noun, and the name used in code, in the database (`chat` / `message.chat_id`), and in the IPC channels (`chat:list`, `chat:open`, …). **Never call a chat a "session".**
+- **Session** — reserved for **pi's own session**: its `SessionManager`, its `AgentSession`, and the JSONL session file that is its working memory for a chat. Different thing, different lifetime — pi's session is rebuilt from the stored transcript whenever a chat moves between machines.
 - **Backlink** — a wiki-link that points *at* a given file from elsewhere. The link index maintains backlinks per file; the backlinks panel under the editor reads from that.
 
-Avoid: "page", "note", "document" (for `.md` files), "vault" (in new code/copy), "internal link" (call it a wiki-link).
+Avoid: "page", "note", "document" (for `.md` files), "vault" (in new code/copy), "internal link" (call it a wiki-link), "session" (for a chat).
 
 ## Invariants when touching files/links
 

@@ -11,11 +11,11 @@ import * as parcelWatcher from '@parcel/watcher';
 import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
-import { initDesktopAgent, agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
+import { initDesktopAgent, agentSend, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats, listThinkingLevels } from './codingAgent.js';
 // Cron execution lives entirely on the companion now; the desktop only VIEWS the
 // schedule (from local cron.json + companion run-status) and triggers a manual run.
 import { cronRead, cronRunNow } from './api/cron.js';
-import { listSessions, listStarred, searchSessions, getMessages, openSession as openSessionApi, deleteSession, setSessionTitle, setSessionStarred, postEvent } from './api/chats.js';
+import { listChats, listStarred, searchChats, getMessages, openChat as openChatApi, deleteChat, setChatTitle, setChatStarred, postEvent } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
@@ -1401,14 +1401,14 @@ ipcMain.handle('sync:resetToRemote', async (_evt, workspacePath) => {
 // ---- Coding agent (pi) ----
 //
 // One live pi AgentSession per chat (see codingAgent.ts). The renderer sends
-// `agent:send` with the chat's sessionId (a renderer-minted UUID for new chats)
+// `agent:send` with the chat's chatId (a renderer-minted UUID for new chats)
 // plus the prompt text; main reads the current workspace and coding-agent
 // settings, lazily creates or reuses that chat's session, then forwards every
-// pi event back via `agent:event` — each stamped with its sessionId so the
+// pi event back via `agent:event` — each stamped with its chatId so the
 // renderer can route it to the right chat. Sends to a chat that is mid-turn
 // are steered into the running turn by codingAgent.ts.
 
-ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
+ipcMain.handle('agent:send', async (evt, { chatId, text, images }) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
   if (!win) return;
   const emit = (channel, payload) => {
@@ -1428,7 +1428,7 @@ ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
 
     await agentSend(
       {
-        sessionId,
+        chatId,
         text,
         images,
         workspaceId: ws?.id ?? '',
@@ -1443,16 +1443,16 @@ ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
       },
       // Desktop emit routes to BOTH sinks: the renderer (IPC) and the companion
       // live feed, so other clients watching this chat see the turn stream.
-      (event) => { emit('agent:event', event); postEvent(event.sessionId, event).catch(() => {}); },
+      (event) => { emit('agent:event', event); postEvent(event.chatId, event).catch(() => {}); },
     );
   } catch (err: any) {
-    emit('agent:error', { sessionId, message: err?.message ?? String(err) });
+    emit('agent:error', { chatId, message: err?.message ?? String(err) });
   }
 });
 
 // Chats with a turn in flight — the renderer re-seeds its running set from
 // this after a window reload.
-ipcMain.handle('agent:runningSessions', () => agentRunningSessions());
+ipcMain.handle('agent:runningChats', () => agentRunningChats());
 
 // ---- Skills (built-in = bundled, app-global; uploaded = per-workspace) ----
 // `skills:list` returns both sets for the given workspace; built-in toggle state
@@ -1492,8 +1492,8 @@ ipcMain.handle('skills:remove', async (_evt, { workspacePath, folderName }) => {
   return removeWorkspaceSkill(workspacePath, folderName);
 });
 
-ipcMain.handle('agent:abort', async (_evt, sessionId) => {
-  try { await agentAbort(sessionId); } catch { /* abort is best-effort */ }
+ipcMain.handle('agent:abort', async (_evt, chatId) => {
+  try { await agentAbort(chatId); } catch { /* abort is best-effort */ }
 });
 
 // ---- Chat history (SQLite: display + search; pi's JSONL: continuation) ----
@@ -1510,10 +1510,10 @@ function activeWorkspaceId(): string | null {
 }
 
 // Recent chats for the picker (keyset paginated on updatedAt; pass `before`).
-ipcMain.handle('chat:listSessions', async (_evt, opts = {}) => {
+ipcMain.handle('chat:list', async (_evt, opts = {}) => {
   const ws = activeWorkspaceId();
   if (!ws) return [];
-  return listSessions(ws, opts);
+  return listChats(ws, opts);
 });
 
 // Starred chats (the pinned section at the top of the picker).
@@ -1524,63 +1524,104 @@ ipcMain.handle('chat:listStarred', async () => {
 });
 
 // Toggle a chat's starred flag.
-ipcMain.handle('chat:setStarred', async (_evt, { sessionId, starred }) => {
-  if (sessionId) await setSessionStarred(sessionId, !!starred);
+ipcMain.handle('chat:setStarred', async (_evt, { chatId, starred }) => {
+  if (chatId) await setChatStarred(chatId, !!starred);
 });
 
 // Cross-chat title search.
-ipcMain.handle('chat:searchSessions', async (_evt, { query, limit } = {}) => {
+ipcMain.handle('chat:search', async (_evt, { query, limit } = {}) => {
   const ws = activeWorkspaceId();
   if (!ws || !query) return [];
-  return searchSessions(ws, query, { limit });
+  return searchChats(ws, query, { limit });
 });
 
 // Messages for one chat — the renderer rebuilds the transcript from these.
-ipcMain.handle('chat:getMessages', async (_evt, sessionId) => {
-  if (!sessionId) return [];
-  return getMessages(sessionId);
+ipcMain.handle('chat:getMessages', async (_evt, chatId) => {
+  if (!chatId) return [];
+  return getMessages(chatId);
 });
 
 // Open a saved chat: return its row + messages so the renderer can hydrate the
 // UI. No main-side session work — the chat's session boots on the next send.
-ipcMain.handle('chat:openSession', async (_evt, sessionId) => {
-  const { session, messages } = await openSessionApi(sessionId);
-  if (!session) return { messages: [] };
-  return { session, messages: messages ?? [] };
+//
+// `workspacePath` is resolved here because the renderer keys chats by local PATH
+// while the row only carries the shared workspace ID. A chat discovered from the
+// live feed (a Telegram run the renderer has never seen) has no other way to
+// learn which workspace it belongs to.
+ipcMain.handle('chat:open', async (_evt, chatId) => {
+  const { chat, messages } = await openChatApi(chatId);
+  if (!chat) return { messages: [] };
+  const local = readLocalSettings().workspaceLocal?.[chat.workspaceId];
+  return { chat, messages: messages ?? [], workspacePath: local?.path ?? null };
 });
 
-ipcMain.handle('chat:deleteSession', async (_evt, sessionId) => {
-  if (!sessionId) return;
+ipcMain.handle('chat:delete', async (_evt, chatId) => {
+  if (!chatId) return;
   // Abort + drop any live session first so a running turn can't keep writing.
-  try { await agentDisposeSession(sessionId); } catch { /* best-effort */ }
-  await deleteSession(sessionId);
+  try { await agentDisposeChat(chatId); } catch { /* best-effort */ }
+  await deleteChat(chatId);
 });
 
-ipcMain.handle('chat:renameSession', async (_evt, { sessionId, title }) => {
-  if (sessionId && typeof title === 'string') await setSessionTitle(sessionId, title.slice(0, 100));
+ipcMain.handle('chat:rename', async (_evt, { chatId, title }) => {
+  if (chatId && typeof title === 'string') await setChatTitle(chatId, title.slice(0, 100));
 });
 
 // This machine's name — used by the renderer to tell "running on THIS machine"
 // (my turn, composer stays live) from "running elsewhere" (freeze).
 ipcMain.handle('app:machineId', () => os.hostname());
 
-// Live feed subscription (spectator side). Opens the companion's SSE stream for
-// a chat running on ANOTHER machine and forwards each event into the same
-// `agent:event` channel the renderer already renders — so a remote turn draws
-// identically to a local one. One stream per session.
-const chatWatchers = new Map<string, () => void>();
-ipcMain.handle('chat:watchStart', (evt, sessionId) => {
-  if (!sessionId || chatWatchers.has(sessionId)) return;
-  const win = BrowserWindow.fromWebContents(evt.sender);
-  const abort = api.stream(`/chat/${encodeURIComponent(sessionId)}/stream`, (e) => {
-    if (win && !win.isDestroyed()) win.webContents.send('agent:event', { ...e, sessionId });
-  });
-  chatWatchers.set(sessionId, abort);
-});
-ipcMain.handle('chat:watchStop', (_evt, sessionId) => {
-  const abort = chatWatchers.get(sessionId);
-  if (abort) { abort(); chatWatchers.delete(sessionId); }
-});
+// ── Live feed (spectator side) ───────────────────────────────────────────────
+//
+// ONE stream to the companion, opened at startup and held for the life of the
+// app, carrying every chat's events — Telegram, cron, and the same chat running
+// on another machine. It forwards into the same `agent:event` channel a local
+// turn uses, so a remote turn draws identically.
+//
+// It is always on by design. This used to be a per-chat subscription started
+// from the renderer when you clicked a chat that happened to be running
+// elsewhere at that instant — which meant a Telegram turn was never watched, and
+// a chat you already had open could never start listening at all.
+let feedAbort: (() => void) | null = null;
+let feedRetry: NodeJS.Timeout | null = null;
+let feedBackoff = 1000;
+
+function startLiveFeed() {
+  if (feedAbort) return;
+  let opened = false;
+  const done = () => {
+    feedAbort = null;
+    // Reconnect forever. Anything that happened while we were down was missed,
+    // so the renderer re-reads its loaded chats once we're back.
+    if (feedRetry) clearTimeout(feedRetry);
+    feedBackoff = opened ? 1000 : Math.min(feedBackoff * 2, 30_000);
+    feedRetry = setTimeout(startLiveFeed, feedBackoff);
+  };
+  const announceReconnect = () => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('chat:feedResync');
+    }
+  };
+  try {
+    feedAbort = api.stream('/events', (e) => {
+      if (!opened) { opened = true; announceReconnect(); }
+      feedBackoff = 1000;
+      if (!e?.chatId) return;
+      // Our own runs already reach the renderer over IPC; the copy coming back
+      // down the feed (we POST every event up) would double-render.
+      if (agentRunningChats().includes(e.chatId)) return;
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('agent:event', e);
+      }
+    }, done);
+  } catch {
+    done(); // not configured yet — retry with backoff
+  }
+}
+
+function stopLiveFeed() {
+  if (feedRetry) { clearTimeout(feedRetry); feedRetry = null; }
+  if (feedAbort) { feedAbort(); feedAbort = null; }
+}
 
 // Provider + model lookups for the Settings UI. Pi-ai's `getProviders()` is
 // the source of truth; we intersect with this allowlist so OAuth /
@@ -1931,7 +1972,7 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
 
 ipcMain.handle('fs:watchStop', stopWatcher);
 
-app.on('before-quit', () => { stopWatcher(); agentDisposeAll().catch(() => {}); });
+app.on('before-quit', () => { stopWatcher(); stopLiveFeed(); agentDisposeAll().catch(() => {}); });
 
 // Drain the sync engine before the process exits — let any in-flight git
 // push/pull finish so we don't leave a partial commit on the remote.
@@ -2069,6 +2110,9 @@ app.whenReady().then(async () => {
   }
   // Point the models.dev catalog cache at userData (its offline fallback file).
   initModelCatalog(app.getPath('userData'));
+  // Hold the companion's live feed open for the whole session, so a Telegram or
+  // cron turn streams into the UI whether or not that chat is on screen.
+  startLiveFeed();
   // One-time carry-over of a pre-sqlite `settings.json` into the `setting`
   // table. No-op once the table has rows. Must precede every settings read
   // below, or the app would boot on defaults and then persist over the import.

@@ -139,8 +139,8 @@ export interface SyncStatus {
 }
 
 /** A saved chat (row of `chat_session`). */
-export interface ChatSession {
-  sessionId: string;
+export interface Chat {
+  chatId: string;
   workspace: string;
   jsonlPath: string;
   title: string | null;
@@ -160,9 +160,11 @@ export interface ChatSession {
  *  row (`toolCalls` JSON); each tool RESULT is a `role:'tool'` row keyed by
  *  `toolCallId`. */
 export interface ChatMessage {
-  id: number;
-  sessionId: string;
+  chatId: string;
+  /** Ordering + read cursor, assigned by the server on append. NOT an identity. */
   seq: number;
+  /** pi's own SessionEntry id — the row's identity. Null on pre-existing rows. */
+  entryId: string | null;
   role: 'user' | 'assistant' | 'tool' | string;
   content: string | null;
   reasoning: string | null;
@@ -174,7 +176,7 @@ export interface ChatMessage {
 
 /** A search result: the matching chat + a highlighted snippet. */
 export interface ChatSearchHit {
-  sessionId: string;
+  chatId: string;
   title: string | null;
   updatedAt: number;
   snippet: string;
@@ -254,7 +256,7 @@ export interface ShockwaveApi {
     /** Health-check a URL + key (falls back to the stored key when omitted). */
     apiTest(args: { url: string; apiKey?: string }): Promise<{ ok: boolean; error?: string }>;
     /** Telegram connection status (from the companion). */
-    telegramStatus(): Promise<{ ok: boolean; connected?: boolean; botUsername?: string | null; activeSessionId?: string | null; error?: string }>;
+    telegramStatus(): Promise<{ ok: boolean; connected?: boolean; botUsername?: string | null; activeChatId?: string | null; error?: string }>;
     /** Connect a Telegram bot — the companion validates the token + registers the webhook. */
     telegramConnect(opts: { botToken: string; authorizedTgUserId: number }): Promise<{ ok: boolean; botUsername?: string | null; webhookUrl?: string; error?: string }>;
     /** Disconnect Telegram (companion deletes the webhook + stored token). */
@@ -284,36 +286,37 @@ export interface ShockwaveApi {
   };
 
   agent: {
-    /** Send to a chat. sessionId is renderer-minted (UUID) for new chats.
+    /** Send to a chat. chatId is renderer-minted (UUID) for new chats.
      *  Mid-turn sends are steered into the running turn. */
-    send(opts: { sessionId: string; text: string; images?: Array<{ type: 'image'; source: unknown }> }): Promise<void>;
-    abort(sessionId: string): Promise<void>;
+    send(opts: { chatId: string; text: string; images?: Array<{ type: 'image'; source: unknown }> }): Promise<void>;
+    abort(chatId: string): Promise<void>;
     /** Chats with a turn in flight (re-seed the running set after reload). */
-    runningSessions(): Promise<string[]>;
+    runningChats(): Promise<string[]>;
     listProviders(): Promise<Array<{ slug: string; label: string }>>;
     listModels(provider: string): Promise<Array<{ id: string; label: string }>>;
     listThinkingLevels(opts: { provider: string; model: string }): Promise<string[]>;
     validateConnection(opts: { baseUrl: string; apiKey?: string }): Promise<{ ok: boolean; models?: string[]; error?: string }>;
-    /** Every event is stamped with the sessionId of the chat it belongs to. */
+    /** Every event is stamped with the chatId of the chat it belongs to. */
     onEvent(cb: (evt: unknown) => void): Unsubscribe;
-    onError(cb: (payload: { sessionId?: string; message: string }) => void): Unsubscribe;
+    onError(cb: (payload: { chatId?: string; message: string }) => void): Unsubscribe;
     onOpenFile(cb: (payload: { path: string }) => void): Unsubscribe;
   };
 
   chat: {
-    listSessions(opts?: { limit?: number; before?: number }): Promise<ChatSession[]>;
-    listStarred(): Promise<ChatSession[]>;
-    setStarred(opts: { sessionId: string; starred: boolean }): Promise<void>;
-    searchSessions(opts: { query: string; limit?: number }): Promise<ChatSearchHit[]>;
-    getMessages(sessionId: string): Promise<ChatMessage[]>;
-    openSession(sessionId: string): Promise<{ session?: ChatSession; messages: ChatMessage[] }>;
-    deleteSession(sessionId: string): Promise<void>;
-    renameSession(opts: { sessionId: string; title: string }): Promise<void>;
-    /** Watch a chat running on another machine — its live events arrive via
-     *  agent.onEvent, stamped with this sessionId. */
-    watchStart(sessionId: string): Promise<void>;
-    /** Stop watching a chat's live feed. */
-    watchStop(sessionId: string): Promise<void>;
+    list(opts?: { limit?: number; before?: number }): Promise<Chat[]>;
+    listStarred(): Promise<Chat[]>;
+    setStarred(opts: { chatId: string; starred: boolean }): Promise<void>;
+    searchChats(opts: { query: string; limit?: number }): Promise<ChatSearchHit[]>;
+    getMessages(chatId: string): Promise<ChatMessage[]>;
+    /** The chat's row + its stored messages, plus this machine's local path for
+     *  the chat's workspace (the row carries only the shared workspace id, and a
+     *  chat discovered from the live feed has no other way to learn it). */
+    open(chatId: string): Promise<{ chat?: Chat; messages: ChatMessage[]; workspacePath?: string | null }>;
+    deleteChat(chatId: string): Promise<void>;
+    rename(opts: { chatId: string; title: string }): Promise<void>;
+    /** The live feed reconnected after a drop — re-read anything loaded, since
+     *  events during the outage were missed. Returns an unsubscribe fn. */
+    onFeedResync(cb: () => void): () => void;
   };
 
   voice: {
@@ -368,7 +371,7 @@ export interface ShockwaveApi {
     /** Compose the schedule view: jobs from the local cron.json + run status from the companion. */
     read(): Promise<CronView>;
     /** Trigger a manual run on the companion. */
-    runNow(name: string): Promise<{ ok?: boolean; sessionId?: string; error?: string }>;
+    runNow(name: string): Promise<{ ok?: boolean; chatId?: string; error?: string }>;
     onState(cb: (view: CronView) => void): Unsubscribe;
     onChatsChanged(cb: () => void): Unsubscribe;
   };
@@ -383,7 +386,7 @@ export interface CronJobView {
   nextRunAt: number | null;
   lastRunAt: number | null;
   lastError: string | null;
-  lastSessionId: string | null;
+  lastChatId: string | null;
 }
 
 export interface CronView {

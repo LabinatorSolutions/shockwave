@@ -120,7 +120,12 @@ export default function SettingsModal({
 
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent className="flex h-[620px] max-h-[85vh] w-[780px] max-w-[92vw] gap-0 overflow-hidden p-0 sm:max-w-[780px]">
+      {/* Height is set by the NAV, not the content pane: 17 rows (14 items + 3
+          group headers) measure ~625px, so 620 clipped it by a hair and the left
+          rail scrolled. 720 fits the rail outright with room for a few more
+          sections. The rail keeps overflow-y-auto for short viewports, where
+          max-h-[85vh] wins regardless. */}
+      <DialogContent className="flex h-[720px] max-h-[85vh] w-[780px] max-w-[92vw] gap-0 overflow-hidden p-0 sm:max-w-[780px]">
         <DialogHeader className="sr-only">
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>Application settings</DialogDescription>

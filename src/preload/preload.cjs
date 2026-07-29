@@ -301,19 +301,19 @@ contextBridge.exposeInMainWorld('api', {
   // ---- Coding agent (pi) --------------------------------------------------
 
   agent: {
-    /** Send a prompt to a chat's agent. `sessionId` is the chat's id — a
+    /** Send a prompt to a chat's agent. `chatId` is the chat's id — a
      *  renderer-minted UUID for a brand-new chat, or the saved id for an
      *  existing one. If that chat is mid-turn, the message is steered into the
      *  running turn. Resolves when the turn ends (steers resolve on queue).
      *  Images are pi `ImageContent[]` shapes (data URLs decoded by main).
-     *  @param {{ sessionId: string, text: string, images?: Array<{ type:'image', source: any }> }} opts
+     *  @param {{ chatId: string, text: string, images?: Array<{ type:'image', source: any }> }} opts
      *  @returns {Promise<void>} */
     send: (opts) => ipcRenderer.invoke('agent:send', opts),
-    /** Abort the given chat's running turn. @param {string} sessionId @returns {Promise<void>} */
-    abort: (sessionId) => ipcRenderer.invoke('agent:abort', sessionId),
+    /** Abort the given chat's running turn. @param {string} chatId @returns {Promise<void>} */
+    abort: (chatId) => ipcRenderer.invoke('agent:abort', chatId),
     /** Chats with a turn currently in flight (re-seed after window reload).
      *  @returns {Promise<string[]>} */
-    runningSessions: () => ipcRenderer.invoke('agent:runningSessions'),
+    runningChats: () => ipcRenderer.invoke('agent:runningChats'),
     /** @returns {Promise<Array<{ slug: string, label: string }>>} Available LLM providers. */
     listProviders: () => ipcRenderer.invoke('agent:listProviders'),
     /** @param {string} provider @returns {Promise<Array<{ id: string, label: string }>>} Models for that provider. */
@@ -334,7 +334,7 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('agent:event', listener);
     },
     /** Fires when the agent fails to start (no key, bad model, etc.).
-     *  @param {(payload: { sessionId?: string, message: string }) => void} cb @returns {Unsubscribe} */
+     *  @param {(payload: { chatId?: string, message: string }) => void} cb @returns {Unsubscribe} */
     onError: (cb) => {
       const listener = (_evt, payload) => cb(payload);
       ipcRenderer.on('agent:error', listener);
@@ -358,30 +358,35 @@ contextBridge.exposeInMainWorld('api', {
     /** Recent chats for the active workspace. Keyset-paginate via `before`
      *  (pass the last row's updatedAt). @param {{ limit?: number, before?: number }} [opts]
      *  @returns {Promise<Array<any>>} */
-    listSessions: (opts) => ipcRenderer.invoke('chat:listSessions', opts),
+    list: (opts) => ipcRenderer.invoke('chat:list', opts),
     /** Starred chats (pinned section at the top of the picker). @returns {Promise<Array<any>>} */
     listStarred: () => ipcRenderer.invoke('chat:listStarred'),
-    /** Star/unstar a chat. @param {{ sessionId: string, starred: boolean }} opts @returns {Promise<void>} */
+    /** Star/unstar a chat. @param {{ chatId: string, starred: boolean }} opts @returns {Promise<void>} */
     setStarred: (opts) => ipcRenderer.invoke('chat:setStarred', opts),
     /** Full-text search across the workspace's chats.
      *  @param {{ query: string, limit?: number }} opts @returns {Promise<Array<any>>} */
-    searchSessions: (opts) => ipcRenderer.invoke('chat:searchSessions', opts),
+    search: (opts) => ipcRenderer.invoke('chat:search', opts),
     /** Messages for one chat, ordered — the renderer rebuilds the transcript.
-     *  @param {string} sessionId @returns {Promise<Array<any>>} */
-    getMessages: (sessionId) => ipcRenderer.invoke('chat:getMessages', sessionId),
+     *  @param {string} chatId @returns {Promise<Array<any>>} */
+    getMessages: (chatId) => ipcRenderer.invoke('chat:getMessages', chatId),
     /** Open a saved chat (row + messages for hydration; the session itself
-     *  boots lazily on the next send). @param {string} sessionId
+     *  boots lazily on the next send). @param {string} chatId
      *  @returns {Promise<{ session?: any, messages: Array<any> }>} */
-    openSession: (sessionId) => ipcRenderer.invoke('chat:openSession', sessionId),
-    /** Delete a chat (cascades its messages). @param {string} sessionId @returns {Promise<void>} */
-    deleteSession: (sessionId) => ipcRenderer.invoke('chat:deleteSession', sessionId),
-    /** Rename a chat. @param {{ sessionId: string, title: string }} opts @returns {Promise<void>} */
-    renameSession: (opts) => ipcRenderer.invoke('chat:renameSession', opts),
+    open: (chatId) => ipcRenderer.invoke('chat:open', chatId),
+    /** Delete a chat (cascades its messages). @param {string} chatId @returns {Promise<void>} */
+    deleteChat: (chatId) => ipcRenderer.invoke('chat:delete', chatId),
+    /** Rename a chat. @param {{ chatId: string, title: string }} opts @returns {Promise<void>} */
+    rename: (opts) => ipcRenderer.invoke('chat:rename', opts),
     /** Watch a chat's live feed (running on another machine). Its events arrive
-     *  via agent.onEvent, stamped with this sessionId. @param {string} sessionId */
-    watchStart: (sessionId) => ipcRenderer.invoke('chat:watchStart', sessionId),
-    /** Stop watching a chat's live feed. @param {string} sessionId */
-    watchStop: (sessionId) => ipcRenderer.invoke('chat:watchStop', sessionId),
+     *  via agent.onEvent, stamped with this chatId. @param {string} chatId */
+    /** Stop watching a chat's live feed. @param {string} chatId */
+    // The live feed reconnected after a drop — anything that happened while it
+    // was down was missed, so the renderer re-reads its loaded chats.
+    onFeedResync: (cb) => {
+      const listener = () => cb();
+      ipcRenderer.on('chat:feedResync', listener);
+      return () => ipcRenderer.removeListener('chat:feedResync', listener);
+    },
   },
 
   // ---- Voice transcription (AssemblyAI streaming) ------------------------

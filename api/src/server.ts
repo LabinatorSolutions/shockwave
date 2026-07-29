@@ -15,8 +15,9 @@ import { runCronJob } from './cronRun.js';
 import { initScheduler, nextRuns } from './scheduler.js';
 import { mintToken } from './oauth.js';
 import { initSweeper } from './sweeper.js';
-import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus } from './telegram/webhook.js';
+import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus, syncCommands as tgSyncCommands } from './telegram/webhook.js';
 import { detectPublicIp, ensureSelfSignedCert } from './telegram/selfSigned.js';
+import { sendTelegramMessage } from './telegram/sendTool.js';
 
 const log = pino({ base: undefined });
 
@@ -87,19 +88,21 @@ app.get('/agent-secret/:name/token', handle((req) => mintToken(db, masterKey, re
 app.post('/oauth/:name', handle((req) => store.patchOAuth(db, masterKey, req.params.name, req.body)));
 
 // ── Chats ────────────────────────────────────────────────────────────────────
-app.get('/chats', handle((req) => store.listSessions(db, String(req.query.workspaceId), {
+app.get('/chats', handle((req) => store.listChats(db, String(req.query.workspaceId), {
   limit: req.query.limit ? Number(req.query.limit) : undefined,
   before: req.query.before ? Number(req.query.before) : undefined,
 })));
 app.get('/chats/starred', handle((req) => store.listStarred(db, String(req.query.workspaceId))));
-app.get('/chats/search', handle((req) => store.searchSessions(db, String(req.query.workspaceId), String(req.query.q ?? ''), { limit: req.query.limit ? Number(req.query.limit) : undefined })));
-app.get('/chat/:id', handle(async (req) => ({ session: await store.getSession(db, req.params.id), messages: await store.getMessages(db, req.params.id) })));
-app.get('/chat/:id/messages', handle((req) => store.getMessages(db, req.params.id)));
-app.post('/chat', handle((req) => store.upsertSession(db, { ...req.body, now: Date.now() })));
-app.post('/chat/:id/messages', handle((req) => store.persistMessages(db, req.params.id, req.body)));
-app.patch('/chat/:id/title', handle((req) => store.setSessionTitle(db, req.params.id, req.body?.title ?? '')));
-app.patch('/chat/:id/starred', handle((req) => store.setSessionStarred(db, req.params.id, !!req.body?.starred)));
-app.delete('/chat/:id', handle((req) => store.deleteSession(db, req.params.id)));
+app.get('/chats/search', handle((req) => store.searchChats(db, String(req.query.workspaceId), String(req.query.q ?? ''), { limit: req.query.limit ? Number(req.query.limit) : undefined })));
+app.get('/chat/:id', handle(async (req) => ({ chat: await store.getChat(db, req.params.id), messages: await store.getMessages(db, req.params.id) })));
+// `?after=<seq>` returns only what's newer — the one read that serves a cold
+// open, a catch-up, and a reconnect gap.
+app.get('/chat/:id/messages', handle((req) => store.getMessages(db, req.params.id, req.query.after != null ? Number(req.query.after) : undefined)));
+app.post('/chat', handle((req) => store.upsertChat(db, { ...req.body, now: Date.now() })));
+app.post('/chat/:id/messages', handle((req) => store.appendMessages(db, req.params.id, req.body)));
+app.patch('/chat/:id/title', handle((req) => store.setChatTitle(db, req.params.id, req.body?.title ?? '')));
+app.patch('/chat/:id/starred', handle((req) => store.setChatStarred(db, req.params.id, !!req.body?.starred)));
+app.delete('/chat/:id', handle((req) => store.deleteChat(db, req.params.id)));
 // Transcript JSONL (whole). Sent as { content }.
 app.get('/chat/:id/transcript', handle((req) => store.getTranscript(db, req.params.id)));
 app.patch('/chat/:id/transcript', handle((req) => store.putTranscript(db, req.params.id, String(req.body?.content ?? ''))));
@@ -112,7 +115,10 @@ app.patch('/chat/:id/running', handle((req) => store.setRunning(db, req.params.i
 // A spectator holds an SSE connection on /stream; the desktop producer POSTs to
 // /events. Server-side cron runs publish to the same feed in-process.
 
-app.get('/chat/:id/stream', (req, res) => {
+// ONE stream for everything. A client opens this once at startup and holds it,
+// so it hears about chats it doesn't know exist yet (Telegram, cron, another
+// machine) — which a per-chat subscription structurally cannot do.
+app.get('/events', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -120,26 +126,46 @@ app.get('/chat/:id/stream', (req, res) => {
     'X-Accel-Buffering': 'no',
   });
   res.write(': connected\n\n'); // open the stream immediately
-  const unsubscribe = feed.subscribe(req.params.id, res);
+  const unsubscribe = feed.subscribe(res);
   const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25_000);
   req.on('close', () => { clearInterval(ping); unsubscribe(); });
 });
 
-// Executing client pushes one pi event; fan it out to that session's spectators.
+// A client executing a turn locally pushes its pi events here so every OTHER
+// client sees them live (the server can't emit for a run it isn't hosting).
 app.post('/chat/:id/events', (req, res) => {
-  const n = feed.publish(req.params.id, req.body);
+  const n = feed.publish({ ...(req.body ?? {}), chatId: req.params.id });
   res.json({ result: { ok: true, subscribers: n } });
 });
 
+// Reads behind the agent's `search_chats` tool. The tool itself is ONE
+// definition in agent-core; the companion's agent calls the store directly and
+// the desktop's agent reaches these — same split as every other chat read.
+app.get('/chats/fulltext', handle((req) => store.searchChatMessages(
+  db, String(req.query.workspaceId), String(req.query.q ?? ''),
+  Number(req.query.limit ?? 3),
+  req.query.sort === 'newest' || req.query.sort === 'oldest' ? req.query.sort : undefined,
+  req.query.exclude ? String(req.query.exclude) : undefined,
+)));
+app.get('/chat/:id/window', handle((req) => store.readChatWindow(
+  db, req.params.id,
+  req.query.around != null ? Number(req.query.around) : undefined,
+  Number(req.query.window ?? 5),
+)));
+app.get('/chats/recent', handle((req) => store.recentChats(
+  db, String(req.query.workspaceId), Number(req.query.limit ?? 10),
+  req.query.exclude ? String(req.query.exclude) : undefined,
+)));
+
 // ── Cron (server-side execution) ─────────────────────────────────────────────
-// Manual "run now": mint a sessionId, return it immediately, run the job in the
+// Manual "run now": mint a chatId, return it immediately, run the job in the
 // background (the caller watches via /chat/:id/stream). The scheduler (Phase C)
 // will call runCronJob the same way.
 app.post('/workspace/:id/cron/:job/run', handle(async (req) => {
-  const sessionId = crypto.randomUUID();
-  runCronJob(pool, masterKey, agentRuntime, req.params.id, req.params.job, sessionId)
+  const chatId = crypto.randomUUID();
+  runCronJob(pool, masterKey, agentRuntime, req.params.id, req.params.job, chatId)
     .catch((err) => log.error({ err: err?.message, workspace: req.params.id, job: req.params.job }, 'cron run failed'));
-  return { ok: true, sessionId };
+  return { ok: true, chatId };
 }));
 
 // Cron run history (per job) + next-run (from croner, in memory) — for the UI.
@@ -179,6 +205,9 @@ app.post('/telegram/connect', handle(async (req) => {
   });
 }));
 app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, masterKey); return { ok: true }; }));
+// Send a DM to the user. Backs the desktop's copy of the `send_message` agent
+// tool — the bot token is here, so the desktop asks rather than holds it.
+app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''))));
 app.get('/telegram/status', handle(() => tgStatus(pool)));
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -190,6 +219,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   await ensureSchema(pool);
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
   initSweeper();                                // reclaims idle per-run working dirs (TTL)
+  tgSyncCommands(pool, masterKey, log);         // keep the /commands menu current
   const server = app.listen(PORT, () => log.info({ port: PORT }, 'shockwave-api listening'));
   const shutdown = () => { server.close(() => pool.end().finally(() => process.exit(0))); setTimeout(() => process.exit(0), 5000).unref(); };
   process.on('SIGTERM', shutdown);

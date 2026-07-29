@@ -1,29 +1,27 @@
-// Live-feed pub/sub — the SSE relay's fan-out. Ephemeral, in-memory. Used by the
-// HTTP routes (a spectator subscribes on /stream; the desktop producer POSTs to
-// /events) AND, in-process, by the server's own cron runs (their emit publishes
-// straight here). One place, so a server run and a relayed desktop run reach
-// watchers identically.
+// Live-feed pub/sub — the SSE relay's fan-out. Ephemeral, in-memory, never
+// stored: it is a low-latency mirror of what has ALREADY been written to the
+// message table, not a second source of truth. A client that misses events (was
+// closed, dropped the connection) loses nothing — it re-reads with `?after=`.
+//
+// One GLOBAL channel, not one per chat. A desktop can't subscribe per chat,
+// because the whole point is to hear about turns it doesn't yet know exist — a
+// Telegram message, a cron run, the same chat running on another machine. Every
+// event already carries its `chatId`, so the client routes.
 
 import type express from 'express';
 
-const subs = new Map<string, Set<express.Response>>();
+const subs = new Set<express.Response>();
 
 // Register a spectator's SSE response; returns an unsubscribe fn.
-export function subscribe(sessionId: string, res: express.Response): () => void {
-  let set = subs.get(sessionId);
-  if (!set) { set = new Set(); subs.set(sessionId, set); }
-  set.add(res);
-  return () => {
-    const s = subs.get(sessionId);
-    if (s) { s.delete(res); if (!s.size) subs.delete(sessionId); }
-  };
+export function subscribe(res: express.Response): () => void {
+  subs.add(res);
+  return () => { subs.delete(res); };
 }
 
-// Fan one event out to a session's spectators. Returns the subscriber count.
-export function publish(sessionId: string, event: any): number {
-  const set = subs.get(sessionId);
-  if (!set || !set.size) return 0;
+// Fan one event out to every watcher. Returns the subscriber count.
+export function publish(event: any): number {
+  if (!subs.size) return 0;
   const payload = `data: ${JSON.stringify(event ?? {})}\n\n`;
-  for (const r of set) { try { r.write(payload); } catch { /* dropped on next close */ } }
-  return set.size;
+  for (const r of subs) { try { r.write(payload); } catch { /* dropped on next close */ } }
+  return subs.size;
 }

@@ -24,6 +24,11 @@ COPY --from=build /app/init.sql ./init.sql
 COPY resources/built-in-skills/ ./built-in-skills/
 ENV BUILTIN_SKILLS_DIR=/app/built-in-skills
 RUN chown -R node:node /app
+# pi's scratch dir (AGENT_DATA_DIR). Created + owned HERE so the named volume
+# mounted over it inherits this ownership on first use — a fresh volume is
+# root-owned otherwise, and the server runs as `node`, so every run would fail
+# with EACCES trying to create its working dir.
+RUN mkdir -p /data/agent && chown -R node:node /data
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

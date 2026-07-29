@@ -15,12 +15,35 @@
 // `origin` says where each tool comes from:
 //   'builtin' → pi's own (createAllToolDefinitions instantiates all 7; the
 //               allowlist selects. pi's own default is only read/bash/edit/write)
-//   'custom'  → ours, passed in-process as `customTools` from codingAgent.ts
+//   'custom'  → ours, passed in-process as `customTools` (the token tools from
+//               agent-core, plus whatever the host adds via `extraTools`)
+//
+// `only` scopes a tool to where a turn is RUNNING FROM (RunOpts.source):
+// 'desktop' (a chat in the app), 'cron' (a scheduled run), 'telegram' (a DM).
+// Omit it and the tool is available everywhere — that's the default, and most
+// tools want it. `only` exists because a tool can be meaningless off its home:
+// `open_file` opens a tab in the app UI, and there is no UI on a cron run.
+//
+// The catalog is filtered by source at session boot (`toolsForSource`), and the
+// SAME filtered list feeds the prompt text and pi's allowlist, so the two can't
+// disagree. A host's `extraTools` must be named here too — pi filters custom
+// tools against the allowlist exactly like builtins (see _refreshToolRegistry in
+// pi's agent-session.js), so a host tool missing from the catalog is silently
+// dropped. That is what happened to `send_message`: the companion supplied it,
+// the catalog didn't name it, and the agent reported it had no way to message
+// the user. agent.ts logs a warning if a host ever supplies an unnamed tool.
+
+/** Where a turn is running from — `RunOpts.source`. */
+export type ToolScope = 'desktop' | 'cron' | 'telegram';
+
+export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram'];
 
 export interface ToolDescriptor {
   name: string;
   desc: string;
   origin: 'builtin' | 'custom';
+  /** Sources this tool is offered to. Absent = all of them. */
+  only?: ToolScope[];
 }
 
 export const TOOL_CATALOG: ToolDescriptor[] = [
@@ -33,12 +56,25 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   { name: 'ls', origin: 'builtin', desc: 'List directory contents.' },
   { name: 'list_agent_secrets', origin: 'custom', desc: 'List available API tokens by name and purpose.' },
   { name: 'get_agent_secret', origin: 'custom', desc: 'Read one API token by name.' },
-  { name: 'open_file', origin: 'custom', desc: 'Open a file in the app UI (a new tab) so the user can see it. Use when the user asks you to open, show, or display a file. The path is workspace-relative; only files the app can display (.md, images, video, .excalidraw) can be opened.' },
+  // Opens a tab in the app UI — only a desktop chat has one.
+  { name: 'open_file', origin: 'custom', only: ['desktop'], desc: 'Open a file in the app UI (a new tab) so the user can see it. Use when the user asks you to open, show, or display a file. The path is workspace-relative; only files the app can display (.md, images, video, .excalidraw) can be opened.' },
+  // Every source: a desktop chat can DM the user too (it routes through the
+  // companion, which holds the bot token).
+  { name: 'send_message', origin: 'custom', desc: 'Send the user a message on Telegram. Use to reach them proactively — a finished job, or something that needs their attention.' },
+  // The agent's memory of earlier conversations in this workspace.
+  { name: 'search_chats', origin: 'custom', desc: 'Search earlier chats in this workspace — what the user told you before, what was decided, what you already tried. Pass `query` to search, `chatId` + `around` to read more of one, or nothing to list recent chats. Results carry dates; prefer recent ones when they disagree.' },
 ];
 
-// The allowlist handed to pi as `tools:`. Covers builtin AND custom names —
-// pi filters both against it (see _refreshToolRegistry in agent-session.js).
-export const ACTIVE_TOOL_NAMES: string[] = TOOL_CATALOG.map((t) => t.name);
+/** The catalog as offered to a turn running from `source`. */
+export function toolsForSource(source: string | undefined): ToolDescriptor[] {
+  const s = (source || 'desktop') as ToolScope;
+  return TOOL_CATALOG.filter((t) => !t.only || t.only.includes(s));
+}
+
+/** The allowlist handed to pi as `tools:` — covers builtin AND custom names. */
+export function activeToolNames(source: string | undefined): string[] {
+  return toolsForSource(source).map((t) => t.name);
+}
 
 // Render the catalog as the markdown bullet list used in the "Available tools"
 // section of the helper prompt.

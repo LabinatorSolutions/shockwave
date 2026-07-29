@@ -6,7 +6,7 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 
 - `main.ts` — entry point. Window lifecycle, every IPC handler, watcher orchestration, `app://` protocol.
 
-**Chats live on the companion.** Chat sessions, messages, and transcripts are stored on the companion (Postgres); the desktop reads/writes them through `src/main/api/chats.ts`. Each chat carries provenance — `source` (`desktop` | `cron` | `telegram`), `source_id` (identity within that source: the cron job name, telegram chat id, null for desktop), and `machine` (`os.hostname()` at creation). See the `chat_session`/`message` tables in `api/CLAUDE.md`.
+**Chats live on the companion.** Chat sessions, messages, and transcripts are stored on the companion (Postgres); the desktop reads/writes them through `src/main/api/chats.ts`. Each chat carries provenance — `source` (`desktop` | `cron` | `telegram`), `source_id` (identity within that source: the cron job name, telegram chat id, null for desktop), and `machine` (`os.hostname()` at creation). See the `chat`/`message` tables in `api/CLAUDE.md`.
 - `settingsStore.ts` — the settings facade over the companion + a machine-local file: `readSettings`/`writeSettings`, `patchAgentSecretOAuth`, `LOCAL_DEFAULTS`. See "Settings persistence" below.
 - `src/main/api/` — the desktop's whole bridge to the companion. `client.ts` (the HTTP client: `api.get/patch/post/del`, `api.stream` for SSE; `ApiError` with kinds `unreachable | unauthorized | server | config`; reads URL+key from `config.ts`). `net.ts` (`companionFetch` — a dedicated in-memory Electron `session` whose `setCertificateVerifyProc` trusts the companion's self-signed cert; this is why the companion can serve on Traefik's self-signed default). `config.ts` (`<userData>/api.json` — companion URL + `safeStorage`-wrapped API key, the only locally-stored secret). `localSettings.ts` (`<userData>/local-settings.json` — `LOCAL_KEYS`, window/view state, `activeWorkspaceId`, cron toggle, per-workspace `{path, syncEnabled}`). `chats.ts` (chat persistence + list/search over HTTP, backing `chat:*` and the agent host). `workspaces.ts` (workspace identity + local checkout/sync). `cron.ts` (read-only cron view).
 - `pathResolver.ts` — `isMdFile`, `uniquePath` (same-dir uniqueness), `walkMarkdownPaths`, `isIgnoredSegment` (what `main.ts` imports). Disambiguation is **same-folder only**: `fs:createFile` / `fs:renameFileLiteral` / `fs:moveItem` auto-suffix within one folder; duplicate basenames across different folders are allowed (the link resolver disambiguates). (`uniqueInWorkspace` / `collectMarkdownBasenamesLower` are still exported but no longer imported by `main.ts` — the workspace-wide-uniqueness era is over.)
@@ -144,13 +144,26 @@ Registered before `app.ready` via `registerSchemesAsPrivileged({scheme: 'app', p
 
 What the desktop host supplies to `agent-core`:
 
-- `builtinDir` (bundled built-in skills), `machine: os.hostname()`, `extraTools: [OPEN_FILE_TOOL]`, `dataDir: () => app.getPath('userData')` (one global pi scratch dir — the companion uses a per-session dir instead).
-- Chat persistence closures from `src/main/api/chats.ts` — `getSession`, `upsertSession`, `persistMessages`, `setSessionTitle`, `setRunning`, `getTranscript`, `putTranscript`. So **chats are stored on the companion**, not locally; the runtime just calls these.
+- `builtinDir` (bundled built-in skills), `machine: os.hostname()`, `extraTools: [OPEN_FILE_TOOL, SEND_MESSAGE_TOOL]`, `dataDir: () => app.getPath('userData')` (one global pi scratch dir — the companion uses a per-session dir instead).
+- Chat persistence closures from `src/main/api/chats.ts` — `getSession`, `upsertSession`, `appendMessages`, `setSessionTitle`, `setRunning`, `getTranscript`, `putTranscript`. So **chats are stored on the companion**, not locally; the runtime just calls these.
 - Secret getters (`getAgentSecrets` / `getToken`), injected by `initDesktopAgent()` in `main.ts`. `getToken` calls the companion (`GET /agent-secret/:name/token`), so OAuth refresh happens server-side; the desktop only runs the interactive connect flow (`oauth.ts`).
 
-Chats run concurrently (one live pi session per chat). Events forwarded to the renderer (`agent:event` / `agent:error`) are stamped with `sessionId`; `agent:runningSessions` returns in-flight ids (the renderer reseeds after a window reload). Because a chat may run on the companion or another machine (Telegram/cron), the renderer can also *watch* a remote run's SSE feed via `chat:watchStart` / `chat:watchStop`.
+Chats run concurrently (one live pi session per chat). Events forwarded to the renderer (`agent:event` / `agent:error`) are stamped with `chatId`; `agent:runningChats` returns in-flight ids (the renderer reseeds after a window reload).
 
-**`open_file` tool** (`openFileExtension.ts`): the one custom pi tool the desktop supplies (via `extraTools`) — `OPEN_FILE_TOOL` + `installOpenFileBridge`, opens a file in the app from a turn. The agent-tokens tools (`list_agent_secrets` / `get_agent_secret`) and the whole `TOOL_CATALOG` live in `agent-core`.
+### Live feed — one always-on stream
+
+`startLiveFeed()` (called once in `whenReady`, stopped on `before-quit`) holds **one** SSE connection to the companion's `GET /events` for the life of the app, carrying every chat's events — Telegram, cron, and the same chat open on another machine — and forwards them into the same `agent:event` channel a local turn uses, so a remote turn draws identically. It reconnects forever with backoff; on reconnect it fires `chat:feedResync` so the renderer re-reads its loaded chats (anything during the outage was missed).
+
+Events for sessions THIS machine is running are dropped (`agentRunningSessions()`): they already reached the renderer over IPC, and we POST every one of them up to `/chat/:id/events` so other clients see them — the copy coming back would double-render.
+
+**It is always on by design.** This used to be a per-chat subscription (`chat:watchStart`/`watchStop`) started from the renderer when you clicked a chat that happened to be running elsewhere *at that instant* — so a Telegram turn was never watched, and a chat already on screen could never start listening at all. Don't reintroduce a per-chat subscription: the point is hearing about chats the desktop doesn't yet know exist.
+
+**Desktop tools** (both supplied via `extraTools`):
+
+- **`open_file`** (`openFileExtension.ts`) — `OPEN_FILE_TOOL` + `installOpenFileBridge`, opens a file in the app from a turn. Scoped `only: ['desktop']` in `agent-core`'s `TOOL_CATALOG`: cron and Telegram runs have no UI to open a tab in.
+- **`send_message`** (`codingAgent.ts`, built from `agent-core/sendMessage.ts`) — DMs the user on Telegram by `POST /telegram/send` to the companion. The desktop holds no bot token; it asks. Without it, a chat started in Telegram and continued in the app couldn't reply on Telegram.
+
+The agent-tokens tools (`list_agent_secrets` / `get_agent_secret`) and the whole `TOOL_CATALOG` live in `agent-core`. Anything added to `extraTools` **must** also be named in that catalog — pi drops unlisted custom tools silently (see `agent-core/CLAUDE.md`).
 
 **Model/provider discovery IPC** — handlers stay in `main.ts`, logic in `agent-core/modelCatalog.ts`: `agent:listProviders` (pi's list filtered to `SUPPORTED_PROVIDER_SLUGS` in `src/shared/constants.ts`), `agent:listModels` (the models.dev catalog), `agent:listThinkingLevels`, `agent:validateConnection` (checks an openai-compatible `{baseUrl}/models`). `initModelCatalog` is called once in `whenReady`.
 
@@ -241,8 +254,8 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |
 | Voice | `voice:getToken` |
-| Agent | `agent:send` (takes `sessionId`; steers if that chat is mid-turn), `agent:abort` (per sessionId), `agent:runningSessions`, `agent:listProviders`, `agent:listModels`, `agent:listThinkingLevels`, `agent:validateConnection` (checks an openai-compatible `{baseUrl}/models`); plus push events `agent:event` / `agent:error` (stamped with `sessionId`) |
-| Chat (all over HTTP to the companion) | `chat:listSessions`, `chat:listStarred`, `chat:setStarred`, `chat:searchSessions`, `chat:getMessages`, `chat:openSession`, `chat:deleteSession`, `chat:renameSession`, `chat:watchStart` / `chat:watchStop` (spectate a companion/remote run's SSE feed) |
+| Agent | `agent:send` (takes `chatId`; steers if that chat is mid-turn), `agent:abort` (per chatId), `agent:runningChats`, `agent:listProviders`, `agent:listModels`, `agent:listThinkingLevels`, `agent:validateConnection` (checks an openai-compatible `{baseUrl}/models`); plus push events `agent:event` / `agent:error` (stamped with `chatId`) |
+| Chat (all over HTTP to the companion) | `chat:list`, `chat:listStarred`, `chat:setStarred`, `chat:search`, `chat:getMessages` (optional `after` seq), `chat:open` (returns the row + messages + this machine's `workspacePath` for the chat's workspace), `chat:delete`, `chat:rename`; plus push event `chat:feedResync` (the live feed reconnected — re-read loaded chats) |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |
 | Workspaces | `workspace:inspectFolder`, `workspace:createWithRepo`, `workspace:addFromRepo` (covers both clone-into-empty and adopt-a-clone), `workspace:setUpHere`, `workspace:remove`, `workspace:forgetLocal`, `workspace:listFiles`, `workspace:ensureFiles` |
 | Workspace settings | `workspaceSettings:read`, `workspaceSettings:update` (per-workspace `.shockwave/workspace.json` — daily-note config, templates, built-in-skill toggles) |

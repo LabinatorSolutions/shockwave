@@ -28,11 +28,22 @@ export function makeTelegramSink(client: TelegramClient, chatId: number) {
   let dirty = false;
   let lastEdit = 0;
 
+  // Every flush is chained, and `done()` awaits the chain. Without that, the
+  // first post ("H") could still be in flight when the turn ended: `done` saw
+  // `messageId == null`, decided there was nothing to edit, and sent the final
+  // text as a SECOND message — then the first post landed. Two messages.
+  let chain: Promise<void> = Promise.resolve();
+
   const typing = setInterval(() => client.sendChatAction(chatId).catch(() => {}), 4000);
   client.sendChatAction(chatId).catch(() => {});
   const editTimer = setInterval(() => { void flush(false); }, 1300);
 
-  async function flush(force: boolean) {
+  function flush(force: boolean): Promise<void> {
+    chain = chain.then(() => flushInner(force)).catch(() => { /* best-effort */ });
+    return chain;
+  }
+
+  async function flushInner(force: boolean) {
     if (!dirty) return;
     if (!force && Date.now() - lastEdit < 1300) return;
     dirty = false; lastEdit = Date.now();
@@ -43,10 +54,14 @@ export function makeTelegramSink(client: TelegramClient, chatId: number) {
     } catch { /* rate limit / transient — the final flush will correct it */ }
   }
 
-  async function toolLine(name: string) {
-    await flush(true);        // close the current text segment first (ordering)
-    messageId = null; text = '';
-    try { await client.sendMessage(chatId, `${TOOL_EMOJI[name] || '🔧'} ${name}`); } catch { /* best-effort */ }
+  // On the same chain as flush, so the tool marker can't overtake the text
+  // segment it is supposed to follow.
+  function toolLine(name: string) {
+    void flush(true);         // close the current text segment first (ordering)
+    chain = chain.then(async () => {
+      messageId = null; text = '';
+      try { await client.sendMessage(chatId, `${TOOL_EMOJI[name] || '🔧'} ${name}`); } catch { /* best-effort */ }
+    }).catch(() => { /* best-effort */ });
   }
 
   function emit(e: any) {
@@ -56,12 +71,13 @@ export function makeTelegramSink(client: TelegramClient, chatId: number) {
       if (am?.type === 'text_delta') { text += (am.delta ?? am.text ?? ''); dirty = true; }
       else if (am?.type === 'text_start') { /* new segment continues in `text` */ }
     } else if (t === 'tool_execution_start') {
-      void toolLine(e.toolName || e.name || 'tool');
+      toolLine(e.toolName || e.name || 'tool');
     }
   }
 
   async function done(finalMessages?: any[]) {
     clearInterval(typing); clearInterval(editTimer);
+    await chain;   // let any in-flight post land so `messageId` is truthful
     // Authoritative final: the last assistant message from agent_end (falls back
     // to whatever we accumulated from deltas).
     let final = text;

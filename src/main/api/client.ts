@@ -67,12 +67,14 @@ export const api = {
     } catch { return false; }
   },
   // Open a long-lived Server-Sent Events stream. `onEvent` fires per `data:`
-  // frame (parsed JSON). Returns an abort fn. No timeout — it stays open until
-  // aborted or the connection drops. Used for the live chat feed.
-  stream(pathname: string, onEvent: (evt: any) => void): () => void {
+  // frame (parsed JSON); `onClose` fires once when the stream ends for any
+  // reason (abort, drop, non-2xx) so the caller can reconnect. Returns an abort
+  // fn. No timeout — it stays open until aborted or the connection drops.
+  stream(pathname: string, onEvent: (evt: any) => void, onClose?: () => void): () => void {
     const { url, apiKey } = base();
     const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
     const ctrl = new AbortController();
+    let aborted = false;
     (async () => {
       try {
         const res = await companionFetch(target, {
@@ -98,7 +100,8 @@ export const api = {
           }
         }
       } catch { /* aborted or connection dropped */ }
+      if (!aborted) onClose?.(); // dropped on its own → caller reconnects
     })();
-    return () => ctrl.abort();
+    return () => { aborted = true; ctrl.abort(); }; // deliberate stop → no onClose, no reconnect
   },
 };

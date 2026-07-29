@@ -12,8 +12,23 @@ import os from 'node:os';
 import { app } from 'electron';
 import { createAgentRuntime, listThinkingLevels } from '../../agent-core/agent.js';
 import type { AgentHost, RunOpts, Emit } from '../../agent-core/agent.js';
-import { getSession, upsertSession, persistMessages, setSessionTitle, setRunning, getTranscript, putTranscript } from './api/chats.js';
+import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
+import { getChat, upsertChat, appendMessages, setChatTitle, setRunning, getTranscript, putTranscript,
+  searchChatMessages, readChatWindow, recentChats } from './api/chats.js';
+import { api } from './api/client.js';
 import { OPEN_FILE_TOOL } from './openFileExtension.js';
+
+// The desktop's `send_message`: same tool the companion offers, but the sending
+// happens over there — the bot token never leaves the companion. Without this, a
+// chat started in Telegram and continued here couldn't answer on Telegram.
+const SEND_MESSAGE_TOOL = makeSendMessageTool(async (text) => {
+  try {
+    const res = await api.post('/telegram/send', { text });
+    return res?.ok ? { ok: true } : { ok: false, error: res?.error || 'Could not send the message.' };
+  } catch (e: any) {
+    return { ok: false, error: `Could not reach the Shockwave server to send it: ${e?.message ?? e}` };
+  }
+});
 
 let runtime: ReturnType<typeof createAgentRuntime> | null = null;
 
@@ -28,17 +43,19 @@ export function initDesktopAgent(deps: {
   const host: AgentHost = {
     builtinDir: deps.builtinDir,
     machine: os.hostname(),
-    extraTools: [OPEN_FILE_TOOL],
+    extraTools: [OPEN_FILE_TOOL, SEND_MESSAGE_TOOL],
     dataDir: () => app.getPath('userData'), // one global scratch dir on the desktop
-    getSession,
-    upsertSession,
-    persistMessages,
-    setSessionTitle,
+    getChat,
+    upsertChat,
+    appendMessages,
+    setChatTitle,
     setRunning,
     getTranscript,
     putTranscript,
     getAgentSecrets: deps.getSecrets,
     getToken: deps.getToken,
+    // Backs the same single `search_chats` tool the companion's agent gets.
+    chatSearch: { searchChats: searchChatMessages, readChat: readChatWindow, recentChats },
   };
   runtime = createAgentRuntime(host);
 }
@@ -49,8 +66,8 @@ function rt() {
 }
 
 export const agentSend = (opts: RunOpts, emit: Emit) => rt().agentSend(opts, emit);
-export const agentAbort = (sessionId: string) => rt().agentAbort(sessionId);
-export const agentDisposeSession = (sessionId: string) => rt().agentDisposeSession(sessionId);
+export const agentAbort = (chatId: string) => rt().agentAbort(chatId);
+export const agentDisposeChat = (chatId: string) => rt().agentDisposeChat(chatId);
 export const agentDisposeAll = () => (runtime ? runtime.agentDisposeAll() : Promise.resolve());
-export const agentRunningSessions = (): string[] => (runtime ? runtime.agentRunningSessions() : []);
+export const agentRunningChats = (): string[] => (runtime ? runtime.agentRunningChats() : []);
 export { listThinkingLevels };

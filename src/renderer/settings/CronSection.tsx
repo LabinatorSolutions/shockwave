@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, ChevronRight } from 'lucide-react';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
+import Combobox from '../Combobox';
 
 // Cron execution runs on the companion server, not the desktop. This page is the
 // entry point to the schedule VIEW (next/last run + manual run) plus the one
@@ -15,6 +15,15 @@ export default function CronSection({ onOpenCronPanel }: { onOpenCronPanel?: () 
     let alive = true;
     window.api.settings.read().then((s: any) => { if (alive) setTz(s.timezone || 'UTC'); }).catch(() => {});
     return () => { alive = false; };
+  }, []);
+
+  // Every IANA zone Chromium knows, so the value is always one the server can
+  // actually resolve — a typo'd zone name would silently fall back to UTC on the
+  // companion and fire every job at the wrong hour.
+  const zones = useMemo(() => {
+    let list: string[] = [];
+    try { list = (Intl as any).supportedValuesOf?.('timeZone') ?? []; } catch { /* older runtime */ }
+    return ['UTC', ...list.filter((z) => z !== 'UTC')];
   }, []);
 
   const commitTz = (value: string) => {
@@ -31,17 +40,16 @@ export default function CronSection({ onOpenCronPanel }: { onOpenCronPanel?: () 
       <SettingsGroup>
         <Field>
           <FieldLabel htmlFor="cron-tz">Timezone</FieldLabel>
-          <Input
+          <Combobox
             id="cron-tz"
             className="font-mono"
-            defaultValue={tz}
-            key={tz}
+            options={zones}
+            value={tz}
+            onChange={commitTz}
             placeholder="UTC"
-            spellCheck={false}
-            onBlur={(e) => commitTz(e.currentTarget.value)}
           />
           <FieldDescription>
-            The one timezone the whole system uses — cron schedules, run times, and the agent's date. IANA name (e.g. <span className="font-mono">America/New_York</span>) or <span className="font-mono">UTC</span>.
+            The one timezone the whole system uses — cron schedules, run times, and the agent's date. Type to filter (e.g. <span className="font-mono">New_York</span>).
           </FieldDescription>
         </Field>
       </SettingsGroup>

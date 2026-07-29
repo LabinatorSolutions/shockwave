@@ -12,11 +12,11 @@ import * as feed from './feed.js';
 import { prepareCheckout, checkIn } from './git.js';
 import { gitFix } from './gitFixer.js';
 
-export interface CronRunResult { sessionId: string; checkIn: string; }
+export interface CronRunResult { chatId: string; checkIn: string; }
 
 export async function runCronJob(
   pool: DB, key: Buffer, runtime: any,
-  workspaceId: string, jobName: string, sessionId: string,
+  workspaceId: string, jobName: string, chatId: string,
 ): Promise<CronRunResult> {
   const db = getDb(pool);
   const workspaces = await store.listWorkspaces(db);
@@ -27,7 +27,7 @@ export async function runCronJob(
 
   // Reuse-or-clone the checkout (reset to origin if it existed). Kept after the
   // run; the TTL sweeper reclaims idle dirs.
-  const dir = await prepareCheckout(sessionId, w.repoOwner, w.repoName, w.defaultBranch, pat);
+  const dir = await prepareCheckout(chatId, w.repoOwner, w.repoName, w.defaultBranch, pat);
 
   const raw = await fs.readFile(path.join(dir, 'cron.json'), 'utf8').catch(() => '[]');
   let jobs: any[]; try { jobs = JSON.parse(raw); } catch { jobs = []; }
@@ -53,17 +53,21 @@ export async function runCronJob(
   // provider or runaway tool loop can't wedge the run forever (the aborted turn's
   // partial output is still persisted + checked in below).
   const maxRunMs = (Number(process.env.CRON_MAX_RUN_MINUTES) || 30) * 60_000;
-  const watchdog = setTimeout(() => { runtime.agentAbort(sessionId).catch(() => {}); }, maxRunMs);
+  const watchdog = setTimeout(() => { runtime.agentAbort(chatId).catch(() => {}); }, maxRunMs);
+  let finalMessages: any[] | undefined;
   try {
     await runtime.agentSend(
       {
-        sessionId, text: job.prompt, workspaceId, workspacePath: dir,
+        chatId, text: job.prompt, workspaceId, workspacePath: dir,
         provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl,
         contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
         wsBuiltinSkills,
         unattended: true, source: 'cron', cronTitle: jobName,
       },
-      (event: any) => feed.publish(event.sessionId, event),
+      (event: any) => {
+        if (event?.type === 'agent_end') finalMessages = event.messages;
+        feed.publish(event);
+      },
     );
   } finally {
     clearTimeout(watchdog);
@@ -78,5 +82,14 @@ export async function runCronJob(
     });
     result = fixed ? 'pushed' : 'conflict';
   }
-  return { sessionId, checkIn: result };
+
+  // A turn can end badly WITHOUT throwing: pi reports it as the last assistant
+  // message's stopReason ('error' from the provider, 'aborted' from the watchdog
+  // above, 'length' on max tokens). Throw so the caller's catch records it as a
+  // failed run instead of a silent success. After the check-in, so partial work
+  // is still committed.
+  const last = [...(finalMessages ?? [])].reverse().find((m: any) => m?.role === 'assistant');
+  if (last && last.stopReason !== 'stop') throw new Error(last.errorMessage || `the run ended early (${last.stopReason}).`);
+
+  return { chatId, checkIn: result };
 }

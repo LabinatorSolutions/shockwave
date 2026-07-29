@@ -410,7 +410,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   const [items, setItems] = useState<any[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
-  // Pending delete confirmation: { sessionId, title } | null.
+  // Pending delete confirmation: { chatId, title } | null.
   const [confirmDelete, setConfirmDelete] = useState<any>(null);
   const confirmDeleteRef = useRef<any>(null);
   confirmDeleteRef.current = confirmDelete;
@@ -445,7 +445,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   const loadRecents = useCallback(async (before?: number) => {
     setLoading(true);
     try {
-      const rows = await window.api.chat.listSessions(before ? { before } : {});
+      const rows = await window.api.chat.list(before ? { before } : {});
       setItems((prev) => (before ? [...prev, ...rows] : rows));
       setHasMore(rows.length >= 30);
     } finally { setLoading(false); }
@@ -461,7 +461,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
     const q = query.trim();
     if (!q) { loadRecents(); loadStarred(); return () => { cancelled = true; }; }
     const t = setTimeout(async () => {
-      const rows = await window.api.chat.searchSessions({ query: q });
+      const rows = await window.api.chat.searchChats({ query: q });
       if (!cancelled) { setItems(rows); setHasMore(false); }
     }, 180);
     return () => { cancelled = true; clearTimeout(t); };
@@ -478,32 +478,32 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
 
   const onDelete = useCallback((e, it) => {
     e.stopPropagation();
-    setConfirmDelete({ sessionId: it.sessionId, title: it.title });
+    setConfirmDelete({ chatId: it.chatId, title: it.title });
   }, []);
 
-  const performDelete = useCallback(async (sessionId) => {
-    await window.api.chat.deleteSession(sessionId);
-    setItems((prev) => prev.filter((x) => x.sessionId !== sessionId));
-    setStarredList((prev) => prev.filter((x) => x.sessionId !== sessionId));
-    onDeleted?.(sessionId);
+  const performDelete = useCallback(async (chatId) => {
+    await window.api.chat.deleteChat(chatId);
+    setItems((prev) => prev.filter((x) => x.chatId !== chatId));
+    setStarredList((prev) => prev.filter((x) => x.chatId !== chatId));
+    onDeleted?.(chatId);
   }, [onDeleted]);
 
-  const onToggleStar = useCallback(async (e, sessionId, currentlyStarred) => {
+  const onToggleStar = useCallback(async (e, chatId, currentlyStarred) => {
     e.stopPropagation();
-    await window.api.chat.setStarred({ sessionId, starred: !currentlyStarred });
+    await window.api.chat.setStarred({ chatId, starred: !currentlyStarred });
     loadRecents();
     loadStarred();
   }, [loadRecents, loadStarred]);
 
   const renderRow = (it, isStarred) => (
     <button
-      key={it.sessionId}
+      key={it.chatId}
       type="button"
       className={cn(
         'group/row flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent',
-        it.sessionId === currentSessionId && 'bg-selected hover:bg-selected',
+        it.chatId === currentSessionId && 'bg-selected hover:bg-selected',
       )}
-      onClick={() => onSelect(it.sessionId)}
+      onClick={() => onSelect(it.chatId)}
     >
       <span
         role="button"
@@ -512,7 +512,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
           'flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-2 hover:text-foreground',
           isStarred && 'text-amber-500 hover:text-amber-500',
         )}
-        onClick={(e) => onToggleStar(e, it.sessionId, isStarred)}
+        onClick={(e) => onToggleStar(e, it.chatId, isStarred)}
         aria-label={isStarred ? 'Unstar chat' : 'Star chat'}
         title={isStarred ? 'Unstar' : 'Star'}
       ><StarIcon size={13} filled={isStarred} /></span>
@@ -527,7 +527,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         </span>
         {searching && it.snippet && <span className="truncate text-[11px] text-muted-2">{it.snippet}</span>}
       </span>
-      {runningIds?.has(it.sessionId) ? (
+      {runningIds?.has(it.chatId) ? (
         <span className="shrink-0 text-primary" title="Responding…" aria-label="Responding"><SpinnerIcon size={12} /></span>
       ) : (
         !searching && <span className="shrink-0 text-[11px] text-muted-2">{formatAgo(it.updatedAt)}</span>
@@ -583,12 +583,12 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         onConfirm={() => {
           const pending = confirmDelete;
           setConfirmDelete(null);
-          if (pending) performDelete(pending.sessionId);
+          if (pending) performDelete(pending.chatId);
         }}
         title="Delete chat?"
         message={
           `"${confirmDelete?.title || 'Untitled chat'}" and its messages will be permanently deleted.` +
-          (runningIds?.has(confirmDelete?.sessionId) ? ' This chat is currently responding — the response will be stopped.' : '')
+          (runningIds?.has(confirmDelete?.chatId) ? ' This chat is currently responding — the response will be stopped.' : '')
         }
         confirmLabel="Delete"
         destructive
@@ -619,8 +619,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   // It unfreezes when that turn ends (agent_end clears remoteMachine).
   const frozen = !!remoteMachine;
   const input = chat.draft;
-  const sessionTitle = chat.title;
-  const sessionStarred = chat.starred;
+  const chatTitle = chat.title;
+  const chatStarred = chat.starred;
 
   // Chats with a turn in flight (any workspace) — drives the history spinner.
   const runningIds = useMemo(
@@ -759,37 +759,37 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   const onToggleHeaderStar = useCallback(async () => {
     const id = chatIdRef.current;
     if (!id || !chat.persisted) return;
-    const next = !sessionStarred;
+    const next = !chatStarred;
     chatStore.setStarred(id, next);
-    try { await window.api.chat.setStarred({ sessionId: id, starred: next }); }
+    try { await window.api.chat.setStarred({ chatId: id, starred: next }); }
     catch { chatStore.setStarred(id, !next); }
-  }, [chat.persisted, sessionStarred]);
+  }, [chat.persisted, chatStarred]);
 
   // Inline rename of the active chat's title (double-click the header title).
   const startRename = useCallback(() => {
     if (!chatIdRef.current || !chat.persisted) return;
-    setTitleDraft(sessionTitle ?? '');
+    setTitleDraft(chatTitle ?? '');
     setRenamingTitle(true);
-  }, [chat.persisted, sessionTitle]);
+  }, [chat.persisted, chatTitle]);
 
   const commitRename = useCallback(async () => {
     const id = chatIdRef.current;
     const title = titleDraft.trim();
     setRenamingTitle(false);
-    if (!id || !title || title === sessionTitle) return;
+    if (!id || !title || title === chatTitle) return;
     chatStore.setTitle(id, title);
-    try { await window.api.chat.renameSession({ sessionId: id, title }); }
+    try { await window.api.chat.rename({ chatId: id, title }); }
     catch { /* rename is best-effort */ }
-  }, [titleDraft, sessionTitle]);
+  }, [titleDraft, chatTitle]);
 
   // Open a saved chat from the history popover. Cold chats hydrate from the
   // DB; chats already in the store (e.g. running in the background) switch
   // instantly with their live transcript intact.
-  const onOpenSession = useCallback(async (sessionId) => {
+  const onOpenSession = useCallback(async (chatId) => {
     setShowHistory(false);
-    if (sessionId === chatIdRef.current) return;
+    if (chatId === chatIdRef.current) return;
     try {
-      await chatStore.openChat(sessionId, workspacePath);
+      await chatStore.openChat(chatId, workspacePath);
       setRenamingTitle(false);
       setRejected(null);
       setPartialText('');
@@ -801,9 +801,9 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   // A chat was deleted from the history popover (main already aborted +
   // disposed its live session). Drop it from the store; if it was the one on
   // screen, move to a fresh chat.
-  const onDeletedSession = useCallback((sessionId) => {
-    const wasActive = sessionId === chatIdRef.current;
-    chatStore.removeChat(sessionId);
+  const onDeletedSession = useCallback((chatId) => {
+    const wasActive = chatId === chatIdRef.current;
+    chatStore.removeChat(chatId);
     if (wasActive && workspacePath) chatStore.newChat(workspacePath);
   }, [workspacePath]);
 
@@ -1043,18 +1043,18 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               className="truncate text-[13px] font-semibold text-foreground"
               onDoubleClick={startRename}
               title={chat.persisted ? 'Double-click to rename' : undefined}
-            >{sessionTitle || 'Agent Chat'}</span>
+            >{chatTitle || 'Agent Chat'}</span>
           )}
         </span>
         {chat.persisted && (
           <button
             type="button"
-            className={cn(headerBtn, sessionStarred && 'text-amber-500 hover:text-amber-500')}
+            className={cn(headerBtn, chatStarred && 'text-amber-500 hover:text-amber-500')}
             onClick={onToggleHeaderStar}
-            title={sessionStarred ? 'Unstar chat' : 'Star chat'}
-            aria-label={sessionStarred ? 'Unstar chat' : 'Star chat'}
-            aria-pressed={sessionStarred}
-          ><StarIcon size={15} filled={sessionStarred} /></button>
+            title={chatStarred ? 'Unstar chat' : 'Star chat'}
+            aria-label={chatStarred ? 'Unstar chat' : 'Star chat'}
+            aria-pressed={chatStarred}
+          ><StarIcon size={15} filled={chatStarred} /></button>
         )}
         <button
           type="button"
@@ -1094,12 +1094,6 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         )}
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{error}</div>
-        )}
-        {frozen && (
-          <div className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-[11px] text-muted-foreground">
-            <SpinnerIcon size={11} />
-            <span>Running on <span className="font-medium text-foreground">{remoteMachine}</span> — the composer unlocks when it finishes.</span>
-          </div>
         )}
       </div>
 

@@ -2171,11 +2171,11 @@ export default function App() {
         onClose={() => setCronOpen(false)}
         onOpenFile={(p) => { if (graphMode) setGraphMode(false); openInActiveTab(p); }}
         onOpenSettings={() => { setCronOpen(false); openSettings(SETTINGS_SECTIONS.CRON); }}
-        onRunStarted={(sessionId) => {
+        onRunStarted={(chatId) => {
           // The run executes on the companion — open its chat so it streams here
           // live (running elsewhere → the composer freezes + subscribes to the feed).
           setCronOpen(false);
-          void chatStore.openChat(sessionId, workspacePath);
+          void chatStore.openChat(chatId, workspacePath);
           if (!chatSidebarOpenRef.current) toggleChatSidebar();
         }}
       />

@@ -18,7 +18,7 @@ import { session as electronSession } from 'electron';
 
 let ses: Electron.Session | null = null;
 
-function getSession(): Electron.Session {
+function getChat(): Electron.Session {
   if (ses) return ses;
   // In-memory partition (no 'persist:' prefix) — isolated from the windows'
   // default session, so this trust override never touches renderer traffic.
@@ -35,5 +35,5 @@ function getSession(): Electron.Session {
 // fetch-compatible, backed by Chromium's net stack. Same call shape as global
 // fetch (method/headers/body/signal), so client.ts is a drop-in swap.
 export function companionFetch(input: string, init?: RequestInit): Promise<Response> {
-  return getSession().fetch(input, init);
+  return getChat().fetch(input, init);
 }
