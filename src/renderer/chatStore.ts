@@ -182,20 +182,28 @@ function handleAgentEvent(evt: any) {
     }
     return;
   }
-  if (evt.type === 'message_end') {
-    // The ONLY event carrying a user prompt. It never mattered while every chat
-    // started here — `sendToChat` appends your bubble optimistically — but a
-    // turn started from Telegram or cron has no optimistic append, so without
-    // this the transcript reads assistant-reply → assistant-reply and your own
-    // message is invisible until a full re-read.
-    const m = evt.message;
-    if (m?.role !== 'user') return;
-    const text = textOfContent(m.content);
+  if (evt.type === 'message_start') {
+    // The ONLY event carrying a user prompt. `message_end` looks like the
+    // natural hook and never fires for role 'user' — a user message is whole
+    // the instant it starts, so pi has nothing to close (verified against the
+    // live stream: message_start(user) arrives, message_end(user) never does).
+    //
+    // This never mattered while every turn started here: `sendToChat` draws
+    // your bubble optimistically before the send. A turn started from Telegram
+    // or cron has no optimistic append, so without this the transcript reads
+    // assistant-reply → assistant-reply and your own message is invisible until
+    // a full re-read.
+    if (evt.message?.role !== 'user') return;
+    const text = textOfContent(evt.message.content);
     if (!text) return;
-    const chat = state.chats[chatId] ?? EMPTY_CHAT;
-    // Our own optimistic bubble is already on screen — don't draw it twice.
-    const last = chat.messages[chat.messages.length - 1];
-    if (last?.kind === 'user' && last.text === text) return;
+    // Our own send already drew this bubble. `lastSentUserId` is set per send
+    // (including a steer) and consumed one-for-one here, which beats comparing
+    // text — an attachment send stores the display text locally but hands pi
+    // the prompt with the file blocks inlined, so the two never match.
+    if (state.chats[chatId]?.lastSentUserId) {
+      patchChat(chatId, { lastSentUserId: null });
+      return;
+    }
     appendMessage(chatId, { id: nextId(), kind: 'user', text });
     return;
   }
