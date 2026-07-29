@@ -235,6 +235,7 @@ contextBridge.exposeInMainWorld('api', {
     telegramStatus: () => ipcRenderer.invoke('telegram:status'),
     telegramConnect: (opts) => ipcRenderer.invoke('telegram:connect', opts),
     telegramDisconnect: () => ipcRenderer.invoke('telegram:disconnect'),
+    telegramSetWorkspace: (workspaceId) => ipcRenderer.invoke('telegram:setWorkspace', { workspaceId }),
     /** Writes only the keys present in `patch`; secrets are encrypted before write.
      *  @param {object} obj @returns {Promise<void>} */
     write: (obj) => ipcRenderer.invoke('settings:write', obj),

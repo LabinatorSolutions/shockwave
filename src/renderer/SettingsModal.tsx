@@ -272,7 +272,7 @@ export default function SettingsModal({
             />
           )}
           {effectiveActive === SETTINGS_SECTIONS.CRON && <CronSection onOpenCronPanel={onOpenCronPanel} />}
-          {effectiveActive === SETTINGS_SECTIONS.TELEGRAM && <TelegramSection />}
+          {effectiveActive === SETTINGS_SECTIONS.TELEGRAM && <TelegramSection workspaces={workspaces} />}
         </div>
       </DialogContent>
     </Dialog>

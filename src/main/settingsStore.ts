@@ -29,7 +29,7 @@ const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
   windowBounds: null,
   sidebarWidth: 260,
   chatSidebarWidth: 360,
-  chatSidebarOpen: false,
+  chatSidebarOpen: true,
   viewMode: 'live',
   treeSortOrder: 'name-asc',
   bookmarkFilterActive: false,

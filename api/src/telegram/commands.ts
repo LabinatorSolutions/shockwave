@@ -38,12 +38,13 @@ const HELP = [
   '/help — this',
 ].join('\n');
 
-/** Which workspace Telegram runs against: the switchable one, else the env default. */
+/** Which workspace Telegram runs against: the switchable one, else the first
+ * workspace by sort_order — i.e. the top of the desktop's workspace list, so
+ * the default is chosen from the desktop by reordering, not by env var. */
 export async function activeWorkspace(db: Db) {
   const acc = await store.getTelegramAccount(db);
-  const wanted = acc?.activeWorkspaceId || process.env.TELEGRAM_DEFAULT_WORKSPACE;
   const all = await store.listWorkspaces(db);
-  return all.find((w) => w.id === wanted) ?? null;
+  return all.find((w) => w.id === acc?.activeWorkspaceId) ?? all[0] ?? null;
 }
 
 /** 1-based index from a command argument; null when absent or out of range. */
@@ -78,14 +79,18 @@ export async function handleCommand(
 
   switch (cmd) {
     case 'start':
-    case 'help':
-      await reply(HELP);
+    case 'help': {
+      const ws = await activeWorkspace(db);
+      await reply(ws ? `🗂 Workspace: ${ws.name}\n\n${HELP}` : HELP);
       return true;
+    }
 
-    case 'new':
+    case 'new': {
       await store.setTelegramActiveChat(db, null);
-      await reply('🆕 Fresh chat. Send your next message to begin.');
+      const ws = await activeWorkspace(db);
+      await reply(`🆕 Fresh chat${ws ? ` in ${ws.name}` : ''}. Send your next message to begin.`);
       return true;
+    }
 
     case 'workspaces': {
       const all = await store.listWorkspaces(db);
@@ -125,7 +130,7 @@ export async function handleCommand(
       if (idx == null) { await reply('Usage: /chat 2 — see /chats for the list.'); return true; }
       const target = chats[idx];
       await store.setTelegramActiveChat(db, target.id);
-      await reply(`Switched to: ${target.title ?? 'Untitled'}\nCarry on — I have the whole conversation.`);
+      await reply(`Switched to: ${target.title ?? 'Untitled'}  (${ws.name})\nCarry on — I have the whole conversation.`);
       return true;
     }
 

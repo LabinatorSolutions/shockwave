@@ -255,12 +255,14 @@ export interface ShockwaveApi {
     apiWrite(patch: { url?: string; apiKey?: string }): Promise<{ ok: boolean; url: string; hasApiKey: boolean }>;
     /** Health-check a URL + key (falls back to the stored key when omitted). */
     apiTest(args: { url: string; apiKey?: string }): Promise<{ ok: boolean; error?: string }>;
-    /** Telegram connection status (from the companion). */
-    telegramStatus(): Promise<{ ok: boolean; connected?: boolean; botUsername?: string | null; activeChatId?: string | null; error?: string }>;
+    /** Telegram connection status (from the companion), including the workspace it runs against. */
+    telegramStatus(): Promise<{ ok: boolean; connected?: boolean; botUsername?: string | null; activeChatId?: string | null; workspaceId?: string | null; workspaceName?: string | null; error?: string }>;
     /** Connect a Telegram bot — the companion validates the token + registers the webhook. */
     telegramConnect(opts: { botToken: string; authorizedTgUserId: number }): Promise<{ ok: boolean; botUsername?: string | null; webhookUrl?: string; error?: string }>;
     /** Disconnect Telegram (companion deletes the webhook + stored token). */
     telegramDisconnect(): Promise<{ ok: boolean; error?: string }>;
+    /** Set the workspace Telegram runs against (starts a fresh chat, same as /workspace in the bot). */
+    telegramSetWorkspace(workspaceId: string): Promise<{ ok: boolean; error?: string }>;
   };
 
   oauth: {

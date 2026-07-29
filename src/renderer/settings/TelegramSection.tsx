@@ -6,12 +6,15 @@ import { Input } from '@/components/ui/input';
 import {
   InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput,
 } from '@/components/ui/input-group';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 
 // Telegram integration. Everything happens on the companion (it owns the bot,
 // registers the webhook, and runs the turns) — this page just triggers those
-// actions. A message to the bot runs the agent on the server's default workspace
-// and streams the reply back to Telegram.
-export default function TelegramSection() {
+// actions. A message to the bot runs the agent on the bot's workspace (picked
+// below, or /workspace in the bot) and streams the reply back to Telegram.
+export default function TelegramSection({ workspaces }: { workspaces?: any[] }) {
   const [status, setStatus] = useState<any>(null);
   const [botToken, setBotToken] = useState('');
   const [userId, setUserId] = useState('');
@@ -38,6 +41,14 @@ export default function TelegramSection() {
     else setMsg({ ok: false, text: r.error || 'Could not disconnect.' });
   };
 
+  const setWorkspace = async (workspaceId: string) => {
+    setBusy(true); setMsg(null);
+    const r = await window.api.settings.telegramSetWorkspace(workspaceId);
+    setBusy(false);
+    if (r.ok) refresh();
+    else setMsg({ ok: false, text: r.error || 'Could not switch workspace.' });
+  };
+
   const connected = status?.ok && status?.connected;
 
   return (
@@ -47,15 +58,36 @@ export default function TelegramSection() {
     >
       <SettingsGroup>
         {connected ? (
-          <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
-            <div>
-              <div className="text-[13px] font-medium">Connected{status.botUsername ? ` as @${status.botUsername}` : ''}</div>
-              <div className="text-xs text-muted-foreground">Message the bot on Telegram to run the agent.</div>
+          <>
+            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+              <div>
+                <div className="text-[13px] font-medium">Connected{status.botUsername ? ` as @${status.botUsername}` : ''}</div>
+                <div className="text-xs text-muted-foreground">Message the bot on Telegram to run the agent.</div>
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={disconnect} disabled={busy}>
+                {busy ? 'Disconnecting…' : 'Disconnect'}
+              </Button>
             </div>
-            <Button type="button" size="sm" variant="outline" onClick={disconnect} disabled={busy}>
-              {busy ? 'Disconnecting…' : 'Disconnect'}
-            </Button>
-          </div>
+            <Field>
+              <FieldLabel htmlFor="tg-workspace">Default workspace</FieldLabel>
+              {/* Always-controlled: '' matches no item, so the placeholder shows.
+                  `?? undefined` flipped the Select to uncontrolled while status
+                  loaded, then controlled again — selection acted flaky. */}
+              <Select value={status.workspaceId ?? ''} onValueChange={setWorkspace} disabled={busy || !(workspaces?.length)}>
+                <SelectTrigger id="tg-workspace" className="w-full">
+                  <SelectValue placeholder={workspaces?.length ? 'Choose a workspace' : 'No workspaces yet'} />
+                </SelectTrigger>
+                {/* popper: item-aligned overlays the trigger, and with no
+                    selection it has no item to align to — looks broken. */}
+                <SelectContent position="popper">
+                  {(workspaces || []).map((w) => (
+                    <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>The default workspace a Telegram message runs the agent on. Changing it starts a fresh chat — same as /workspace in the bot.</FieldDescription>
+            </Field>
+          </>
         ) : (
           <>
             <Field>

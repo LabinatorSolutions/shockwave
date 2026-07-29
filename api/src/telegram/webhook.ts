@@ -74,8 +74,16 @@ export async function syncCommands(pool: DB, key: Buffer, log?: any) {
 }
 
 export async function status(pool: DB) {
-  const acc = await store.getTelegramAccount(getDb(pool));
-  return { connected: !!acc?.enabled, botUsername: acc?.botUsername ?? null, activeChatId: acc?.activeChatId ?? null };
+  const db = getDb(pool);
+  const acc = await store.getTelegramAccount(db);
+  // Report the STORED selection — null when nothing is chosen — so the settings
+  // picker shows blank. Message runs still fall back via activeWorkspace().
+  const all = await store.listWorkspaces(db);
+  const ws = all.find((w) => w.id === acc?.activeWorkspaceId) ?? null;
+  return {
+    connected: !!acc?.enabled, botUsername: acc?.botUsername ?? null, activeChatId: acc?.activeChatId ?? null,
+    workspaceId: ws?.id ?? null, workspaceName: ws?.name ?? null,
+  };
 }
 
 // ── Webhook ───────────────────────────────────────────────────────────────────
@@ -87,7 +95,13 @@ export async function handleWebhook(pool: DB, key: Buffer, runtime: any, req: ex
 
   const secret = await store.getTelegramSecret(db, key, 'webhookSecret');
   const got = req.get('X-Telegram-Bot-Api-Secret-Token') || '';
-  if (!secret || !timingSafeEqualStr(got, secret)) { res.sendStatus(403); return; }
+  if (!secret || !timingSafeEqualStr(got, secret)) {
+    // Telegram registered with a different secret than we hold (e.g. a stale
+    // registration after a reconnect). Without this line the bot goes silently
+    // deaf — every update bounces 403 and nothing anywhere says so.
+    log?.warn({ hasStoredSecret: !!secret }, 'telegram webhook rejected: secret-token mismatch');
+    res.sendStatus(403); return;
+  }
 
   const update = req.body || {};
   const msg = update.message;
@@ -153,7 +167,7 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   if (text.startsWith('/')) { await handleCommand(db, key, client, dm, text, isBusy); return; }
 
   const ws = await activeWorkspace(db);
-  if (!ws) { await client.sendMessage(dm, '⚠️ No workspace is set. Use /workspaces to pick one.'); return; }
+  if (!ws) { await client.sendMessage(dm, '⚠️ No workspaces exist yet — add one in the desktop app first.'); return; }
 
   let chatId = acc.activeChatId as string | null;
   if (!chatId) { chatId = crypto.randomUUID(); await store.setTelegramActiveChat(db, chatId); }
@@ -163,7 +177,7 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   // commit + push) belong to the turn that's still going: running them now would
   // commit half-edited files and abandon the first reply mid-sentence.
   if (busy.has(chatId)) {
-    await client.sendMessage(dm, '⌛ Got it — working that in.', { replyToMessageId: msg?.message_id });
+    await client.sendMessage(dm, '⌛ Got it — after I finish the last task.', { replyToMessageId: msg?.message_id });
     await runtime.agentSend({ chatId, text, workspaceId: ws.id, workspacePath: '', provider: '', model: '', apiKey: '' }, () => {})
       .catch(() => { /* the running turn owns error reporting */ });
     return;

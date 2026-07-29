@@ -932,6 +932,10 @@ ipcMain.handle('telegram:disconnect', async () => {
   try { await api.post('/telegram/disconnect'); return { ok: true }; }
   catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
 });
+ipcMain.handle('telegram:setWorkspace', async (_evt, { workspaceId }) => {
+  try { await api.post('/telegram/workspace', { workspaceId }); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
+});
 // OAuth for agent secrets. The whole flow (system browser + loopback callback +
 // token exchange/refresh) lives in main; the renderer only kicks it off and
 // reads status back off the persisted secret. `oauth:listPresets` feeds the

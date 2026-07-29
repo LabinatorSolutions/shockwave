@@ -20,6 +20,12 @@ services:
       retries: 10
 
   api:
+    # Published by .github/workflows/companion-image.yml on every release tag.
+    # pull_policy `missing` makes plain `docker compose up -d` PULL this image
+    # (the install-script path — no repo checkout on the box); dev overrides
+    # with `docker compose up -d --build`, which always builds from source.
+    image: ghcr.io/stephengpope/shockwave-companion:latest
+    pull_policy: missing
     build:
       # Repo root so the build can reach ../agent-core (the shared agent runtime).
       context: ..
@@ -33,9 +39,7 @@ services:
       MASTER_KEY: ${MASTER_KEY:?set in .env — 32 bytes base64}
       API_KEY: ${API_KEY:?set in .env}
       PORT: 8080
-      # Telegram (optional): default workspace id a Telegram message runs against.
-      # The webhook URL is derived from COMPANION_DOMAIN (below) — one public host.
-      TELEGRAM_DEFAULT_WORKSPACE: ${TELEGRAM_DEFAULT_WORKSPACE:-}
+      # The Telegram webhook URL is derived from COMPANION_DOMAIN — one public host.
       COMPANION_DOMAIN: ${COMPANION_DOMAIN:-}
       # pi's per-run scratch (working copies of each chat's session file). On a
       # volume so a rebuild doesn't throw them away — losing them is survivable

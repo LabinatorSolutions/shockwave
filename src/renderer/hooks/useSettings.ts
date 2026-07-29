@@ -28,7 +28,7 @@ const DEFAULT_CANONICAL: Settings = {
   // renderer never writes it through persistSettings. Present here only to satisfy
   // the Settings type + hydrate a default before disk load.
   cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
-  chatSidebarOpen: false,
+  chatSidebarOpen: true,
   chatSidebarWidth: 360,
   sidebarWidth: 260,
   viewMode: VIEW_MODES.LIVE,
@@ -317,7 +317,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       // Main-owned (MAIN_OWNED_KEYS) — mirrored here only so settingsRef matches
       // the Settings type; the renderer never writes it back.
       cron: disk.cron ?? { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
-      chatSidebarOpen: typeof disk.chatSidebarOpen === 'boolean' ? disk.chatSidebarOpen : false,
+      chatSidebarOpen: typeof disk.chatSidebarOpen === 'boolean' ? disk.chatSidebarOpen : true,
       chatSidebarWidth: typeof disk.chatSidebarWidth === 'number' ? disk.chatSidebarWidth : 360,
       sidebarWidth: typeof disk.sidebarWidth === 'number' ? disk.sidebarWidth : 260,
       viewMode: disk.viewMode === VIEW_MODES.RAW || disk.viewMode === VIEW_MODES.LIVE ? disk.viewMode : VIEW_MODES.LIVE,

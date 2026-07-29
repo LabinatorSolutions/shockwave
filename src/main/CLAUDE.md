@@ -260,7 +260,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Workspaces | `workspace:inspectFolder`, `workspace:createWithRepo`, `workspace:addFromRepo` (covers both clone-into-empty and adopt-a-clone), `workspace:setUpHere`, `workspace:remove`, `workspace:forgetLocal`, `workspace:listFiles`, `workspace:ensureFiles` |
 | Workspace settings | `workspaceSettings:read`, `workspaceSettings:update` (per-workspace `.shockwave/workspace.json` — daily-note config, templates, built-in-skill toggles) |
 | Cron | `cron:read`, `cron:runNow` (the desktop's read-only view; cron runs on the companion) |
-| Telegram | `telegram:status`, `telegram:connect`, `telegram:disconnect` (thin passthroughs to the companion `/telegram/*`; the companion owns the bot) |
+| Telegram | `telegram:status`, `telegram:connect`, `telegram:disconnect`, `telegram:setWorkspace` (thin passthroughs to the companion `/telegram/*`; the companion owns the bot) |
 | Companion config | `api:read`, `api:write`, `api:test` (the "connect to your server" form — URL + key, key `safeStorage`-wrapped) |
 | App / updates | `app:machineId`, `app:checkForUpdates`, `app:getUpdateStatus`, `app:restartToUpdate` (electron-updater); plus update-status push events |
 | Sync | `sync:verifyPat`, `sync:checkGit`, `sync:listRepos`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |

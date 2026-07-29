@@ -12,7 +12,10 @@ RUN npm run build          # esbuild bundles src + agent-core -> dist/server.js
 RUN npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
-ENV NODE_ENV=production PORT=8080
+# The release tag this image was built from (CI passes it; 'dev' for local
+# builds). Surfaced by GET /health so clients can spot a stale companion.
+ARG VERSION=dev
+ENV NODE_ENV=production PORT=8080 APP_VERSION=$VERSION
 WORKDIR /app
 # git + CA certs: the cron runner shallow-clones workspace repos over HTTPS.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \

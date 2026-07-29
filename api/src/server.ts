@@ -45,9 +45,14 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(helmet());
 
+// APP_VERSION is baked into the image at build time (Dockerfile ARG); 'dev'
+// when running outside the published image. Clients compare it against their
+// own version to detect a stale companion.
+const APP_VERSION = process.env.APP_VERSION || 'dev';
+
 app.get('/health', async (_req, res) => {
-  try { await pool.query('SELECT 1'); res.json({ ok: true }); }
-  catch { res.status(503).json({ ok: false }); }
+  try { await pool.query('SELECT 1'); res.json({ ok: true, version: APP_VERSION }); }
+  catch { res.status(503).json({ ok: false, version: APP_VERSION }); }
 });
 
 // Telegram webhook — PUBLIC (Telegram sends no bearer token; gated by a per-
@@ -209,6 +214,16 @@ app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, m
 // tool — the bot token is here, so the desktop asks rather than holds it.
 app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''))));
 app.get('/telegram/status', handle(() => tgStatus(pool)));
+// Set the workspace Telegram runs against (same semantics as /workspace in the
+// bot: switching always starts a fresh chat). The desktop's Telegram settings
+// page drives this.
+app.post('/telegram/workspace', handle(async (req) => {
+  const workspaceId = String(req.body?.workspaceId ?? '');
+  const all = await store.listWorkspaces(db);
+  if (!all.some((w) => w.id === workspaceId)) throw new Error('unknown workspace');
+  await store.setTelegramActiveWorkspace(db, workspaceId);
+  return { ok: true };
+}));
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   log.error({ err: err?.message }, 'error');
