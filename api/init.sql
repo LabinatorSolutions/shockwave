@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS chat (
   created_at    bigint NOT NULL,
   updated_at    bigint NOT NULL,
   archived      boolean NOT NULL DEFAULT false,
-  starred       boolean NOT NULL DEFAULT false,
+  pinned        boolean NOT NULL DEFAULT false,
   deleted       boolean NOT NULL DEFAULT false,
   -- Cross-client execution flag. The executing machine sets running=true on
   -- agent_start and clears it AFTER uploading the turn, so running=false means
@@ -121,6 +121,13 @@ CREATE INDEX IF NOT EXISTS idx_chat_ws_updated ON chat (workspace_id, updated_at
 -- Existing volumes (table already created before these columns) get them here.
 ALTER TABLE chat ADD COLUMN IF NOT EXISTS running boolean NOT NULL DEFAULT false;
 ALTER TABLE chat ADD COLUMN IF NOT EXISTS running_machine text;
+-- Rename: starred → pinned (the feature is "pinned chats" now). Guarded so
+-- re-running this file (every boot) is a no-op; fresh DBs create `pinned` above.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='chat' AND column_name='starred') THEN
+    ALTER TABLE chat RENAME COLUMN starred TO pinned;
+  END IF;
+END $$;
 
 -- The pi transcript JSONL, stored whole (Postgres TOAST handles multi-MB text,
 -- and an unselected column is never read). This is pi's OWN session file — how a

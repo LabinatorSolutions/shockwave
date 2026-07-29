@@ -37,7 +37,7 @@ export const listChats = (workspaceId: string, opts: { limit?: number; before?: 
   if (opts.before) p.set('before', String(opts.before));
   return api.get(`/chats?${p}`);
 };
-export const listStarred = (workspaceId: string) => api.get(`/chats/starred?workspaceId=${encodeURIComponent(workspaceId)}`);
+export const listPinned = (workspaceId: string) => api.get(`/chats/pinned?workspaceId=${encodeURIComponent(workspaceId)}`);
 export const searchChats = (workspaceId: string, query: string, opts: { limit?: number } = {}) => {
   const p = new URLSearchParams({ workspaceId, q: query });
   if (opts.limit) p.set('limit', String(opts.limit));
@@ -46,7 +46,7 @@ export const searchChats = (workspaceId: string, query: string, opts: { limit?: 
 export const getMessages = (chatId: string, after?: number) =>
   api.get(`/chat/${encodeURIComponent(chatId)}/messages${typeof after === 'number' ? `?after=${after}` : ''}`);
 export const openChat = (chatId: string) => api.get(`/chat/${encodeURIComponent(chatId)}`);
-export const setChatStarred = (chatId: string, starred: boolean) => api.patch(`/chat/${encodeURIComponent(chatId)}/starred`, { starred });
+export const setChatPinned = (chatId: string, pinned: boolean) => api.patch(`/chat/${encodeURIComponent(chatId)}/pinned`, { pinned });
 export const deleteChat = (chatId: string) => api.del(`/chat/${encodeURIComponent(chatId)}`);
 
 // Transcript JSONL (whole). The server keeps it so any machine can continue the

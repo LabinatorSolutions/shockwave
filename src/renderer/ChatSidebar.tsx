@@ -1,7 +1,7 @@
 import React, { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronDown, ChevronRight, Sparkles, KeyRound } from 'lucide-react';
+import { ChevronDown, ChevronRight, Sparkles, KeyRound, Pin } from 'lucide-react';
 import { PaperclipIcon, PlayIcon, StopIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon, SearchIcon, PlusIcon, TrashIcon } from './Icons.jsx';
 import { cn } from '@/lib/utils';
 import { resolveImageUrl } from './imageWidgets.js';
@@ -369,24 +369,9 @@ function ToolEntry({ entry }) {
   );
 }
 
-// Star (filled when active). Used in the header + each history row.
-function StarIcon({ size = 14, filled = false }: { size?: number; filled?: boolean }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
-      fill={filled ? 'currentColor' : 'none'}
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-    </svg>
-  );
+// Pin (filled when active). Used in the header + each history row.
+function PinIcon({ size = 14, filled = false }: { size?: number; filled?: boolean }) {
+  return <Pin size={size} fill={filled ? 'currentColor' : 'none'} aria-hidden="true" />;
 }
 
 // "3m", "2h", "5d", or a date past a week — for the history list.
@@ -440,7 +425,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
     };
   }, [onClose]);
 
-  const [starred, setStarredList] = useState<any[]>([]);
+  const [pinned, setPinnedList] = useState<any[]>([]);
 
   const loadRecents = useCallback(async (before?: number) => {
     setLoading(true);
@@ -451,21 +436,21 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
     } finally { setLoading(false); }
   }, []);
 
-  const loadStarred = useCallback(async () => {
-    try { setStarredList(await window.api.chat.listStarred()); } catch { /* best-effort */ }
+  const loadPinned = useCallback(async () => {
+    try { setPinnedList(await window.api.chat.listPinned()); } catch { /* best-effort */ }
   }, []);
 
-  // Debounced search / initial recents + starred.
+  // Debounced search / initial recents + pinned.
   useEffect(() => {
     let cancelled = false;
     const q = query.trim();
-    if (!q) { loadRecents(); loadStarred(); return () => { cancelled = true; }; }
+    if (!q) { loadRecents(); loadPinned(); return () => { cancelled = true; }; }
     const t = setTimeout(async () => {
       const rows = await window.api.chat.searchChats({ query: q });
       if (!cancelled) { setItems(rows); setHasMore(false); }
     }, 180);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [query, loadRecents, loadStarred]);
+  }, [query, loadRecents, loadPinned]);
 
   const onScroll = useCallback((e) => {
     if (searching || loading || !hasMore) return;
@@ -484,18 +469,18 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   const performDelete = useCallback(async (chatId) => {
     await window.api.chat.deleteChat(chatId);
     setItems((prev) => prev.filter((x) => x.chatId !== chatId));
-    setStarredList((prev) => prev.filter((x) => x.chatId !== chatId));
+    setPinnedList((prev) => prev.filter((x) => x.chatId !== chatId));
     onDeleted?.(chatId);
   }, [onDeleted]);
 
-  const onToggleStar = useCallback(async (e, chatId, currentlyStarred) => {
+  const onTogglePin = useCallback(async (e, chatId, currentlyPinned) => {
     e.stopPropagation();
-    await window.api.chat.setStarred({ chatId, starred: !currentlyStarred });
+    await window.api.chat.setPinned({ chatId, pinned: !currentlyPinned });
     loadRecents();
-    loadStarred();
-  }, [loadRecents, loadStarred]);
+    loadPinned();
+  }, [loadRecents, loadPinned]);
 
-  const renderRow = (it, isStarred) => (
+  const renderRow = (it, isPinned) => (
     <button
       key={it.chatId}
       type="button"
@@ -510,12 +495,12 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         tabIndex={0}
         className={cn(
           'flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-2 hover:text-foreground',
-          isStarred && 'text-amber-500 hover:text-amber-500',
+          isPinned && 'text-primary hover:text-primary',
         )}
-        onClick={(e) => onToggleStar(e, it.chatId, isStarred)}
-        aria-label={isStarred ? 'Unstar chat' : 'Star chat'}
-        title={isStarred ? 'Unstar' : 'Star'}
-      ><StarIcon size={13} filled={isStarred} /></span>
+        onClick={(e) => onTogglePin(e, it.chatId, isPinned)}
+        aria-label={isPinned ? 'Unpin chat' : 'Pin chat'}
+        title={isPinned ? 'Unpin' : 'Pin'}
+      ><PinIcon size={13} filled={isPinned} /></span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">{it.title || 'Untitled chat'}</span>
@@ -543,8 +528,8 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
     </button>
   );
 
-  const showStarred = !searching && starred.length > 0;
-  const empty = items.length === 0 && !showStarred && !loading;
+  const showPinned = !searching && pinned.length > 0;
+  const empty = items.length === 0 && !showPinned && !loading;
 
   return (
     <div
@@ -568,10 +553,10 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         {empty && (
           <div className="px-2 py-3 text-center text-xs text-muted-foreground">{searching ? 'No matches' : 'No saved chats yet'}</div>
         )}
-        {showStarred && (
+        {showPinned && (
           <>
-            <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Starred</div>
-            {starred.map((it) => renderRow(it, true))}
+            <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Pinned</div>
+            {pinned.map((it) => renderRow(it, true))}
             {items.length > 0 && <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Recent</div>}
           </>
         )}
@@ -620,7 +605,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   const frozen = !!remoteMachine;
   const input = chat.draft;
   const chatTitle = chat.title;
-  const chatStarred = chat.starred;
+  const chatPinned = chat.pinned;
 
   // Chats with a turn in flight (any workspace) — drives the history spinner.
   const runningIds = useMemo(
@@ -755,15 +740,15 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     setPartialText('');
   }, [workspacePath]);
 
-  // Star / unstar the active chat (header star button).
-  const onToggleHeaderStar = useCallback(async () => {
+  // Pin / unpin the active chat (header pin button).
+  const onToggleHeaderPin = useCallback(async () => {
     const id = chatIdRef.current;
     if (!id || !chat.persisted) return;
-    const next = !chatStarred;
-    chatStore.setStarred(id, next);
-    try { await window.api.chat.setStarred({ chatId: id, starred: next }); }
-    catch { chatStore.setStarred(id, !next); }
-  }, [chat.persisted, chatStarred]);
+    const next = !chatPinned;
+    chatStore.setPinned(id, next);
+    try { await window.api.chat.setPinned({ chatId: id, pinned: next }); }
+    catch { chatStore.setPinned(id, !next); }
+  }, [chat.persisted, chatPinned]);
 
   // Inline rename of the active chat's title (double-click the header title).
   const startRename = useCallback(() => {
@@ -1049,12 +1034,12 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         {chat.persisted && (
           <button
             type="button"
-            className={cn(headerBtn, chatStarred && 'text-amber-500 hover:text-amber-500')}
-            onClick={onToggleHeaderStar}
-            title={chatStarred ? 'Unstar chat' : 'Star chat'}
-            aria-label={chatStarred ? 'Unstar chat' : 'Star chat'}
-            aria-pressed={chatStarred}
-          ><StarIcon size={15} filled={chatStarred} /></button>
+            className={cn(headerBtn, chatPinned && 'text-primary hover:text-primary')}
+            onClick={onToggleHeaderPin}
+            title={chatPinned ? 'Unpin chat' : 'Pin chat'}
+            aria-label={chatPinned ? 'Unpin chat' : 'Pin chat'}
+            aria-pressed={chatPinned}
+          ><PinIcon size={15} filled={chatPinned} /></button>
         )}
         <button
           type="button"

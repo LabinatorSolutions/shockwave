@@ -79,7 +79,7 @@ export const chatTable = pgTable('chat', {
   createdAt: epochMs('created_at').notNull(),
   updatedAt: epochMs('updated_at').notNull(),
   archived: boolean('archived').notNull().default(false),
-  starred: boolean('starred').notNull().default(false),
+  pinned: boolean('pinned').notNull().default(false),
   deleted: boolean('deleted').notNull().default(false),
   running: boolean('running').notNull().default(false),
   runningMachine: text('running_machine'),

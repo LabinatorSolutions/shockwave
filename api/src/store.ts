@@ -245,21 +245,21 @@ const sessionSelect = {
   chatId: chatTable.chatId, workspaceId: chatTable.workspaceId, title: chatTable.title,
   systemPrompt: chatTable.systemPrompt, model: chatTable.model, source: chatTable.source,
   sourceId: chatTable.sourceId, machine: chatTable.machine, createdAt: chatTable.createdAt,
-  updatedAt: chatTable.updatedAt, archived: chatTable.archived, starred: chatTable.starred,
+  updatedAt: chatTable.updatedAt, archived: chatTable.archived, pinned: chatTable.pinned,
   running: chatTable.running, runningMachine: chatTable.runningMachine,
   transcriptUpdatedAt: chatTable.transcriptUpdatedAt,
 };
 
 export async function listChats(db: Db, workspaceId: string, opts: { limit?: number; before?: number } = {}) {
   const limit = Math.min(opts.limit ?? 30, 100);
-  const conds = [eq(chatTable.workspaceId, workspaceId), eq(chatTable.archived, false), eq(chatTable.starred, false), eq(chatTable.deleted, false)];
+  const conds = [eq(chatTable.workspaceId, workspaceId), eq(chatTable.archived, false), eq(chatTable.pinned, false), eq(chatTable.deleted, false)];
   if (typeof opts.before === 'number') conds.push(lt(chatTable.updatedAt, opts.before));
   return db.select(sessionSelect).from(chatTable).where(and(...conds)).orderBy(desc(chatTable.updatedAt)).limit(limit);
 }
 
-export async function listStarred(db: Db, workspaceId: string) {
+export async function listPinned(db: Db, workspaceId: string) {
   return db.select(sessionSelect).from(chatTable)
-    .where(and(eq(chatTable.workspaceId, workspaceId), eq(chatTable.archived, false), eq(chatTable.starred, true), eq(chatTable.deleted, false)))
+    .where(and(eq(chatTable.workspaceId, workspaceId), eq(chatTable.archived, false), eq(chatTable.pinned, true), eq(chatTable.deleted, false)))
     .orderBy(desc(chatTable.updatedAt));
 }
 
@@ -308,8 +308,8 @@ export async function upsertChat(db: Db, row: {
 export async function setChatTitle(db: Db, chatId: string, title: string) {
   await db.update(chatTable).set({ title }).where(eq(chatTable.chatId, chatId));
 }
-export async function setChatStarred(db: Db, chatId: string, starred: boolean) {
-  await db.update(chatTable).set({ starred }).where(eq(chatTable.chatId, chatId));
+export async function setChatPinned(db: Db, chatId: string, pinned: boolean) {
+  await db.update(chatTable).set({ pinned }).where(eq(chatTable.chatId, chatId));
 }
 export async function deleteChat(db: Db, chatId: string) {
   // Tombstone so a delete propagates to other machines on pull.

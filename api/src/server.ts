@@ -97,7 +97,7 @@ app.get('/chats', handle((req) => store.listChats(db, String(req.query.workspace
   limit: req.query.limit ? Number(req.query.limit) : undefined,
   before: req.query.before ? Number(req.query.before) : undefined,
 })));
-app.get('/chats/starred', handle((req) => store.listStarred(db, String(req.query.workspaceId))));
+app.get('/chats/pinned', handle((req) => store.listPinned(db, String(req.query.workspaceId))));
 app.get('/chats/search', handle((req) => store.searchChats(db, String(req.query.workspaceId), String(req.query.q ?? ''), { limit: req.query.limit ? Number(req.query.limit) : undefined })));
 app.get('/chat/:id', handle(async (req) => ({ chat: await store.getChat(db, req.params.id), messages: await store.getMessages(db, req.params.id) })));
 // `?after=<seq>` returns only what's newer — the one read that serves a cold
@@ -106,7 +106,7 @@ app.get('/chat/:id/messages', handle((req) => store.getMessages(db, req.params.i
 app.post('/chat', handle((req) => store.upsertChat(db, { ...req.body, now: Date.now() })));
 app.post('/chat/:id/messages', handle((req) => store.appendMessages(db, req.params.id, req.body)));
 app.patch('/chat/:id/title', handle((req) => store.setChatTitle(db, req.params.id, req.body?.title ?? '')));
-app.patch('/chat/:id/starred', handle((req) => store.setChatStarred(db, req.params.id, !!req.body?.starred)));
+app.patch('/chat/:id/pinned', handle((req) => store.setChatPinned(db, req.params.id, !!req.body?.pinned)));
 app.delete('/chat/:id', handle((req) => store.deleteChat(db, req.params.id)));
 // Transcript JSONL (whole). Sent as { content }.
 app.get('/chat/:id/transcript', handle((req) => store.getTranscript(db, req.params.id)));

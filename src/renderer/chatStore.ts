@@ -34,9 +34,9 @@ type ChatEntry = {
   runStartAt: number; // 0 = not running
   error: string | null;
   title: string | null;
-  starred: boolean;
+  pinned: boolean;
   /** Chat exists in the DB (set on first send's shockwave_chat / on open).
-   *  Gates star + rename, which need a stored row. */
+   *  Gates pin + rename, which need a stored row. */
   persisted: boolean;
   /** Server rows loaded (new chats are born hydrated — nothing stored yet). */
   hydrated: boolean;
@@ -73,7 +73,7 @@ export const EMPTY_CHAT: ChatEntry = {
   runStartAt: 0,
   error: null,
   title: null,
-  starred: false,
+  pinned: false,
   persisted: false,
   hydrated: false,
   pendingResync: false,
@@ -316,7 +316,7 @@ function handleAgentEvent(evt: any) {
     // has never seen — a Telegram or cron run — it's the first we hear of it, so
     // load it: without that it would render as a bare tail with no workspace and
     // never appear in the sidebar.
-    patchChat(chatId, { persisted: true, title: evt.title ?? null, starred: !!evt.starred });
+    patchChat(chatId, { persisted: true, title: evt.title ?? null, pinned: !!evt.pinned });
     if (!state.chats[chatId]?.hydrated) discover(chatId);
     return;
   }
@@ -454,7 +454,7 @@ export async function hydrateOnly(chatId: string) {
     hydrated: true,
     persisted: true,
     title: row.title ?? c.title,
-    starred: !!row.starred,
+    pinned: !!row.pinned,
     messages: hydrateMessages(rows || []),
     currentAssistantId: null,
     currentThinkingId: null,
@@ -506,7 +506,7 @@ export async function openChat(chatId: string, workspace: string | null) {
     hydrated: true,
     persisted: !!row || c.persisted,
     title: row?.title ?? c.title,
-    starred: !!(row?.starred ?? c.starred),
+    pinned: !!(row?.pinned ?? c.pinned),
     remoteMachine: remote ?? c.remoteMachine,
     ...(live ? { pendingResync: true } : {
       // REPLACE, never concat: every message is persisted as it happens, so the
@@ -578,8 +578,8 @@ export function setTitle(chatId: string, title: string | null) {
   patchChat(chatId, { title });
 }
 
-export function setStarred(chatId: string, starred: boolean) {
-  patchChat(chatId, { starred });
+export function setPinned(chatId: string, pinned: boolean) {
+  patchChat(chatId, { pinned });
 }
 
 // Dev-only introspection for CDP-driven debugging (see electron-dev skill).

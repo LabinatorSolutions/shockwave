@@ -15,7 +15,7 @@ import { initDesktopAgent, agentSend, agentAbort, agentDisposeChat, agentDispose
 // Cron execution lives entirely on the companion now; the desktop only VIEWS the
 // schedule (from local cron.json + companion run-status) and triggers a manual run.
 import { cronRead, cronRunNow } from './api/cron.js';
-import { listChats, listStarred, searchChats, getMessages, openChat as openChatApi, deleteChat, setChatTitle, setChatStarred, postEvent } from './api/chats.js';
+import { listChats, listPinned, searchChats, getMessages, openChat as openChatApi, deleteChat, setChatTitle, setChatPinned, postEvent } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
@@ -1520,16 +1520,16 @@ ipcMain.handle('chat:list', async (_evt, opts = {}) => {
   return listChats(ws, opts);
 });
 
-// Starred chats (the pinned section at the top of the picker).
-ipcMain.handle('chat:listStarred', async () => {
+// Pinned chats (the section at the top of the picker).
+ipcMain.handle('chat:listPinned', async () => {
   const ws = activeWorkspaceId();
   if (!ws) return [];
-  return listStarred(ws);
+  return listPinned(ws);
 });
 
-// Toggle a chat's starred flag.
-ipcMain.handle('chat:setStarred', async (_evt, { chatId, starred }) => {
-  if (chatId) await setChatStarred(chatId, !!starred);
+// Toggle a chat's pinned flag.
+ipcMain.handle('chat:setPinned', async (_evt, { chatId, pinned }) => {
+  if (chatId) await setChatPinned(chatId, !!pinned);
 });
 
 // Cross-chat title search.

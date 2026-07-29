@@ -385,7 +385,7 @@ export function createAgentRuntime(host: AgentHost) {
     }
 
     const dbRow = await host.getChat(chatId);
-    entry.emit({ type: 'shockwave_chat', chatId, machine: host.machine, title: dbRow?.title ?? null, starred: !!dbRow?.starred });
+    entry.emit({ type: 'shockwave_chat', chatId, machine: host.machine, title: dbRow?.title ?? null, pinned: !!dbRow?.pinned });
 
     return entry;
   }

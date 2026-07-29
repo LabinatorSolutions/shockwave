@@ -149,7 +149,7 @@ export interface Chat {
   createdAt: number;
   updatedAt: number;
   archived: number;
-  starred: number;
+  pinned: boolean;
   /** Cross-client execution flag: true while some machine runs this chat. */
   running?: boolean;
   /** Hostname of the machine currently running it (null when idle). */
@@ -306,8 +306,8 @@ export interface ShockwaveApi {
 
   chat: {
     list(opts?: { limit?: number; before?: number }): Promise<Chat[]>;
-    listStarred(): Promise<Chat[]>;
-    setStarred(opts: { chatId: string; starred: boolean }): Promise<void>;
+    listPinned(): Promise<Chat[]>;
+    setPinned(opts: { chatId: string; pinned: boolean }): Promise<void>;
     searchChats(opts: { query: string; limit?: number }): Promise<ChatSearchHit[]>;
     getMessages(chatId: string): Promise<ChatMessage[]>;
     /** The chat's row + its stored messages, plus this machine's local path for

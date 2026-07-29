@@ -96,7 +96,7 @@ Chats run **concurrently** — in the desktop's `agent-core` host, or on the **c
 
 ### Event protocol consumed by the store
 
-`agent_start` / `agent_end` gate the per-chat running state. `turn_end` carries pi's normalized `usage` (we sum `totalTokens` across turns; each turn re-pays for context so the sum matches billed usage). `message_update` carries `assistantMessageEvent` (`thinking_start/delta/end`, `text_start`, `text_delta`). `tool_execution_start` / `tool_execution_update` / `tool_execution_end` build collapsible tool entries keyed by `toolCallId`. `shockwave_chat` / `shockwave_chat_titled` carry chat identity (title, star). Assistant text is rendered through `react-markdown` + `remark-gfm`.
+`agent_start` / `agent_end` gate the per-chat running state. `turn_end` carries pi's normalized `usage` (we sum `totalTokens` across turns; each turn re-pays for context so the sum matches billed usage). `message_update` carries `assistantMessageEvent` (`thinking_start/delta/end`, `text_start`, `text_delta`). `tool_execution_start` / `tool_execution_update` / `tool_execution_end` build collapsible tool entries keyed by `toolCallId`. `shockwave_chat` / `shockwave_chat_titled` carry chat identity (title, pinned). Assistant text is rendered through `react-markdown` + `remark-gfm`.
 
 **`MessageRow` is wrapped in `React.memo`** so typing in the composer doesn't re-parse every prior assistant bubble's markdown through `react-markdown`. Keep `MessageRow`'s prop surface narrow (just the message object) — adding non-memoized callbacks would defeat this.
 

@@ -360,10 +360,10 @@ contextBridge.exposeInMainWorld('api', {
      *  (pass the last row's updatedAt). @param {{ limit?: number, before?: number }} [opts]
      *  @returns {Promise<Array<any>>} */
     list: (opts) => ipcRenderer.invoke('chat:list', opts),
-    /** Starred chats (pinned section at the top of the picker). @returns {Promise<Array<any>>} */
-    listStarred: () => ipcRenderer.invoke('chat:listStarred'),
-    /** Star/unstar a chat. @param {{ chatId: string, starred: boolean }} opts @returns {Promise<void>} */
-    setStarred: (opts) => ipcRenderer.invoke('chat:setStarred', opts),
+    /** Pinned chats (section at the top of the picker). @returns {Promise<Array<any>>} */
+    listPinned: () => ipcRenderer.invoke('chat:listPinned'),
+    /** Pin/unpin a chat. @param {{ chatId: string, pinned: boolean }} opts @returns {Promise<void>} */
+    setPinned: (opts) => ipcRenderer.invoke('chat:setPinned', opts),
     /** Full-text search across the workspace's chats.
      *  @param {{ query: string, limit?: number }} opts @returns {Promise<Array<any>>} */
     search: (opts) => ipcRenderer.invoke('chat:search', opts),
