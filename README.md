@@ -8,7 +8,7 @@ A local, file-based notes app where your work stays as plain `.md` files in a fo
 It ships with a real coding agent baked right in (no separate Claude Code), and syncs through
 your own GitHub repo for free.
 
-[**Download ↓**](#install) · macOS · Windows · Linux
+[**Download ↓**](#install-the-app) · macOS · Windows · Linux
 
 </div>
 
@@ -39,9 +39,18 @@ Sync any workspace to **your own GitHub repo** — no subscription, no third-par
 - **Hands-off** — auto-syncs on an interval, with a status icon showing idle / syncing / paused.
 - **Conflicts handled in-app** — when two machines edit the same file, a red badge shows what clashed. Resolve each file (keep yours, take theirs, or merge by hand) or reset the whole workspace either way — no terminal, no git knowledge needed.
 
+### 🛰 Your Own Companion Server
+
+A small self-hosted server that is the home base for everything that should outlive one machine.
+
+- **Settings, secrets, and chats live there** — every desktop you sign in from sees the same workspaces, agent config, and full chat history. Credentials are encrypted at rest; the desktop keeps none of them.
+- **Telegram** — message your agent from your phone. Text or voice notes; replies stream back, and the finished work is committed and pushed to your repo.
+- **Scheduled runs** — define jobs in a `cron.json` at the workspace root and the companion runs the agent on a schedule (nightly triage, weekly summaries, whatever you script).
+- **Watch it live** — a turn started from Telegram or cron streams into the desktop chat sidebar in real time.
+
 ---
 
-## Install
+## Install the app
 
 Grab the latest build for your platform — these links always point at the newest release:
 
@@ -60,6 +69,64 @@ Grab the latest build for your platform — these links always point at the newe
 
 ---
 
+## Install the companion server
+
+The desktop app stores its settings, secrets, and chats on a **companion server** you host yourself — any small Linux VPS works (1 GB RAM is plenty). It also runs the agent for Telegram and scheduled jobs, so those work even when your computer is off.
+
+On a fresh Linux box, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stephengpope/shockwave/main/api/install.sh | sh
+```
+
+It installs Docker if needed, sets up a firewall, starts the server (Postgres + API + TLS proxy), and finishes by printing the **Server URL** and **API key**. Enter those in the desktop app under **Settings → Companion** and you're connected.
+
+### What the installer asks
+
+| Prompt | What to answer |
+|---|---|
+| **Domain for this server** | A domain that points at the box (e.g. `notes.example.com`) gets a free, auto-renewing Let's Encrypt certificate. **Press Enter to skip** — the server then uses a self-signed certificate on its public IP, and the desktop will ask you to trust it on first connect. Both work; a domain just avoids the trust prompt. |
+| **Email for Let's Encrypt** | Only asked when you set a domain. Used for certificate-expiry notices from Let's Encrypt. Enter to skip. |
+| **Enable ufw firewall?** | Recommended **Yes**: blocks all inbound traffic except SSH and ports 80/443 (the only ones the companion needs). Your SSH port is detected and allowed automatically, so you can't lock yourself out. Say No if you manage the firewall some other way. |
+| **Docker not found — install it?** | The server runs in Docker. Yes fetches it from get.docker.com. |
+
+Non-interactive install (no prompts):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stephengpope/shockwave/main/api/install.sh \
+  | sh -s -- --yes --domain=notes.example.com --email=you@example.com
+```
+
+Flags: `--yes` (accept all prompts), `--domain=`, `--email=`, `--no-firewall`.
+
+### After the install
+
+- **Connect the desktop** — Settings → Companion → paste the printed Server URL + API key. Every other settings page unlocks once it connects.
+- **Ports** — 80 and 443 must be reachable from the internet. On a cloud VPS that usually means opening them in the provider's firewall / security group too.
+- **Update** — re-run the same one-liner. Your data lives on Docker volumes and your `.env` (secrets) is never overwritten.
+- **Logs** — `cd /opt/shockwave-companion && docker compose logs -f api`
+- **Self-healing** — containers restart on crash, on reboot, and (via a health check) when the API stops responding.
+
+### Telegram (optional)
+
+Create a bot with [@BotFather](https://t.me/BotFather), grab your numeric user id from [@userinfobot](https://t.me/userinfobot), then connect both in **Settings → Telegram**. Only your user id can talk to the bot, and it works against the workspace you pick there. In the chat, `/help` lists everything: `/new`, `/chats`, `/workspaces`, `/status`, `/btw` (ask about a running job without interrupting it). Voice notes work too (transcribed with the AssemblyAI key from Settings → Transcription).
+
+### Scheduled runs (optional)
+
+Add a `cron.json` to a workspace root and the companion runs the agent on your schedule against a checkout of that repo:
+
+```json
+[
+  { "name": "nightly-triage", "schedule": "0 6 * * *", "prompt": "Review yesterday's notes and update TODO.md." }
+]
+```
+
+Each job takes `name`, `schedule` (standard cron syntax, in your configured timezone), `prompt`, and optionally `"enabled": false` to pause it.
+
+Job status (next run, last run, manual run-now) is in **Settings → Cron** in the desktop app.
+
+---
+
 ## Development
 
 ```bash
@@ -68,5 +135,7 @@ npm run dev     # electron + vite, hot reload
 npm run dist    # build installers into dist/
 npm test        # run the test suite
 ```
+
+Companion server (in `api/`): `cd api && docker compose up -d --build` — see [`api/CLAUDE.md`](api/CLAUDE.md).
 
 See [`CLAUDE.md`](CLAUDE.md) for architecture notes.

@@ -11,6 +11,7 @@
 // each one, rather than in a lump at the end of the turn.
 
 import * as store from '../store.js';
+import * as liveTool from '../liveTool.js';
 import type { Db } from '../db.js';
 import { resolveModel } from '../../../agent-core/agent.js';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
@@ -21,12 +22,20 @@ import { ModelRegistry, AuthStorage } from '@earendil-works/pi-coding-agent';
 const MAX_MESSAGES = 40;
 const MAX_CHARS_PER_MESSAGE = 1500;
 
+// The running tool can spew a large log; keep the TAIL, not the head — the newest
+// lines (e.g. the latest count) are what "what's it doing now" needs.
+const MAX_LIVE_TAIL_CHARS = 2000;
+
 const PROMPT = [
   'You are answering a question ABOUT an ongoing conversation between a user and a coding agent.',
   'You are not the coding agent and you are not part of that conversation — you are looking at it from outside.',
-  'Answer only from the transcript below. If it does not say, say so plainly.',
+  'Answer only from the information below. If it does not say, say so plainly.',
   'Be brief and concrete: two or three sentences, plain text, no markdown.',
 ].join('\n');
+
+function tail(s: string, max = MAX_LIVE_TAIL_CHARS): string {
+  return s.length <= max ? s : `…${s.slice(-max)}`;
+}
 
 function render(rows: any[]): string {
   return rows.map((r) => {
@@ -69,6 +78,14 @@ export async function askAboutChat(
       `Messages so far: ${all.length}`,
       `Right now the agent is: ${busy ? 'working on a job' : 'idle'}`,
     ].join('\n');
+
+    // A tool that is CURRENTLY streaming has no stored row yet — the transcript
+    // above can't show it. Splice in its live output so "what's it doing / what
+    // number is it on" is answerable mid-run.
+    const running = busy ? liveTool.current(chatId) : null;
+    const liveBlock = running && running.output.trim()
+      ? `\n\n--- TOOL RUNNING RIGHT NOW (${running.toolName}) — its output so far ---\n${tail(running.output)}`
+      : '';
 
     const auth = AuthStorage.inMemory();
     auth.setRuntimeApiKey(ca.provider, apiKey);

@@ -9,6 +9,7 @@
 // event already carries its `chatId`, so the client routes.
 
 import type express from 'express';
+import * as liveTool from './liveTool.js';
 
 const subs = new Set<express.Response>();
 
@@ -20,6 +21,9 @@ export function subscribe(res: express.Response): () => void {
 
 // Fan one event out to every watcher. Returns the subscriber count.
 export function publish(event: any): number {
+  // Capture in-flight tool output BEFORE the no-subscribers bail, so /btw can
+  // read the running tool even when no desktop is watching the feed.
+  liveTool.note(event);
   if (!subs.size) return 0;
   const payload = `data: ${JSON.stringify(event ?? {})}\n\n`;
   for (const r of subs) { try { r.write(payload); } catch { /* dropped on next close */ } }
