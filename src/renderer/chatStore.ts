@@ -95,11 +95,6 @@ window.api.app?.machineId?.().then((m: string) => { myMachine = m; }).catch(() =
 let idCounter = 0;
 const nextId = () => `m${++idCounter}`;
 
-// agent_end is emitted BEFORE the runtime uploads the turn's last rows and the
-// transcript, so a deferred re-read waits this long or it reads a tail that
-// isn't stored yet.
-const POST_TURN_RESYNC_MS = 1500;
-
 // Pi message content is `string | [{type:'text', text}, ...]`. Non-text parts
 // (images) have no transcript representation here and are dropped.
 function textOfContent(content: any): string {
@@ -172,14 +167,16 @@ function handleAgentEvent(evt: any) {
       // Freeze any still-open thinking block (guards a missing thinking_end).
       messages: c.messages.map((m) => (m.kind === 'thinking' && !m.done ? { ...m, done: true } : m)),
     }));
-    // A re-read that arrived mid-turn was deferred (it would have deleted the
-    // live stream) — run it now. Delayed, because the runtime uploads the last
-    // rows + the transcript AFTER emitting agent_end; reading too early would
-    // replace the stream with rows that don't include the turn's tail yet.
-    if (state.chats[chatId]?.pendingResync) {
-      patchChat(chatId, { pendingResync: false });
-      setTimeout(() => { hydrateOnly(chatId).catch(() => { /* the stream already holds it */ }); }, POST_TURN_RESYNC_MS);
-    }
+    return;
+  }
+  if (evt.type === 'shockwave_turn_stored') {
+    // The runtime finished uploading the turn's rows + transcript. A re-read
+    // deferred during the turn can run now — and only now: agent_end fires
+    // BEFORE those uploads, so reading on it would pull a tail that isn't
+    // stored yet and wipe good streamed content.
+    if (!state.chats[chatId]?.pendingResync) return;
+    patchChat(chatId, { pendingResync: false });
+    hydrateOnly(chatId).catch(() => { /* the stream already holds it */ });
     return;
   }
   if (evt.type === 'message_start') {
@@ -201,12 +198,11 @@ function handleAgentEvent(evt: any) {
     // a successful turn (only `agent_send_failed` clears it, since the splice
     // needs it), so a stale one from an earlier desktop send swallowed the next
     // Telegram message entirely.
+    //
+    // This is exhaustive, not a heuristic: the composer is disabled for the
+    // whole of a remote turn (`frozen` in ChatSidebar), so a message can never
+    // be drawn locally AND come back stamped with another machine's name.
     if (evt.machine && myMachine && evt.machine === myMachine) return;
-    // Steering a REMOTE turn from this composer: the bubble is already drawn
-    // locally, but the echo carries the other machine's name. Text is a fair
-    // test here — a steer is plain text, never an attachment send.
-    const last = state.chats[chatId]?.messages.at(-1);
-    if (last?.kind === 'user' && last.text === text) return;
     appendMessage(chatId, { id: nextId(), kind: 'user', text });
     return;
   }

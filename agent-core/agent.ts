@@ -501,6 +501,12 @@ export function createAgentRuntime(host: AgentHost) {
     await flushPending(entry, chatId);
     await uploadTranscript(entry, chatId);
     host.setRunning(chatId, null).catch(() => { /* best-effort */ });
+    // Everything this turn produced is now stored. A viewer that deferred a
+    // re-read (re-reading mid-turn would replace the live stream with rows that
+    // don't include what is still running) can safely take it now. Without this
+    // the viewer has to guess a delay after agent_end, which fires BEFORE the
+    // two awaits above.
+    entry.emit({ type: 'shockwave_turn_stored', chatId, machine: host.machine });
     maybeGenerateTitle(entry, chatId, entry.session.state?.messages ?? []).catch(() => { /* best-effort */ });
   }
 
