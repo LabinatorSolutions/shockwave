@@ -1,7 +1,7 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Tree } from 'react-arborist';
 import { useDrop } from 'react-dnd';
-import { NativeTypes } from 'react-dnd-html5-backend';
+import { HTML5Backend, NativeTypes } from 'react-dnd-html5-backend';
 import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
 import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
@@ -23,6 +23,49 @@ export function TreeFileIcon() {
 
 export function TreeFolderIcon() {
   return <Folder className="size-[15px] shrink-0 fill-folder stroke-none" />;
+}
+
+// react-dnd's HTML5 backend dispatches `hover` from a requestAnimationFrame
+// using target ids captured at dragover time. react-arborist re-registers every
+// row's drop target whenever it rebuilds its node list — any Tree prop identity
+// change, and `tree.open(parentId)` inside its own drop handler — so a queued
+// hover can fire with ids that no longer exist and dnd-core throws an uncaught
+// "Expected targetIds to be registered" mid-drag (seen when dropping a file
+// onto a folder). Wrap the manager so hover only ever sees live ids.
+function SafeHTML5Backend(manager: any, context: any, options: any) {
+  const registry = manager.getRegistry();
+  const actions = manager.getActions();
+  const safeManager = {
+    getMonitor: () => manager.getMonitor(),
+    getRegistry: () => registry,
+    getActions: () => ({
+      ...actions,
+      hover: (targetIds: string[], opts: any) =>
+        actions.hover(targetIds.filter((id) => registry.getTarget(id)), opts),
+    }),
+  };
+  return (HTML5Backend as any)(safeManager, context, options);
+}
+
+// react-arborist renders the Tree's children render-prop AS A COMPONENT
+// (`const Node = tree.renderNode` in its RowContainer). If that function's
+// identity changes between renders, React sees a new component type and
+// unmounts + remounts every row's subtree — which destroys the rename input
+// mid-edit (its useState re-initializes to node.data.name, silently reverting
+// what the user typed the next time anything re-renders the app). So the
+// render-prop must be THIS stable module-level component; everything it needs
+// beyond react-arborist's own row props travels via context.
+const NodeExtrasContext = createContext<any>(null);
+
+function NodeWithExtras(props: any) {
+  const extras = useContext(NodeExtrasContext);
+  return (
+    <Node
+      {...props}
+      {...extras}
+      isBookmarked={extras.getIsBookmarked ? extras.getIsBookmarked(props.node.id) : false}
+    />
+  );
 }
 
 const FileTree = forwardRef<any, any>(function FileTree(
@@ -52,6 +95,30 @@ const FileTree = forwardRef<any, any>(function FileTree(
   useEffect(() => {
     if (contentSized) syncVisibleCount();
   }, [contentSized, data, size.width, syncVisibleCount]);
+
+  // Per-app row props, delivered to NodeWithExtras via context so updates
+  // re-render rows without remounting them (see NodeExtrasContext above).
+  const nodeExtras = useMemo(
+    () => ({ onFileAction, onFolderAction, onImportFiles, getIsBookmarked, conflictMode, checkRenameConflict }),
+    [onFileAction, onFolderAction, onImportFiles, getIsBookmarked, conflictMode, checkRenameConflict],
+  );
+
+  // Stable Tree callbacks: any prop identity change makes react-arborist run
+  // api.update → rebuild its whole NodeApi list (and mid-drag, re-register
+  // every drop target — see SafeHTML5Backend). Inline arrows here would do
+  // that on every render.
+  const contentSizedRef = useRef(contentSized);
+  contentSizedRef.current = contentSized;
+  const syncVisibleCountRef = useRef(syncVisibleCount);
+  syncVisibleCountRef.current = syncVisibleCount;
+  const onMoveItemsRef = useRef(onMoveItems);
+  onMoveItemsRef.current = onMoveItems;
+  const handleToggle = useCallback(() => {
+    if (contentSizedRef.current) setTimeout(() => syncVisibleCountRef.current(), 0);
+  }, []);
+  const handleMove = useCallback(({ dragIds, parentId }: any) => {
+    onMoveItemsRef.current?.(dragIds, parentId);
+  }, []);
 
   useImperativeHandle(ref, () => ({
     // Put a node into rename-edit mode. Retries briefly because the node may not be
@@ -92,40 +159,30 @@ const FileTree = forwardRef<any, any>(function FileTree(
       }}
     >
       {size.width > 0 && (
-        <Tree
-          ref={treeRef}
-          data={data}
-          openByDefault={false}
-          // Confine react-arborist's react-dnd backend to the tree element so
-          // it stops owning window-wide drag events (the editor/chat handle
-          // their own native drops). wrapRef is mounted before size>0 gates the
-          // Tree in, so it's non-null here.
-          dndRootElement={wrapRef.current}
-          width={size.width}
-          height={contentSized ? visibleCount * 24 : size.height}
-          indent={16}
-          rowHeight={24}
-          onSelect={onSelect}
-          onRename={onRename}
-          onToggle={() => { if (contentSized) setTimeout(syncVisibleCount, 0); }}
-          onMove={({ dragIds, parentId }) => {
-            if (onMoveItems) onMoveItems(dragIds, parentId);
-          }}
-          disableDrop={disableDrop}
-        >
-          {(props) => (
-            <Node
-              {...props}
-              onFileAction={onFileAction}
-              onFolderAction={onFolderAction}
-              onImportFiles={onImportFiles}
-              getIsBookmarked={getIsBookmarked}
-              isBookmarked={getIsBookmarked ? getIsBookmarked(props.node.id) : false}
-              conflictMode={conflictMode}
-              checkRenameConflict={checkRenameConflict}
-            />
-          )}
-        </Tree>
+        <NodeExtrasContext.Provider value={nodeExtras}>
+          <Tree
+            ref={treeRef}
+            data={data}
+            openByDefault={false}
+            // Confine react-arborist's react-dnd backend to the tree element so
+            // it stops owning window-wide drag events (the editor/chat handle
+            // their own native drops). wrapRef is mounted before size>0 gates the
+            // Tree in, so it's non-null here.
+            dndRootElement={wrapRef.current}
+            dndBackend={SafeHTML5Backend}
+            width={size.width}
+            height={contentSized ? visibleCount * 24 : size.height}
+            indent={16}
+            rowHeight={24}
+            onSelect={onSelect}
+            onRename={onRename}
+            onToggle={handleToggle}
+            onMove={handleMove}
+            disableDrop={disableDrop}
+          >
+            {NodeWithExtras}
+          </Tree>
+        </NodeExtrasContext.Provider>
       )}
     </div>
   );
