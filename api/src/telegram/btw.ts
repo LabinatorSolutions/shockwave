@@ -95,7 +95,7 @@ export async function askAboutChat(
 
     const res = await completeSimple(
       model,
-      { messages: [{ role: 'user', content: `${PROMPT}\n\n--- FACTS ---\n${facts}\n\n--- TRANSCRIPT ---\n${render(recent)}\n\n--- QUESTION ---\n${question}`, timestamp: Date.now() }] },
+      { messages: [{ role: 'user', content: `${PROMPT}\n\n--- FACTS ---\n${facts}\n\n--- TRANSCRIPT ---\n${render(recent)}${liveBlock}\n\n--- QUESTION ---\n${question}`, timestamp: Date.now() }] },
       { apiKey: creds.apiKey, headers: creds.headers, env: creds.env, maxTokens: 400 },
     );
     const text = (res?.content ?? []).filter((c: any) => c?.type === 'text').map((c: any) => c.text).join('').trim();
