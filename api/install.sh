@@ -11,13 +11,15 @@
 #                   default) = self-signed cert on the box's public IP.
 #   --email=ADDR    ACME_EMAIL for Let's Encrypt (used when --domain is set).
 #   --yes           Non-interactive: no prompts, install docker if missing.
+#   --no-firewall   Skip the ufw setup.
 #
 # What it does:
 #   1. Installs docker (via get.docker.com) if missing.
-#   2. Fetches the compose file + traefik config + init.sql into /opt/shockwave-companion.
-#   3. Generates .env secrets on first run (never overwritten after that).
-#   4. docker compose up -d  — pulls ghcr.io/stephengpope/shockwave-companion.
-#   5. Waits for /health, prints the server URL + API key for the desktop app.
+#   2. Sets up ufw: deny inbound, allow SSH + 80/443 (skippable, see above).
+#   3. Fetches the compose file + traefik config + init.sql into /opt/shockwave-companion.
+#   4. Generates .env secrets on first run (never overwritten after that).
+#   5. docker compose up -d  — pulls ghcr.io/stephengpope/shockwave-companion.
+#   6. Waits for /health, prints the server URL + API key for the desktop app.
 #
 # Re-running is the update path: refreshes the compose/config files, pulls the
 # newest image, recreates changed containers. Data lives on named volumes.
@@ -34,11 +36,13 @@ DIR="${SHOCKWAVE_DIR:-/opt/shockwave-companion}"
 DOMAIN=""
 EMAIL=""
 ASSUME_YES=0
+NO_FIREWALL=0
 for arg in "$@"; do
   case "$arg" in
-    --domain=*) DOMAIN="${arg#--domain=}" ;;
-    --email=*)  EMAIL="${arg#--email=}" ;;
-    --yes|-y)   ASSUME_YES=1 ;;
+    --domain=*)    DOMAIN="${arg#--domain=}" ;;
+    --email=*)     EMAIL="${arg#--email=}" ;;
+    --yes|-y)      ASSUME_YES=1 ;;
+    --no-firewall) NO_FIREWALL=1 ;;
     *) echo "unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -79,6 +83,42 @@ else
   ok "docker installed"
 fi
 $SUDO docker compose version >/dev/null 2>&1 || fail "docker compose plugin missing (docker too old — get.docker.com installs it)"
+
+# ── Firewall (ufw) ──────────────────────────────────────────────────────────
+# Defense in depth for the HOST: default-deny inbound, allow SSH + 80/443.
+# The companion's own surface is unchanged (traefik 80/443 allowed, api is
+# localhost-bound, postgres unmapped) — this guards sshd and whatever else
+# lands on the box later. Idempotent; re-runs are safe.
+if [ "$NO_FIREWALL" -ne 1 ]; then
+  WANT_FW=y
+  if [ "$ASSUME_YES" -ne 1 ]; then
+    ask "Enable ufw firewall (deny inbound; allow SSH + 80/443)? [Y/n] "
+    case "$ANSWER" in n|N|no|NO) WANT_FW=n ;; esac
+  fi
+  if [ "$WANT_FW" = y ]; then
+    if ! command -v ufw >/dev/null 2>&1; then
+      if command -v apt-get >/dev/null 2>&1; then
+        say "Installing ufw..."
+        { $SUDO apt-get update -qq && $SUDO apt-get install -y -qq ufw; } \
+          || say "ufw install failed — skipping firewall"
+      else
+        say "No ufw and no apt-get — skipping firewall (set up firewalld/nftables manually)"
+      fi
+    fi
+    if command -v ufw >/dev/null 2>&1; then
+      # Never lock ourselves out: allow every configured sshd port BEFORE enabling.
+      SSH_PORTS=$(grep -rhsE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d 2>/dev/null | awk '{print $2}' | sort -u)
+      [ -n "$SSH_PORTS" ] || SSH_PORTS=22
+      for p in $SSH_PORTS; do $SUDO ufw allow "$p/tcp" >/dev/null; done
+      $SUDO ufw allow 80/tcp >/dev/null
+      $SUDO ufw allow 443/tcp >/dev/null
+      $SUDO ufw default deny incoming >/dev/null
+      $SUDO ufw default allow outgoing >/dev/null
+      $SUDO ufw --force enable >/dev/null
+      ok "Firewall on (inbound allowed: SSH [$SSH_PORTS], 80, 443)"
+    fi
+  fi
+fi
 
 # ── Runtime files ───────────────────────────────────────────────────────────
 say "Fetching companion files into $DIR ..."

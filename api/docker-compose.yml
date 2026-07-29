@@ -50,6 +50,11 @@ services:
     # reaches this container over the compose network as `api:8080`.
     ports:
       - "127.0.0.1:8080:8080"
+    # autoheal (below) restarts this container when its HEALTHCHECK (in the
+    # Dockerfile) flips to unhealthy — Docker's restart policy alone only
+    # covers a crashed process, not a wedged one.
+    labels:
+      - autoheal=true
     volumes:
       # Shared with traefik: in self-signed mode the api writes the cert + a
       # dynamic TLS config here, which traefik's file provider picks up.
@@ -88,6 +93,16 @@ services:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - traefik-dynamic:/etc/traefik/dynamic:ro
       - letsencrypt:/letsencrypt
+
+  # Restarts any container labeled autoheal=true when Docker marks it
+  # unhealthy. Needs the docker socket to do so.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   pg-data:
