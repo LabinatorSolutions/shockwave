@@ -2013,6 +2013,13 @@ export default function App() {
           <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-3.5 py-1.5 text-xs text-destructive">{errorMessage}</div>
         )}
 
+        {/* Content area — everything above the status bar. It exists so the
+            Toaster inside it has a containing block whose bottom edge IS the
+            top of the status bar (or the pane bottom when there's no bar), so
+            toasts sit right without anyone hardcoding the bar's height. Don't
+            move the Toaster into the scroller below: an absolute child of an
+            overflow-y-auto element scrolls away with the content. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
         {graphMode ? (
           <GraphView
             tree={tree}
@@ -2025,8 +2032,7 @@ export default function App() {
             }}
           />
         ) : workspacePath ? (
-          <>
-            <div className={`flex min-h-0 flex-1 flex-col ${activeDrawing ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+          <div className={`flex min-h-0 flex-1 flex-col ${activeDrawing ? 'overflow-hidden' : 'overflow-y-auto'}`}>
               {/* Drawings render full-bleed: no title bar or backlinks (the
                   link index is .md-only). The Editor stays mounted but hidden so
                   switching back to a text tab doesn't rebuild it. */}
@@ -2098,31 +2104,7 @@ export default function App() {
                   <div className="text-xs text-muted-2">or pick a file from the sidebar</div>
                 </div>
               )}
-            </div>
-            {activeTab && (
-              <EditorStatusBar
-                backlinkCount={activeBacklinks.length}
-                showBacklinks={activeIsMarkdown}
-                words={(activeMediaKind || activeDrawing) ? 0 : editorStats.words}
-                chars={(activeMediaKind || activeDrawing) ? 0 : editorStats.chars}
-                viewMode={viewMode}
-                onToggleViewMode={onToggleViewMode}
-                showViewToggle={activeIsMarkdown}
-                saveState={saveState}
-                canUndo={editorHistory.canUndo}
-                canRedo={editorHistory.canRedo}
-                onUndo={onUndo}
-                onRedo={onRedo}
-                syncStatus={syncStatus}
-                onOpenConflicts={() => { onBookmarkFilterActiveChange(false); setConflictFilterActive(true); }}
-                onEnableSync={() => {
-                  if (!workspacePath) return;
-                  window.api.sync.setWorkspaceDisabled({ workspacePath, disabled: false })
-                    .catch((err: any) => showError(`Couldn't enable sync: ${err.message ?? err}`));
-                }}
-              />
-            )}
-          </>
+          </div>
         ) : (
           <div className="flex flex-1 items-center justify-center text-[13px] text-muted-2">
             {/* An empty workspace list means one of two very different things,
@@ -2136,11 +2118,37 @@ export default function App() {
               : `Welcome to ${APP_NAME}. Add a workspace from the gear icon to get started.`}
           </div>
         )}
-        {/* Toasts anchor to the editor pane (bottom-right, lifted above the
-            status bar) — over the content being read, not the chat column.
-            The Toaster's own class swaps sonner's fixed positioning for
-            absolute, so this relative pane is the containing block. */}
-        <Toaster position="bottom-right" offset={{ bottom: 44, right: 14 }} />
+        {/* Toasts sit bottom-right of the content area — over what's being
+            read, not the chat column. The Toaster's own class swaps sonner's
+            fixed positioning for absolute, so the wrapper above is the
+            containing block and this is a plain gutter, not a lift over the
+            status bar. */}
+        <Toaster position="bottom-right" offset={{ bottom: 16, right: 14 }} />
+        </div>
+
+        {workspacePath && !graphMode && activeTab && (
+          <EditorStatusBar
+            backlinkCount={activeBacklinks.length}
+            showBacklinks={activeIsMarkdown}
+            words={(activeMediaKind || activeDrawing) ? 0 : editorStats.words}
+            chars={(activeMediaKind || activeDrawing) ? 0 : editorStats.chars}
+            viewMode={viewMode}
+            onToggleViewMode={onToggleViewMode}
+            showViewToggle={activeIsMarkdown}
+            saveState={saveState}
+            canUndo={editorHistory.canUndo}
+            canRedo={editorHistory.canRedo}
+            onUndo={onUndo}
+            onRedo={onRedo}
+            syncStatus={syncStatus}
+            onOpenConflicts={() => { onBookmarkFilterActiveChange(false); setConflictFilterActive(true); }}
+            onEnableSync={() => {
+              if (!workspacePath) return;
+              window.api.sync.setWorkspaceDisabled({ workspacePath, disabled: false })
+                .catch((err: any) => showError(`Couldn't enable sync: ${err.message ?? err}`));
+            }}
+          />
+        )}
       </main>
 
       {chatSidebarOpen ? (
