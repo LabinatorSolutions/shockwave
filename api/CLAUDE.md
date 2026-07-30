@@ -51,13 +51,13 @@ Six services (postgres, api, traefik-config, traefik, updater, autoheal):
 - `schema.ts` — drizzle table definitions (source of truth); `bytea` custom type + `epochMs` bigint helper.
 - `store.ts` — the data layer: every drizzle query; seals/unseals secrets; `readSettings`/`writeSettings`, chats, transcripts, cron history, telegram account.
 - `crypto.ts` — AES-256-GCM `seal`/`unseal` under `MASTER_KEY`; fresh 12-byte IV per write; returns `''` on decrypt failure.
-- `keys.js` — **pure** key policy (no db/electron import, unit-testable): which `(owner, field)` pairs are secret, agent-secret field lists, OAuth-owned fields, settings flatten/`setPath`, agent-secret split/join, value encode/decode.
+- `keys.js` — **pure** key policy (no db/electron import, unit-testable): which `(owner, field)` pairs are secret, agent-secret field lists, OAuth-owned fields, settings flatten/`setPath`, agent-secret split/join, value encode/decode. It does **not** declare which fields are credentials — it derives all three lists from `agent-core/credentials.js` (`settingsCredentialPatterns()`, `agentSecretFields()`, `oauthOwnedFields()`), the one declaration bundled into both builds. Add a credential there, not here.
 - `oauth.ts` — server-side token minting: `mintToken(name)` → a static token or a fresh (refreshed) OAuth access token; `patchOAuth` writes tokens back. (The desktop runs the *interactive* OAuth browser flow; the companion stores + mints.)
 - `agentHost.ts` — builds the companion `AgentHost` for `agent-core`: persistence → store, events → feed, per-run scratch dir (`AGENT_DATA_DIR`, on the `agent-data` volume — the Dockerfile pre-creates + chowns it so the volume inherits `node` ownership), `send_message` tool, `getToken` → `mintToken`.
 - `feed.ts` — in-memory ephemeral SSE pub/sub, ONE global channel (not per chat). A desktop can't subscribe per chat: the point is to hear about turns it doesn't know exist yet (Telegram, cron, another machine). Every event carries its `chatId`, so the client routes. Never stored — it mirrors what the `message` table already holds, so a client that misses events re-reads with `?after=`.
 - `scheduler.ts` — croner scheduler: one fire-cron per `cron.json` entry + a refresh cron that reconciles registrations non-destructively (ETag).
 - `cronRun.ts` — executes one cron run: checkout → agent turn (stream to feed) → deterministic check-in (git-fixer on conflict).
-- `git.ts` — server-side git CLI: `prepareCheckout` (reuse-or-shallow-clone), `checkIn` (add/commit → `syncAndPush`), `syncAndPush` (fetch/merge/push, one retry), `cleanup`. **The PAT is never in the remote URL.** `clone` and `remote set-url` both persist whatever URL they're given into `<dir>/.git/config`, and `<dir>` is the agent's own cwd for the turn — so an embedded PAT was a file the agent could read (`git remote -v`), granting write access to every repo the token covers, for `RUN_DIR_TTL_DAYS` after the run. Auth now goes through `GIT_ASKPASS` + a `GITHUB_PAT` child env (`gitEnv`), the same mechanism the desktop uses in `src/main/sync.ts`. Existing checkouts predating this still hold the old URL — `prepareCheckout` rewrites it on reuse, but wipe `WORK_BASE` on deploy to be sure.
+- `git.ts` — server-side git CLI: `prepareCheckout` (reuse-or-shallow-clone), `checkIn` (add/commit → `syncAndPush`), `syncAndPush` (fetch/merge/push, one retry), `cleanup`. **The PAT is never in the remote URL.** `clone` and `remote set-url` both persist whatever URL they're given into `<dir>/.git/config`, and `<dir>` is the agent's own cwd for the turn — so an embedded PAT was a file the agent could read (`git remote -v`), granting write access to every repo the token covers, for `RUN_DIR_TTL_DAYS` after the run. Auth now goes through a `GITHUB_PAT` child env (`gitEnv`) answered by a credential helper passed **on the command line** — nothing on disk, same mechanism as the desktop's `src/main/sync.ts`. Existing checkouts predating this still hold the old URL — `prepareCheckout` rewrites it on reuse, but wipe `WORK_BASE` on deploy to be sure. **Every PAT-carrying call also gets `guards()`** — see the boxed rule below.
 - `gitFixer.ts` — bounded LLM tool-loop (single `run_git` tool, `MAX_STEPS=12`) that recovers merge conflicts and independently verifies the tree is clean with no surviving markers — trusting nothing the model claims. It holds **no credentials**: it resolves and commits locally, and the caller pushes afterwards via `syncAndPush`. Deliberate — `run_git` is a model-controlled shell running over conflict text that came from outside, which is the last place a PAT should be reachable.
 - `github.ts` — `fetchCronJson` over the GitHub Contents API, ETag-conditional (304 = unchanged, free).
 - `sweeper.ts` — boot + hourly TTL sweep of per-run working dirs (checkouts + pi scratch), keyed by mtime.
@@ -70,6 +70,24 @@ Six services (postgres, api, traefik-config, traefik, updater, autoheal):
 - `telegram/selfSigned.ts` — the self-signed certificate + Traefik dynamic-TLS config (public server, no domain). `ensureSelfSignedCert` create-or-reuses for `configuredHost()` (= `COMPANION_HOST`); `readCertPem` is what `/telegram/connect` uses to hand Telegram a copy; `removeSelfSignedCert` deletes it when a domain is set. **Created once, at boot** (`settleTls` in `server.ts`), and a failure there is fatal — see the boxed note below.
 - `gitRemote.js` — **pure** remote-URL policy (`remoteUrl`, `hasEmbeddedCredentials`), unit-tested by `tests/gitRemote.test.js`. Pins the "no credentials in the URL" property that `git.ts` depends on.
 - `telegram/sendTool.ts` — `sendTelegramMessage(pool, key, text)`: the one place a DM is actually sent (the bot token lives only here). Two callers — the `send_message` agent tool (`agent-core/sendMessage.ts`) and `POST /telegram/send`, which is how the *desktop's* copy of that tool reaches it.
+
+### The PAT runs git inside a directory the agent controls — `guards()` is what makes that safe
+
+The checkout is the agent's own cwd for the turn, and `checkIn`/`syncAndPush` run git **in that same directory afterwards** with the PAT in the child's environment. So anything git can be made to execute at that moment can read the token. `guards()` in `git.ts` precedes **every** PAT-carrying call (`git()` applies it whenever `auth` is passed, and the `clone` in `prepareCheckout` passes it explicitly). Command-line `-c` beats repository config, which is the whole point — every value below is one the agent could otherwise set in `.git/config`:
+
+| Guard | What it closes |
+|---|---|
+| `credential.helper=` (empty, **first**) | the setting is a LIST; assigning empty resets it, so a helper planted in the repo can't run ahead of ours |
+| `credential.https://github.com.helper=…` | **host-scoped on purpose.** `url.<base>.insteadOf` rewrites the URL *after* `remote.origin.url` is pinned, and no `-c` can clear it (the subsection name is the agent's to choose) — so the request can leave for any host. Scoping means git asks that host's credentials and finds no helper. A bare `credential.helper` answered everyone, because the helper echoes the PAT without reading the host git hands it on stdin |
+| `remote.origin.url=…` | left to the repo it can be `ext::sh -c …`, a command rather than an address. Pinning also keeps refs at `origin/<branch>` — a bare URL lands in `FETCH_HEAD` and quietly changes what the merge compares against |
+| `core.hooksPath=/dev/null` | **not a directory.** Git looks up `<hooksPath>/<hookname>`; under the null device that is ENOTDIR, always. This used to name an empty directory under `WORK_BASE`, sitting beside the agent's own checkout and owned by the same user — empty only until the agent drops a file in. `--no-verify` covers `pre-push` alone, not `post-checkout` (clone) or `reference-transaction` (fetch) |
+| `core.fsmonitor=` / `core.sshCommand=` | both name a command git runs |
+
+`checkIn` and `syncAndPush` also pass `--no-verify` on `commit`/`merge`/`push`, so two independent things would have to be wrong for a planted hook to see the token. `prepareCheckout` additionally deletes `.git/hooks` on reuse — `reset --hard` + `clean -fd` never touch `.git`, so yesterday's hook would otherwise still be sitting there; the hooksPath guard already neuters it, this just stops it waiting for a call that forgets the guard.
+
+**`gitFixer.ts` gets no credentials at all** and the push happens after it, in `syncAndPush`. Its `run_git` is a model-controlled shell running over conflict text that came from outside — the last place a PAT should be reachable.
+
+`tests/gitGuards.test.js` pins all of this against **real git**: each attack is planted and an actual push is run, because the claim is "git does not execute the agent's code while holding the token", and only git can settle that. It also checks the helper still answers for github.com — without that, a scoping typo would break sync silently instead of failing a test.
 
 ## HTTP API (`server.ts`)
 
@@ -99,7 +117,7 @@ Six services (postgres, api, traefik-config, traefik, updater, autoheal):
 
 **Encryption (`crypto.ts`):** AES-256-GCM under the single `MASTER_KEY`. Fresh 12-byte IV per write; `iv`/`tag` are `NOT NULL` in `secret_value`, so a plaintext credential is structurally unrepresentable. `unseal` returns `''` on failure so one bad row can't fail a whole read.
 
-**Routing policy (`keys.js`):** `SETTINGS_SECRET_PATTERNS` = `codingAgent.providerKeys.<slug>`, `transcription.apiKey`, `sync.pat` (owner `settings`). `AGENT_SECRET_FIELDS` = `token`, `oauth.{clientSecret,accessToken,refreshToken}` (owner = the secret's `name`). `OAUTH_OWNED_FIELDS` (`oauth.accessToken`/`refreshToken`) are written **only** by the OAuth flow — a bulk `writeSettings` can't author them, so a client echoing pre-refresh state can't clobber a token the server just rotated.
+**Routing policy (`keys.js`, derived from `agent-core/credentials.js`):** `SETTINGS_SECRET_PATTERNS` = `codingAgent.providerKeys.<slug>`, `transcription.apiKey`, `sync.pat` (owner `settings`). `AGENT_SECRET_FIELDS` = `token`, `oauth.{clientSecret,accessToken,refreshToken}` (owner = the secret's `name`). `OAUTH_OWNED_FIELDS` (`oauth.accessToken`/`refreshToken`) are written **only** by the OAuth flow — a bulk `writeSettings` can't author them, so a client echoing pre-refresh state can't clobber a token the server just rotated.
 
 ### `secret_value` is shared — reconciliation must be SCOPED
 
@@ -141,6 +159,6 @@ Do **not** add a defaults object or seed default rows. The desktop learned this 
 
 ## When you touch this
 
-- **Adding a settings field:** it's just a `setting` row (or a `secret_value` row if it's a credential — add its pattern to `SETTINGS_SECRET_PATTERNS` / `AGENT_SECRET_FIELDS` in `keys.js`). No default to register anywhere — required fields error at their consumer, optional fields fall back at point of use.
+- **Adding a settings field:** it's just a `setting` row (or a `secret_value` row if it's a credential — declare it in `agent-core/credentials.js`, which `keys.js` derives from; editing `keys.js` itself is the wrong layer and desyncs the desktop's strip + send guard). No default to register anywhere — required fields error at their consumer, optional fields fall back at point of use.
 - **Adding a `secret_value` owner category:** every reconciliation that deletes from `secret_value` must be scoped to its own owners (see the boxed rule above).
 - **Schema change:** edit `schema.ts` *and* `init.sql` (both are re-applied idempotently). Keep them in sync.

@@ -16,6 +16,9 @@
 //   credential.helper     read from repo config, consulted before anything else
 //   core.fsmonitor        a command git runs to check the worktree
 //   ext:: remote URLs     not an address, a command
+//   url.<base>.insteadOf  redirects the push to a host of the workspace's
+//                         choosing — closed by scoping our helper to github.com,
+//                         since no `-c` can clear an insteadOf
 //
 // Command-line `-c` beats repository config, which is the point.
 //
@@ -190,30 +193,33 @@ export function checkGit() {
  *  .sh/.cmd pair needed two. */
 const CREDENTIAL_HELPER = '!f() { echo username=x-access-token; echo password=$GITHUB_PAT; }; f';
 
-/** An empty directory. core.hooksPath pointed here means no hook runs, from any
- *  source, without deleting anything of the user's. */
-function noHooksDir() {
-  return path.join(app.getPath('userData'), 'sync', 'no-hooks');
-}
-let noHooksReady: Promise<string> | null = null;
-function ensureNoHooks(): Promise<string> {
-  noHooksReady ??= (async () => {
-    const dir = noHooksDir();
-    await fs.mkdir(dir, { recursive: true });
-    return dir;
-  })();
-  return noHooksReady;
-}
+/** Where git is told to look for hooks. NOT a directory — git looks up
+ *  `<this>/<hookname>`, and a path under the null device is ENOTDIR, so no hook is
+ *  ever found.
+ *
+ *  This used to be an empty directory under userData. Empty is a state something
+ *  has to keep, and the coding agent runs as this user — so it could drop a
+ *  `post-checkout` (clone) or `reference-transaction` (fetch) in there and have
+ *  git run it with the PAT in the environment. `--no-verify` covers `pre-push`;
+ *  it does not cover those. The null device cannot be filled. */
+const NO_HOOKS = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
 /** Config overrides for every PAT-carrying git call. See the header for what each
  *  one closes. The empty `credential.helper` is first because the setting is a
  *  LIST — assigning empty resets it, so a helper planted in the workspace's
- *  .git/config can't run ahead of ours. */
-function guardArgs(noHooks) {
+ *  .git/config can't run ahead of ours.
+ *
+ *  The helper is then registered for github.com ONLY. A `url.<base>.insteadOf`
+ *  line in the workspace's .git/config rewrites the remote URL on the way out —
+ *  and no `-c` can clear it, the subsection name being the agent's to choose — so
+ *  a request can leave for any host. Git asks for THAT host's credentials, and a
+ *  helper scoped to github.com is never consulted. A bare helper would answer:
+ *  it echoes the PAT without reading the host git hands it on stdin. */
+function guardArgs() {
   return [
     '-c', 'credential.helper=',
-    '-c', `credential.helper=${CREDENTIAL_HELPER}`,
-    '-c', `core.hooksPath=${noHooks}`,
+    '-c', `credential.https://github.com.helper=${CREDENTIAL_HELPER}`,
+    '-c', `core.hooksPath=${NO_HOOKS}`,
     '-c', 'core.fsmonitor=',
     '-c', 'core.sshCommand=',
     '-c', 'protocol.ext.allow=never',
@@ -245,7 +251,7 @@ export async function gitSpawn(cwd, args, { pat = null, timeoutMs = 60000 } = {}
     const inner = (i >= 0 && ['push', 'commit', 'merge'].includes(String(args[i])))
       ? [...args.slice(0, i + 1), '--no-verify', ...args.slice(i + 1)]
       : args;
-    argv = [...guardArgs(await ensureNoHooks()), ...inner];
+    argv = [...guardArgs(), ...inner];
   }
   return new Promise<any>((resolve) => {
     let stdout = '';

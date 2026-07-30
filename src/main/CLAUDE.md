@@ -19,7 +19,7 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 - `openFileExtension.ts` — the `open_file` custom pi tool (`OPEN_FILE_TOOL` + `installOpenFileBridge`), the one tool the desktop host adds to the shared `agent-core` runtime. (Cron, skills, agent-tokens, the system prompt, and the model catalog all moved to `agent-core/` / the companion — see "Coding agent (desktop host)" below.)
 - `oauth.ts` — the interactive OAuth2 **connect** flow for `oauth`-kind agent secrets (arctic + a loopback callback server; BYO Desktop-app client). Token storage + refresh happen on the companion; this just runs the browser flow and posts the result. See "OAuth for agent secrets" below.
 - `cliTools.ts` — generates per-CLI shim scripts (`firecrawl`, `playwright-cli`) into `<userData>/pi-agent/bin/` that run each bundled CLI via the app's own Electron binary in Node mode, then `prependPath` puts that dir on `PATH` so the agent's bash inherits it. Regenerated every launch (`ensureCliShims` / `prependPath`).
-- `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `createRepo`, `listRepos`), the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, the git-presence check, and the workspace setup flows. **`ensureCheckout`** makes a folder BE a checkout of `owner/repo` whatever state it starts in — clone if empty, verify-and-leave-alone if it's already that repo, refuse otherwise — so adding a workspace and checking one out on this machine are one operation, not two implementations of it. `createWorkspaceRepo` stays separate because creating a repo also scaffolds it. Folder classification itself lives in `workspaceFolder.js`; it is the one place that reads `.git/config`, ONCE at setup, to learn what a folder already is (not the per-tick re-derivation the row replaced). The old `setupLink` (git-init an arbitrary folder and force a remote onto it) is gone — adopting now requires the remote to already be there.
+- `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `createRepo`, `listRepos`), the `gitSpawn` wrapper that injects a PAT via a command-line credential helper plus the `guardArgs` hardening (see "Auth model" below), the git-presence check, and the workspace setup flows. **`ensureCheckout`** makes a folder BE a checkout of `owner/repo` whatever state it starts in — clone if empty, verify-and-leave-alone if it's already that repo, refuse otherwise — so adding a workspace and checking one out on this machine are one operation, not two implementations of it. `createWorkspaceRepo` stays separate because creating a repo also scaffolds it. Folder classification itself lives in `workspaceFolder.js`; it is the one place that reads `.git/config`, ONCE at setup, to learn what a folder already is (not the per-tick re-derivation the row replaced). The old `setupLink` (git-init an arbitrary folder and force a remote onto it) is gone — adopting now requires the remote to already be there.
 - `syncEngine.ts` — singleton per-workspace tick engine. Sequential ticks (pause-if-conflicts → flush → commit → fetch → **merge** if behind → push), status state machine (with a `conflicts[]` payload on pause), per-file + whole-tree conflict resolution (`resolveConflict`/`keepConflict`/`resetConflict`/`keepAll`/`resetToRemote`), flush-renderer-dirty bridge, drain-on-quit hook. **Every git op — the tick and each resolution op — runs through one serial chain (`exclusive`)**; the interval SKIPS when the chain is busy, user-driven ops QUEUE. Conflict ops also refuse any path the engine isn't currently bound to.
 
 ## File watcher
@@ -121,6 +121,10 @@ Every companion request carries the bearer API key, and `GET /settings` returns 
 
 **Wording matters here and the code carries it.** The connection is **held**, not rejected: completing it means sending the API key, so the attempt stops, shows what it saw, and waits. `REJECT`/`lastRejection`/`CertRejection` used to be the names, which read as a verdict on something already approved and made the flow impossible to explain to anyone. Keep them describing what it is — `pendingApproval`, `PendingCert`, `DO_NOT_CONNECT`.
 
+**Chromium caches its verdict, so the pin is re-checked on every use.** `setCertificateVerifyProc` runs once per host and the answer is cached for the session — so a decision made under one pin outlives that pin. `getCompanionSession()` therefore compares the live session's `sessionFingerprint` against the stored pin on **every** call and retires the whole session (a fresh, monotonically-named in-memory partition) the moment they differ. One mechanism, not a set of call sites that each remember to retire.
+
+> This is what closed the hole where changing the companion URL cleared the pin (`config.ts`) without going through approve or forget: the session — and Chromium's cached "accept" — survived, so the app connected happily with **nothing approved** and the panel showed Connected with no fingerprint. Pinning was effectively off until a restart. Any change to the pin now invalidates the cached verdict, whoever made it.
+
 **Comparing the fingerprint needs a second source.** Chromium reports `sha256/<base64>`, openssl prints uppercase hex pairs; `toDisplayFingerprint` converts to openssl's form so the app's value matches what `shockwave-fingerprint` prints on the server. Without that the two can never match and approving is theatre. The installer prints it at setup; the status row shows the approved one while connected, with **Forget it** (`api:forgetCert`) so a mismatch has a way out.
 
 **A parked certificate is matched to its host.** There is one slot, written by any companion request including background traffic, so `getPendingCert(host)` filters. Without it, changing the server URL could surface the *previous* server's certificate for approval — its retries are still in flight, its pin was just cleared — and approving it would store the wrong server's fingerprint. Cleared on any successful response (`client.ts`).
@@ -130,6 +134,14 @@ On a held connection the request throws `ApiError('needsApproval')`, **not** `un
 > This replaced `verificationResult === 'net::OK' ? cb(-3) : cb(0)` — "if the cert is invalid, trust it anyway" — which accepted any forged cert on **both** deployment types, so anyone able to intercept the connection got the API key on the first request. A comment claimed a Settings opt-in gated it; no such setting existed. Don't reintroduce an unconditional `cb(0)`.
 >
 > Also load-bearing: the companion creates its self-signed certificate **once, at boot** (`settleTls` in `api/src/server.ts`), never in `/telegram/connect`. It used to be created there, so a fresh install had no certificate of ours at all — Traefik served its own throwaway, the desktop approved *that*, and connecting Telegram replaced it. The fingerprint changed on a routine action, and a user who sees the identity-changed warning during normal setup learns to click through the one prompt that catches a real attack.
+
+### Credentials never cross into the renderer
+
+`readSettings` / `readSettingsSafe` return **live credentials** — provider keys, the GitHub PAT, agent tokens. They exist for main's own use: running the agent, pushing to git, minting the voice token. `readSettingsForRenderer` is the stripped read, and it substitutes a presence flag for each credential (`hasPat`, `hasApiKey`, `hasProviderKey`) so Settings can render dots without ever holding a value.
+
+> **An IPC handler may only return the stripped read.** `settings:read` uses it, and so does the `settings:changed` push (`emitChanged`). Nothing in the language stops a future handler returning the wrong one and the leak would be silent — the app would work perfectly while handing every key to the renderer. This was a comment once, which is the same shape of mistake as the certificate check that trusted anything: a policy nobody enforces. `tests/rendererSettingsDoor.test.js` now scans `main.ts` for it (verified by introducing the leak deliberately and watching it fail).
+
+Which fields are credentials is declared once, in `agent-core/credentials.js`; this strip and the renderer's send guard both derive from it. See the root `CLAUDE.md`.
 
 ### DB is the source of truth — nothing faked on read
 
@@ -142,7 +154,7 @@ This matters because the companion is read by more than the desktop — the Tele
 - **`writeSettings` writes only the keys in the patch**, split by destination: machine-local keys → the local file, `workspaces` → the workspace endpoint, everything else → `PATCH /settings`. The renderer's `persistSettings` sends just what changed (diffed against its in-memory cache in `settingsDiff.js`), so a credential it happens to hold isn't republished on an unrelated save.
 - **`settings:changed` pushes main's own writes to the renderer.** Main writes settings the renderer can't observe — OAuth token refresh, window bounds, cron toggles — so `emitChanged(keys)` broadcasts `{ keys, settings }` and the renderer applies **only** those keys, so an unrelated main write can't stomp a field the user is editing. The `settings:write` IPC passes `notify: false` (the renderer already has what it just wrote). The renderer's `settingsRef` (`useSettings`) is a render cache, not the truth.
 
-Adding a persisted **synced** field: extend the `Settings` type in `src/shared/settings.ts`, add a slice + setter in the renderer's `useSettings` hook, and — if it holds a credential — register its pattern in the companion's `keys.js`. There is **no** desktop `DEFAULT_SETTINGS` to update; a synced field with no value is simply unset, handled at its consumer (required → error, optional → point-of-use fallback). A **machine-local** field goes in `LOCAL_KEYS` / `LOCAL_DEFAULTS` (`settingsStore.ts`) + `localSettings.ts`.
+Adding a persisted **synced** field: extend the `Settings` type in `src/shared/settings.ts`, add a slice + setter in the renderer's `useSettings` hook, and — if it holds a credential — declare it in `agent-core/credentials.js` (the one declaration; the companion's `keys.js`, this process's strip, and the renderer's send guard all derive from it). There is **no** desktop `DEFAULT_SETTINGS` to update; a synced field with no value is simply unset, handled at its consumer (required → error, optional → point-of-use fallback). A **machine-local** field goes in `LOCAL_KEYS` / `LOCAL_DEFAULTS` (`settingsStore.ts`) + `localSettings.ts`.
 
 > **Legacy note.** The pre-companion build stored settings in a local sqlite `shockwave.db` with a desktop master key (`masterkey.enc`) and routed secrets via `settingsKeys.js`. That's gone: `masterKey.ts` and `settingsKeys.js` were deleted, all storage + secret encryption moved to the companion (`api/src/{store,crypto,keys}.js`), and `importLegacySettingsIfNeeded()` is now a no-op (its `whenReady` call site is vestigial).
 
@@ -185,6 +197,16 @@ Events for sessions THIS machine is running are dropped (`agentRunningSessions()
 
 **It is always on by design.** This used to be a per-chat subscription (`chat:watchStart`/`watchStop`) started from the renderer when you clicked a chat that happened to be running elsewhere *at that instant* — so a Telegram turn was never watched, and a chat already on screen could never start listening at all. Don't reintroduce a per-chat subscription: the point is hearing about chats the desktop doesn't yet know exist.
 
+### Connection state — one rule refreshes companion-owned data
+
+The feed is also the app's **reachability signal**. Its stream opening means the companion answered; its `done()` means we lost it. `setCompanionOnline(online)` is edge-triggered on those two points and is the ONLY place companion-owned renderer state is refreshed: going online calls `notifyWorkspacesChanged()`, which re-reads and pushes `workspaces` + `activeWorkspaceId` down the existing `settings:changed` channel. It also broadcasts `companion:state` so the UI can distinguish "couldn't ask" from "nothing there".
+
+**Do not add a refresh call to any new site that changes connectivity — route it through the feed instead.** `api:write` (Settings → Connect) is the worked example: it doesn't refetch anything, it calls `stopLiveFeed()` + `startLiveFeed()`, and the reopen does the refresh. That also makes connecting immediate, since the retry loop backs off to 30s.
+
+> This replaced a single refresh site — the renderer's boot read. Workspaces live only on the companion, so a desktop that started while it was down held an empty list for the whole session: neither the companion coming back (including from its own upgrade restart) nor connecting one in Settings asked again, and quitting the app was the only recovery. The fix is deliberately *not* a refresh call at each of those places; that's the pattern that missed them. Adding a fourth would miss the fifth.
+>
+> **Going offline must not push a settings payload.** A degraded read (`readSettingsSafe`) returns an empty workspace list, so broadcasting one would clear the renderer's good copy — the original bug, inverted. Offline pushes the flag and nothing else.
+
 **Desktop tools** (both supplied via `extraTools`):
 
 - **`open_file`** (`openFileExtension.ts`) — `OPEN_FILE_TOOL` + `installOpenFileBridge`, opens a file in the app from a turn. Scoped `only: ['desktop']` in `agent-core`'s `TOOL_CATALOG`: cron and Telegram runs have no UI to open a tab in.
@@ -214,7 +236,23 @@ Per-workspace background sync to GitHub. Two files: `sync.ts` (one-shot helpers 
 
 ### Auth model
 
-PAT is stored encrypted in `sync.pat` **on the companion** (`secret_value`, owner `settings` — see `api/CLAUDE.md`); the desktop reads the decrypted value through `readSettings`. For shell git, the decrypted PAT is set on the child process's `GITHUB_PAT` env, and `GIT_ASKPASS` points at `<userData>/sync/askpass.sh` — a tiny posix helper that echoes `x-access-token` for `Username` prompts and `$GITHUB_PAT` for everything else. The PAT lives in process memory only for the lifetime of that one git child. **Never written to `.git/config`**; remote URLs stay plain `https://github.com/owner/repo.git`. REST calls use a `Bearer` header with the same memory-only lifetime.
+PAT is stored encrypted in `sync.pat` **on the companion** (`secret_value`, owner `settings` — see `api/CLAUDE.md`); the desktop reads the decrypted value through `readSettings`. For shell git, the decrypted PAT is set on the child process's `GITHUB_PAT` env and answered by a credential helper passed **on the command line** (`CREDENTIAL_HELPER` in `sync.ts`, a one-line shell function). The PAT lives in process memory only for the lifetime of that one git child. **Never written to `.git/config`**; remote URLs stay plain `https://github.com/owner/repo.git`. REST calls use a `Bearer` header with the same memory-only lifetime.
+
+> There is **no askpass script on disk**, and reintroducing one is a regression. It was a file at a fixed path, owned by the user the coding agent runs as, that git executed with the PAT in its environment — so the agent could rewrite it once and collect the token on every sync afterwards. Nothing on disk means nothing to tamper with.
+
+#### The guards (`guardArgs`) — git must not execute what the workspace names
+
+The git child's environment holds the PAT, and the workspace is a directory the coding agent has full write access to (editing it is the agent's job). Command-line `-c` beats repository config, which is the whole point. Every entry closes one route:
+
+| Guard | What it closes |
+|---|---|
+| `credential.helper=` (empty, **first**) | the setting is a LIST; assigning empty resets it, so a helper planted in the workspace's `.git/config` can't run ahead of ours |
+| `credential.https://github.com.helper=…` | **host-scoped on purpose.** `url.<base>.insteadOf` in the workspace config rewrites the URL *after* any pin, and no `-c` can clear it (the subsection name is the agent's to choose) — so the request can leave for any host. Scoping means git asks that host's credentials and finds nobody to ask. A bare `credential.helper` answered everyone, because the helper echoes the PAT without reading the host git hands it on stdin |
+| `core.hooksPath=/dev/null` (`NUL` on Windows) | **not a directory.** Git looks up `<hooksPath>/<hookname>`; under the null device that is ENOTDIR, always. This used to name an empty directory, which is only empty until the agent drops a file in — and `--no-verify` covers `pre-push` only, not `post-checkout` (clone) or `reference-transaction` (fetch) |
+| `core.fsmonitor=` / `core.sshCommand=` | both name a command git runs |
+| `protocol.ext.allow=never` | `ext::sh -c …` is a command, not an address |
+
+`gitSpawn` also inserts `--no-verify` after `push`/`commit`/`merge`, so two independent things would have to be wrong for a planted hook to see the PAT. `tests/gitGuards.test.js` pins all of it against **real git** — it plants each attack and runs an actual push, because the claim is "git does not execute the agent's code while holding the token", and only git can settle that.
 
 ### Tick (sequential, never overlapping)
 
@@ -262,7 +300,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 
 ### Platform support
 
-`ensureAskpass` writes the right credential helper for the host: a posix `.sh` on macOS/Linux, a `.cmd` batch file on Windows (both answer `x-access-token` for the `Username` prompt and `$GITHUB_PAT`/`%GITHUB_PAT%` for the password). `gitSpawn` is otherwise platform-agnostic, so sync runs on all three platforms wherever `git` is on PATH.
+One credential helper works everywhere: git runs `!`-prefixed helpers through a shell, and Git for Windows ships its own, so the single `CREDENTIAL_HELPER` string covers all three platforms where the old `.sh`/`.cmd` pair needed two. The only platform branch left is `NO_HOOKS` (`NUL` on Windows, `/dev/null` elsewhere). `gitSpawn` is otherwise platform-agnostic, so sync runs anywhere `git` is on PATH.
 
 ## Voice transcription IPC
 
@@ -288,7 +326,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Workspace settings | `workspaceSettings:read`, `workspaceSettings:update` (per-workspace `.shockwave/workspace.json` — daily-note config, templates, built-in-skill toggles) |
 | Cron | `cron:read`, `cron:runNow` (the desktop's read-only view; cron runs on the companion) |
 | Telegram | `telegram:status`, `telegram:connect`, `telegram:disconnect`, `telegram:setWorkspace` (thin passthroughs to the companion `/telegram/*`; the companion owns the bot) |
-| Companion config | `api:read`, `api:write`, `api:test` (the "connect to your server" form — URL + key, key `safeStorage`-wrapped; `api:test` also returns the companion's release version), `api:checkVersion` (classify desktop-vs-companion via `versionCompare.js` — `companion-older` is the only status that offers an upgrade), `api:upgradeCompanion` (`POST /update` with this desktop's version — the companion's updater sidecar does the pull + restart; fire-and-forget, sets `pendingUpgradeTag`); push event `api:companionUpdated` (the live feed reconnected on the requested version — the feed's `onOpen` fires when the stream's HTTP response arrives, NOT on the first event, so a quiet server still announces) |
+| Companion config | `api:read`, `api:write`, `api:test` (the "connect to your server" form — URL + key, key `safeStorage`-wrapped; `api:test` also returns the companion's release version), `api:checkVersion` (classify desktop-vs-companion via `versionCompare.js` — `companion-older` is the only status that offers an upgrade), `api:upgradeCompanion` (`POST /update` with this desktop's version — the companion's updater sidecar does the pull + restart; fire-and-forget, sets `pendingUpgradeTag`); `companion:getState` (is the companion reachable right now); push events `api:companionUpdated` (the live feed reconnected on the requested version — the feed's `onOpen` fires when the stream's HTTP response arrives, NOT on the first event, so a quiet server still announces) and `companion:state` (reachability changed — see "Connection state" below) |
 | App / updates | `app:machineId`, `app:checkForUpdates`, `app:getUpdateStatus`, `app:restartToUpdate` (electron-updater); plus update-status push events |
 | Sync | `sync:verifyPat`, `sync:checkGit`, `sync:listRepos`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
 

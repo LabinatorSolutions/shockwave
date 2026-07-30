@@ -252,6 +252,20 @@ save models across fourteen sections, so these are now fixed:
   last left the Test button dead until you left the page. `useCommitField` also
   **flushes on unmount**, which is what makes having no Save button safe — closing
   the modal mid-edit can't drop the value.
+- **Credential fields are WRITE-ONLY** (`settings/credentialField.ts`). The
+  renderer never receives a credential value — main strips every one before the
+  settings object crosses IPC and substitutes a presence flag (`hasPat`,
+  `hasApiKey`, `hasProviderKey`), so a field with something stored renders as
+  dots and one with nothing stored reads `Paste your key` — the placeholder is
+  the only thing that can carry that, since the box is always empty on render
+  (`credentialPlaceholder`). There are no Show buttons; they could only ever
+  reveal what you had just typed. Which fields these are is
+  declared once in `agent-core/credentials.js` — see the root `CLAUDE.md`.
+  Two guards against the obvious hazard, because a write-only field means the
+  cache holds no value to re-send: **the renderer never sends an empty
+  credential** (`settingsDiff.js` drops it), and the companion no longer deletes
+  a credential merely absent from a save. Without both, editing an unrelated
+  field — a sync interval — would delete your GitHub token.
 - **Toggles, dropdowns, comboboxes and sliders commit on change** (sliders on
   `onValueCommit`). There's no partial state to protect.
 - **Everything goes through the section's `on*Change` prop → `persistSettings`.**

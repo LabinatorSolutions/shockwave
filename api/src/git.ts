@@ -42,9 +42,13 @@ export const WORK_BASE = process.env.CRON_WORK_DIR || path.join(os.tmpdir(), 'sh
 // what git finds there. Each guard below closes one of those:
 //
 //   .git/hooks/pre-push        git runs it on every push, with our env
-//                              → core.hooksPath at an empty dir, plus --no-verify
+//                              → core.hooksPath at /dev/null, plus --no-verify
 //   credential.helper in config  consulted BEFORE any askpass
 //                              → `-c credential.helper=` resets the list, then ours
+//   url.<base>.insteadOf       rewrites the URL AFTER we pin remote.origin.url,
+//                              so the pin alone can't keep us pointed at GitHub
+//                              → the helper is registered for github.com ONLY, so
+//                                a redirected request finds no helper at all
 //   core.fsmonitor             names a command git runs to check the worktree
 //   core.sshCommand            same, for transports we don't use but shouldn't leave open
 //   remote.origin.url          can be `ext::sh -c …`, which is a command
@@ -62,14 +66,17 @@ export const WORK_BASE = process.env.CRON_WORK_DIR || path.join(os.tmpdir(), 'sh
  *  on the command line — never written to disk, never into .git/config. */
 const CREDENTIAL_HELPER = '!f() { echo username=x-access-token; echo password=$GITHUB_PAT; }; f';
 
-/** An empty directory. Pointing core.hooksPath here means no hook runs, from any
- *  source, without deleting anything of the user's. */
-const NO_HOOKS = path.join(WORK_BASE, '.no-hooks');
-let noHooksReady: Promise<void> | null = null;
-function ensureNoHooks(): Promise<void> {
-  noHooksReady ??= fs.mkdir(NO_HOOKS, { recursive: true }).then(() => undefined);
-  return noHooksReady;
-}
+/** Where git is told to look for hooks. NOT a directory — every lookup git makes
+ *  is `<this>/<hookname>`, and a path under a character device is ENOTDIR, so no
+ *  hook is ever found.
+ *
+ *  This used to be an empty directory under WORK_BASE. An empty directory is only
+ *  empty until something fills it, and that one sat beside the agent's own
+ *  checkout owned by the same user — so the agent could drop a `post-checkout`
+ *  (clone) or `reference-transaction` (fetch) in it and have git run it with the
+ *  PAT in the environment. `--no-verify` covers `pre-push`; it does not cover
+ *  those. /dev/null cannot be filled, so there is nothing to keep empty. */
+const NO_HOOKS = '/dev/null';
 
 /** What a network git call needs: the token, and the repo it is allowed to reach. */
 export interface GitAuth { pat: string; owner: string; repo: string }
@@ -84,11 +91,19 @@ export interface GitAuth { pat: string; owner: string; repo: string }
  *  `remote.origin.url` is pinned for the same reason. Left to the repo, it can be
  *  `ext::sh -c …`, which is a command, not an address. Pinning it here also means
  *  the refs stay `origin/<branch>` — passing a bare URL would land the result in
- *  FETCH_HEAD and quietly change what the merge below compares against. */
+ *  FETCH_HEAD and quietly change what the merge below compares against.
+ *
+ *  The helper is registered under `credential.https://github.com.helper`, not the
+ *  bare `credential.helper`, because pinning the URL is not the same as pinning
+ *  where the request GOES. A `url.<base>.insteadOf` line in the repo — which no
+ *  `-c` can clear, the subsection name being the agent's to choose — rewrites our
+ *  pinned URL afterwards. Git then asks for THAT host's credentials, and a helper
+ *  registered for github.com alone is simply not consulted. A bare helper would
+ *  answer, because it echoes the PAT without ever reading the host git hands it. */
 export function guards({ owner, repo }: GitAuth): string[] {
   return [
     '-c', 'credential.helper=',
-    '-c', `credential.helper=${CREDENTIAL_HELPER}`,
+    '-c', `credential.https://github.com.helper=${CREDENTIAL_HELPER}`,
     '-c', `remote.origin.url=${remoteUrl(owner, repo)}`,
     '-c', `core.hooksPath=${NO_HOOKS}`,
     '-c', 'core.fsmonitor=',
@@ -107,7 +122,6 @@ export function gitEnv(pat: string): NodeJS.ProcessEnv {
 
 async function git(cwd: string, args: string[], auth?: GitAuth): Promise<{ stdout: string; stderr: string }> {
   if (!auth) return exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024 });
-  await ensureNoHooks();
   return exec('git', [...guards(auth), ...args], {
     cwd, maxBuffer: 32 * 1024 * 1024, env: gitEnv(auth.pat),
   });
@@ -144,7 +158,6 @@ export async function prepareCheckout(
 
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(dir), { recursive: true });
-  await ensureNoHooks();
   await exec('git', [...guards(auth), 'clone', '--depth=1', '--branch', branch, remoteUrl(owner, repo), dir], {
     maxBuffer: 32 * 1024 * 1024,
     env: gitEnv(pat),
