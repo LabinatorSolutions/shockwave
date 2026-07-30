@@ -1,93 +1,67 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import Dialog from './Dialog.js';
 import { Button } from '@/components/ui/button';
 
 const INSTALL_CMD = 'curl -fsSL https://raw.githubusercontent.com/stephengpope/shockwave/main/api/install.sh | sh';
-const POLL_MS = 3000;
-const TIMEOUT_MS = 3 * 60 * 1000;
 
-// Confirm-and-run flow for upgrading the companion server to this desktop's
-// version. The heavy lifting happens server-side (POST /update -> the updater
-// sidecar); this dialog fires the request, then polls api:checkVersion until
-// the companion comes back on the new version (it restarts mid-way, so
-// 'unreachable' during the poll is expected). Rendered by App.tsx (boot check)
-// and CompanionSection (manual).
+// Confirm-and-send for upgrading the companion server to this desktop's
+// version. Fire-and-forget by design: the request is sent, the dialog closes,
+// and the "it's done" signal arrives later — main watches the live feed
+// reconnect after the companion's restart and pushes `api:companionUpdated`
+// (App.tsx toasts it). Nothing here waits, polls, or blocks; an earlier
+// version owned a polling loop behind a non-dismissable overlay, and one hung
+// health check locked the entire app. Rendered by App.tsx (boot check) and
+// CompanionSection (manual).
 export default function CompanionUpdateDialog({
   open,
   onClose,
   desktop,
   companion,
-  onUpdated,
 }: {
   open: boolean;
   onClose: () => void;
   desktop?: string;
   companion?: string;
-  onUpdated?: () => void;
 }) {
-  const [phase, setPhase] = useState<'confirm' | 'updating' | 'unavailable' | 'error'>('confirm');
+  const [phase, setPhase] = useState<'confirm' | 'unavailable' | 'error'>('confirm');
   const [error, setError] = useState('');
-  // Cancels the poll loop when the dialog closes/unmounts mid-update. The
-  // server finishes the upgrade regardless; the next version check sees it.
-  const runRef = useRef(0);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (open) { setPhase('confirm'); setError(''); }
-    else runRef.current++;
+    if (open) { setPhase('confirm'); setError(''); setSending(false); }
   }, [open]);
-  useEffect(() => () => { runRef.current++; }, []);
 
   const onUpgrade = async () => {
-    setPhase('updating');
-    const run = ++runRef.current;
+    setSending(true);
     const r = await window.api.settings.apiUpgradeCompanion();
-    if (run !== runRef.current) return;
+    setSending(false);
     if (!r.ok) {
       if (r.error === 'updater-unavailable') { setPhase('unavailable'); return; }
       setError(r.error || 'The companion rejected the update request.');
       setPhase('error');
       return;
     }
-    const deadline = Date.now() + TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      await new Promise((res) => setTimeout(res, POLL_MS));
-      if (run !== runRef.current) return;
-      try {
-        const c = await window.api.settings.apiCheckVersion();
-        if (run !== runRef.current) return;
-        if (c.status === 'match') {
-          toast.success('Companion updated', { description: `Now on v${c.companion?.replace(/^v/, '')}.` });
-          onUpdated?.();
-          onClose();
-          return;
-        }
-        // 'unreachable' while the container restarts is normal — keep polling.
-      } catch { /* keep polling */ }
-    }
-    setError('The companion did not come back on the new version in time. Check the server, or re-run the install command below.');
-    setPhase('error');
+    toast('Companion update started', {
+      description: 'The server restarts in a minute or two — you’ll get a note here when it’s done.',
+    });
+    onClose();
   };
-
-  const versions = (
-    <p>
-      Desktop is on <span className="font-mono">v{String(desktop ?? '').replace(/^v/, '')}</span>, companion is on{' '}
-      <span className="font-mono">{companion ?? 'unknown'}</span>.
-    </p>
-  );
 
   return (
     <Dialog
       open={open}
-      onClose={() => { if (phase !== 'updating') onClose(); }}
+      onClose={onClose}
       title="Update companion server"
       footer={
         phase === 'confirm' ? (
           <>
-            <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-            <Button size="sm" onClick={onUpgrade}>Update companion</Button>
+            <Button variant="outline" size="sm" onClick={onClose} disabled={sending}>Cancel</Button>
+            <Button size="sm" onClick={onUpgrade} disabled={sending}>
+              {sending ? 'Requesting…' : 'Update companion'}
+            </Button>
           </>
-        ) : phase === 'updating' ? null : (
+        ) : (
           <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
         )
       }
@@ -95,15 +69,15 @@ export default function CompanionUpdateDialog({
       <div className="flex flex-col gap-2 text-sm">
         {phase === 'confirm' && (
           <>
-            {versions}
+            <p>
+              Desktop is on <span className="font-mono">v{String(desktop ?? '').replace(/^v/, '')}</span>, companion is on{' '}
+              <span className="font-mono">{companion ?? 'unknown'}</span>.
+            </p>
             <p>
               The server pulls the matching release and restarts itself — this takes a minute or two.
               Any Telegram or scheduled agent runs in progress will be interrupted.
             </p>
           </>
-        )}
-        {phase === 'updating' && (
-          <p className="text-muted-foreground">Updating the companion… it restarts mid-way, so a short outage is expected.</p>
         )}
         {phase === 'unavailable' && (
           <>

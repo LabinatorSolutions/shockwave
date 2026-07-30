@@ -991,7 +991,13 @@ ipcMain.handle('api:checkVersion', async () => {
   return { status: classifyVersions(desktop, h.version), desktop, companion: h.version };
 });
 ipcMain.handle('api:upgradeCompanion', async () => {
-  return api.triggerUpdate(`v${app.getVersion()}`);
+  const tag = `v${app.getVersion()}`;
+  const r = await api.triggerUpdate(tag);
+  // Accepted -> remember what we asked for; the live feed's reconnect (the
+  // companion coming back from its restart) checks the version and announces
+  // `api:companionUpdated` on a match. Fire-and-forget: nothing waits on this.
+  if (r.ok) pendingUpgradeTag = tag;
+  return r;
 });
 
 // The ONE place a certificate becomes approved: the user pressed Approve on a
@@ -1745,7 +1751,6 @@ function startLiveFeed() {
   };
   try {
     feedAbort = api.stream('/events', (e) => {
-      if (!opened) { opened = true; announceReconnect(); }
       feedBackoff = 1000;
       if (!e?.chatId) return;
       // Our own runs already reach the renderer over IPC; the copy coming back
@@ -1754,10 +1759,40 @@ function startLiveFeed() {
       for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed()) w.webContents.send('agent:event', e);
       }
-    }, done);
+    }, done, () => {
+      // Stream response arrived = the companion is reachable again. This used
+      // to fire on the FIRST EVENT instead, so a quiet server (no chats
+      // running) reconnected silently — chat resync stalled, and nothing could
+      // hang off "the companion came back".
+      opened = true;
+      announceReconnect();
+      void onFeedOpen();
+    });
   } catch {
     done(); // not configured yet — retry with backoff
   }
+}
+
+// The upgrade tag this session asked the companion to install, if any. The
+// feed reconnects for lots of reasons (sleep/wake, network blips); only when
+// this is set does a version match after a reconnect mean "the upgrade you
+// started just landed" — worth a toast. In-memory only: quit before the server
+// returns and the normal boot check reports the outcome instead.
+let pendingUpgradeTag: string | null = null;
+
+async function onFeedOpen() {
+  if (!pendingUpgradeTag) return;
+  try {
+    const c = readApiConfig();
+    if (!c.url || !c.apiKey) return;
+    const h = await api.health(c.url, c.apiKey);
+    if (h.ok && h.version && classifyVersions(app.getVersion(), h.version) === 'match') {
+      pendingUpgradeTag = null;
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('api:companionUpdated', { version: h.version });
+      }
+    }
+  } catch { /* still restarting — the next reconnect checks again */ }
 }
 
 function stopLiveFeed() {

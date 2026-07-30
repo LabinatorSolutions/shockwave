@@ -280,8 +280,12 @@ export interface ShockwaveApi {
     }>;
     /** Ask the companion to upgrade itself to this desktop's version (POST /update
      *  -> the updater sidecar). `updater-unavailable` = pre-sidecar deployment;
-     *  the user must re-run the install script once. */
+     *  the user must re-run the install script once. Fire-and-forget: success
+     *  means "request accepted"; completion arrives via onCompanionUpdated. */
     apiUpgradeCompanion(): Promise<{ ok: boolean; error?: string }>;
+    /** Fires when an upgrade requested this session has landed — main sees the
+     *  live feed reconnect with the matching version. Returns an unsubscribe fn. */
+    onCompanionUpdated(cb: (payload: { version: string }) => void): () => void;
     /** Remove a stored credential by settings path (`sync.pat`,
      *  `transcription.apiKey`, `codingAgent.providerKeys.<slug>`).
      *

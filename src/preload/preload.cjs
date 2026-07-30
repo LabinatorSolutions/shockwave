@@ -239,6 +239,13 @@ contextBridge.exposeInMainWorld('api', {
     deleteCredential: (path) => ipcRenderer.invoke('settings:deleteCredential', { path }),
     apiCheckVersion: () => ipcRenderer.invoke('api:checkVersion'),
     apiUpgradeCompanion: () => ipcRenderer.invoke('api:upgradeCompanion'),
+    /** Fires when an upgrade this session requested has landed (main sees the
+     *  live feed reconnect on the new version). Returns an unsubscribe fn. */
+    onCompanionUpdated: (cb) => {
+      const h = (_evt, payload) => cb(payload);
+      ipcRenderer.on('api:companionUpdated', h);
+      return () => ipcRenderer.removeListener('api:companionUpdated', h);
+    },
     /** Approve a companion TLS fingerprint the user has just been shown. The only
      *  path that stores one.
      *  @param {string} fingerprint @returns {Promise<{ok: boolean, error?: string}>} */

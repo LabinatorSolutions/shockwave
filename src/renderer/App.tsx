@@ -292,7 +292,12 @@ export default function App() {
         toast.info('Companion is newer than this app', { description: 'Update the desktop app to match your companion server.' });
       }
     }).catch(() => {});
-    return () => { alive = false; };
+    // A requested upgrade landing (main sees the feed reconnect on the new
+    // version) — the async completion signal for CompanionUpdateDialog.
+    const off = window.api.settings.onCompanionUpdated(({ version }) => {
+      toast.success('Companion updated', { description: `Now on ${version}.` });
+    });
+    return () => { alive = false; off(); };
   }, []);
 
   // Live ref to the active file's absolute path. Used by the editor's image

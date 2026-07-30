@@ -96,8 +96,12 @@ export const api = {
   // NEVER approves anything — it only reports.
   async health(url: string, apiKey: string): Promise<{ ok: boolean; version?: string; cert?: PendingCert }> {
     const t = new URL('health', url.endsWith('/') ? url : `${url}/`).href;
+    // Same timeout discipline as request() — an un-bounded health fetch once
+    // hung forever on a connection the restarting companion half-closed.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
     try {
-      const r = await companionFetch(t, { headers: { Authorization: `Bearer ${apiKey}` } });
+      const r = await companionFetch(t, { headers: { Authorization: `Bearer ${apiKey}` }, signal: ctrl.signal });
       clearPendingCert(); // answered ⇒ certificate accepted
       if (!r.ok) return { ok: false };
       const j = await r.json().catch(() => ({}));
@@ -105,7 +109,7 @@ export const api = {
     } catch {
       const cert = getPendingCert(hostOf(t));
       return cert ? { ok: false, cert } : { ok: false };
-    }
+    } finally { clearTimeout(timer); }
   },
   // Ask the companion to upgrade itself to `tag` (POST /update -> the updater
   // sidecar). Reads the error body — `updater-unavailable` means a pre-sidecar
@@ -113,24 +117,29 @@ export const api = {
   async triggerUpdate(tag: string): Promise<{ ok: boolean; error?: string }> {
     const { url, apiKey } = base();
     const target = new URL('update', url.endsWith('/') ? url : `${url}/`).href;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
     try {
       const res = await companionFetch(target, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tag }),
+        signal: ctrl.signal,
       });
       if (res.ok) return { ok: true };
       const j = await res.json().catch(() => ({}));
       return { ok: false, error: typeof j.error === 'string' ? j.error : `HTTP ${res.status}` };
     } catch (err: any) {
       return { ok: false, error: err?.message ?? String(err) };
-    }
+    } finally { clearTimeout(timer); }
   },
   // Open a long-lived Server-Sent Events stream. `onEvent` fires per `data:`
-  // frame (parsed JSON); `onClose` fires once when the stream ends for any
+  // frame (parsed JSON); `onOpen` fires once when the stream's HTTP response
+  // arrives (the connection is up — before any event, which on a quiet server
+  // may be a long way off); `onClose` fires once when the stream ends for any
   // reason (abort, drop, non-2xx) so the caller can reconnect. Returns an abort
   // fn. No timeout — it stays open until aborted or the connection drops.
-  stream(pathname: string, onEvent: (evt: any) => void, onClose?: () => void): () => void {
+  stream(pathname: string, onEvent: (evt: any) => void, onClose?: () => void, onOpen?: () => void): () => void {
     const { url, apiKey } = base();
     const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
     const ctrl = new AbortController();
@@ -142,6 +151,7 @@ export const api = {
           signal: ctrl.signal,
         });
         if (!res.ok || !res.body) return;
+        onOpen?.();
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';

@@ -374,7 +374,6 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
         onClose={() => setUpdateOpen(false)}
         desktop={verCheck?.desktop}
         companion={verCheck?.companion}
-        onUpdated={() => { refreshVersionCheck(); onConnect(); }}
       />
     </SettingsSection>
   );
