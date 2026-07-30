@@ -3,8 +3,8 @@ import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
-import { credentialPlaceholder, removeCredential } from './credentialField';
+import { removeCredential } from './credentialField';
+import CredentialRow from './CredentialRow';
 import ErrorMessage from '../ErrorMessage.jsx';
 
 // GitHub — the account and the machine, i.e. everything that is NOT per
@@ -139,37 +139,34 @@ export default function GitHubSection({ sync, onSyncChange }) {
       <SettingsGroup title="Account">
         <Field>
           <FieldLabel htmlFor="sync-pat">Personal Access Token</FieldLabel>
-          <div className="flex gap-2">
-            <Input
-              id="sync-pat"
-              type="password"
-              className="flex-1 font-mono text-[13px]"
-              value={patDraft}
-              onChange={onPatChange}
-              onBlur={commitPat}
-              spellCheck={false}
-              autoComplete="off"
-              autoCorrect="off"
-              placeholder={credentialPlaceholder(hasPat)}
-            />
-            {/* This page's one primary: checking the token is the action you come
-                here to take. Enabled whenever there is something to check —
-                either typed here or already stored. Gating it on the draft alone
-                disabled it forever, since the draft is empty unless you're
-                mid-edit. */}
-            <Button onClick={onVerify} disabled={(!patDraft.trim() && !hasPat) || verifyState.status === 'checking'}>
-              {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
-            </Button>
-            {/* Only route that removes a stored token — clearing the box can't, by
-                design. Destructive styling because sync stops until a new one is
-                entered, and because a token you delete here is one you probably
-                need to revoke on GitHub too. */}
-            {hasPat && (
-              <Button variant="destructive" onClick={onRemovePat} disabled={removing}>
-                {removing ? 'Removing…' : 'Remove'}
-              </Button>
-            )}
-          </div>
+          <CredentialRow
+            id="sync-pat"
+            saved={hasPat}
+            value={patDraft}
+            onChange={onPatChange}
+            onBlur={commitPat}
+            actions={
+              <>
+                {/* This page's one primary: checking the token is the action you come
+                    here to take. Enabled whenever there is something to check —
+                    either typed here or already stored. Gating it on the draft alone
+                    disabled it forever, since the draft is empty unless you're
+                    mid-edit. */}
+                <Button onClick={onVerify} disabled={(!patDraft.trim() && !hasPat) || verifyState.status === 'checking'}>
+                  {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
+                </Button>
+                {/* Only route that removes a stored token — clearing the box can't, by
+                    design. Destructive styling because sync stops until a new one is
+                    entered, and because a token you delete here is one you probably
+                    need to revoke on GitHub too. */}
+                {hasPat && (
+                  <Button variant="destructive" onClick={onRemovePat} disabled={removing}>
+                    {removing ? 'Removing…' : 'Remove'}
+                  </Button>
+                )}
+              </>
+            }
+          />
           <FieldDescription className="text-xs">
             Needs <code className="font-mono">Contents: Read and write</code>, plus{' '}
             <code className="font-mono">Administration: Write</code> to create repos.{' '}

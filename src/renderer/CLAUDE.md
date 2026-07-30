@@ -266,6 +266,20 @@ save models across fourteen sections, so these are now fixed:
   credential** (`settingsDiff.js` drops it), and the companion no longer deletes
   a credential merely absent from a save. Without both, editing an unrelated
   field — a sync interval — would delete your GitHub token.
+- **Every credential box is a `CredentialRow`** (`settings/CredentialRow.tsx`),
+  and its **actions go BELOW the input, never beside it**. Beside was the old
+  shape and it made the field's width a function of state: the buttons are
+  conditional (Remove only once something is stored, Test only for
+  openai-compatible) and their labels grow mid-action, so the GitHub PAT measured
+  280px empty, 186px with a token stored, and 153px while Verify said
+  "Verifying…" — it moved under the cursor as you used it. Reserving a slot
+  can't fix that either: "Verifying…" + "Removing…" is 216px of the 360px
+  measure. The row takes its width from its container and **never** from a
+  per-call-site class — that's what keeps the six equal. A dialog hosting one
+  sets `className="sm:max-w-[408px]"` (= 360px content + `p-6`) so it matches the
+  settings measure; the Agent Secrets dialogs were 464px before. Never wrap a
+  credential in `InputGroup` — with no addon it's a no-op, and Telegram's had an
+  *empty* inline-end addon that silently ate 8px of text column.
 - **Toggles, dropdowns, comboboxes and sliders commit on change** (sliders on
   `onValueCommit`). There's no partial state to protect.
 - **Everything goes through the section's `on*Change` prop → `persistSettings`.**

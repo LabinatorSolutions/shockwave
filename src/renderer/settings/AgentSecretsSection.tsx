@@ -3,7 +3,7 @@ import { KeyRound, Link2, Pencil, Plus, RefreshCw, Trash2, Unplug } from 'lucide
 import Dialog from '../Dialog.jsx';
 import ConfirmDialog from '../ConfirmDialog.jsx';
 import ErrorMessage from '../ErrorMessage.jsx';
-import { credentialPlaceholder } from './credentialField';
+import CredentialRow from './CredentialRow';
 import { SettingsSection } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -16,12 +16,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from '@/components/ui/input-group';
 
 function nameKey(s) {
   return (s ?? '').trim().toLowerCase();
@@ -66,6 +60,9 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
     <Dialog
       open={open}
       onClose={onClose}
+      // 360px content + p-6 gutters. Matches the settings measure so the Token
+      // box is the same width as every other credential box in the app.
+      className="sm:max-w-[408px]"
       title={editing ? `Edit ${editing.name}` : 'Add token'}
       footer={
         <>
@@ -110,19 +107,12 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
 
         <Field>
           <FieldLabel htmlFor="secret-token">Token</FieldLabel>
-          <InputGroup>
-            <InputGroupInput
-              id="secret-token"
-              className="font-mono"
-              type="password"
-              placeholder={credentialPlaceholder(!!editing?.hasToken)}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-              autoCorrect="off"
-            />
-          </InputGroup>
+          <CredentialRow
+            id="secret-token"
+            saved={!!editing?.hasToken}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
         </Field>
 
         {error && <ErrorMessage>{error}</ErrorMessage>}
@@ -251,6 +241,8 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
     <Dialog
       open={open}
       onClose={onClose}
+      // Same 360px content measure as the token dialog — see there.
+      className="sm:max-w-[408px]"
       title={editing ? `Edit ${editing.name}` : 'Add OAuth'}
       footer={
         <>
@@ -339,19 +331,12 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
 
         <Field>
           <FieldLabel htmlFor="oauth-client-secret">Client Secret</FieldLabel>
-          <InputGroup>
-            <InputGroupInput
-              id="oauth-client-secret"
-              className="font-mono"
-              type="password"
-              placeholder={credentialPlaceholder(!!editing?.oauth?.hasClientSecret)}
-              value={clientSecret}
-              onChange={(e) => setClientSecret(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-              autoCorrect="off"
-            />
-          </InputGroup>
+          <CredentialRow
+            id="oauth-client-secret"
+            saved={!!editing?.oauth?.hasClientSecret}
+            value={clientSecret}
+            onChange={(e) => setClientSecret(e.target.value)}
+          />
         </Field>
 
         {isCustom && (

@@ -4,9 +4,6 @@ import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput,
-} from '@/components/ui/input-group';
-import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 
@@ -89,15 +86,17 @@ export default function TelegramSection({ workspaces }: { workspaces?: any[] }) 
           <>
             <Field>
               <FieldLabel htmlFor="tg-token">Bot token</FieldLabel>
-              <InputGroup>
-                <InputGroupInput
-                  id="tg-token" type="password" className="font-mono"
-                  placeholder="123456:ABC-DEF…" value={botToken}
-                  onChange={(e) => setBotToken(e.target.value)} spellCheck={false} autoComplete="off"
-                />
-                <InputGroupAddon align="inline-end">
-                </InputGroupAddon>
-              </InputGroup>
+              {/* Not a CredentialRow: this one is never stored-and-hidden — it's
+                  a connect-flow field that is always empty until you paste, so
+                  its placeholder is a format example rather than the dots. Width
+                  still has to match, hence a plain full-width Input. The old
+                  InputGroup here wrapped an EMPTY inline-end addon, which bought
+                  nothing and cost 8px of text column. */}
+              <Input
+                id="tg-token" type="password" className="w-full font-mono"
+                placeholder="123456:ABC-DEF…" value={botToken}
+                onChange={(e) => setBotToken(e.target.value)} spellCheck={false} autoComplete="off"
+              />
               <FieldDescription>From @BotFather. Stored encrypted on the companion — it never lives on this machine.</FieldDescription>
             </Field>
             <Field>

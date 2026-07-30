@@ -5,8 +5,8 @@ import { VoiceBars } from '../voice/VoiceBars.jsx';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { credentialPlaceholder, removeCredential } from './credentialField';
+import { removeCredential } from './credentialField';
+import CredentialRow from './CredentialRow';
 
 // Settings page for voice transcription. Two jobs:
 //   1. Capture + store the AssemblyAI API key (encrypted in main).
@@ -98,31 +98,26 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
       <SettingsGroup>
         <Field>
           <FieldLabel htmlFor="transcription-key">AssemblyAI API key</FieldLabel>
-          <div className="flex gap-2">
-            <Input
-              id="transcription-key"
-              type="password"
-              className="flex-1 font-mono"
-              placeholder={credentialPlaceholder(hasApiKey)}
-              value={keyField.value}
-              onChange={(e) => keyField.onChange(e.target.value)}
-              onBlur={keyField.onBlur}
-              spellCheck={false}
-              autoComplete="off"
-              autoCorrect="off"
-            />
-            {/* The only way to remove a stored key — clearing the box can't, by
-                design (see removeCredential). Re-checks afterwards so the Test
-                button below reflects the key actually being gone. */}
-            {hasApiKey && (
-              <Button
-                variant="destructive"
-                onClick={async () => { await removeCredential('transcription.apiKey'); recheckRef.current?.(); }}
-              >
-                Remove
-              </Button>
-            )}
-          </div>
+          <CredentialRow
+            id="transcription-key"
+            saved={hasApiKey}
+            value={keyField.value}
+            onChange={(e) => keyField.onChange(e.target.value)}
+            onBlur={keyField.onBlur}
+            actions={
+              /* The only way to remove a stored key — clearing the box can't, by
+                 design (see removeCredential). Re-checks afterwards so the Test
+                 button below reflects the key actually being gone. */
+              hasApiKey ? (
+                <Button
+                  variant="destructive"
+                  onClick={async () => { await removeCredential('transcription.apiKey'); recheckRef.current?.(); }}
+                >
+                  Remove
+                </Button>
+              ) : null
+            }
+          />
         </Field>
       </SettingsGroup>
 

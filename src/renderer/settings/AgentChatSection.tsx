@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import Combobox from '../Combobox.jsx';
 import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
 import { useCommitField } from './useCommitField';
-import { credentialPlaceholder, removeCredential } from './credentialField';
+import { removeCredential } from './credentialField';
+import CredentialRow from './CredentialRow';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -247,47 +248,39 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
         <FieldLabel htmlFor={`${idPrefix}-key`}>
           API key{isCompatible ? ' (optional for local)' : ''}
         </FieldLabel>
-        {/* Credential row shape, identical in every section: the field grows, its
-            buttons sit to the right of it, outside. Remove used to live INSIDE
-            this one's input group while GitHub's and Transcription's sat outside,
-            so the same control appeared in two different places depending on which
-            page you were on. */}
-        <div className="flex gap-2">
-          <Input
-            id={`${idPrefix}-key`}
-            className="flex-1 font-mono"
-            type="password"
-            placeholder={credentialPlaceholder(hasKey)}
-            value={keyField.value}
-            onChange={(e) => keyField.onChange(e.target.value)}
-            onBlur={keyField.onBlur}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-          />
-          {/* Primary because it's the one ACTION on this page — but it only exists
-              for openai-compatible, so on a cloud provider this page has no
-              primary. Cloud keys have nothing to probe here: /models paths and auth
-              differ per provider, and pi already supplies their model lists, so
-              those keys validate on the first message instead. */}
-          {isCompatible && (
-            <Button
-              onClick={handleValidate}
-              disabled={validateState === 'loading' || !baseUrlField.value}
-              title="Test connection (GET /models)"
-            >
-              {validateState === 'loading' ? 'Testing…' : 'Test'}
-            </Button>
-          )}
-          {/* Only route that removes a stored key — clearing the box can't, by
-              design (see removeCredential). Per provider: removing Anthropic's key
-              leaves the others alone. */}
-          {hasKey && (
-            <Button variant="destructive" onClick={() => onRemoveKey?.()}>
-              Remove
-            </Button>
-          )}
-        </div>
+        <CredentialRow
+          id={`${idPrefix}-key`}
+          saved={hasKey}
+          value={keyField.value}
+          onChange={(e) => keyField.onChange(e.target.value)}
+          onBlur={keyField.onBlur}
+          actions={
+            <>
+              {/* Primary because it's the one ACTION on this page — but it only exists
+                  for openai-compatible, so on a cloud provider this page has no
+                  primary. Cloud keys have nothing to probe here: /models paths and auth
+                  differ per provider, and pi already supplies their model lists, so
+                  those keys validate on the first message instead. */}
+              {isCompatible && (
+                <Button
+                  onClick={handleValidate}
+                  disabled={validateState === 'loading' || !baseUrlField.value}
+                  title="Test connection (GET /models)"
+                >
+                  {validateState === 'loading' ? 'Testing…' : 'Test'}
+                </Button>
+              )}
+              {/* Only route that removes a stored key — clearing the box can't, by
+                  design (see removeCredential). Per provider: removing Anthropic's key
+                  leaves the others alone. */}
+              {hasKey && (
+                <Button variant="destructive" onClick={() => onRemoveKey?.()}>
+                  Remove
+                </Button>
+              )}
+            </>
+          }
+        />
         {isCompatible && validateMsg && (
           <p className={validateState === 'error' ? 'text-xs text-destructive' : 'text-xs text-success'}>
             {validateMsg}

@@ -4,7 +4,7 @@ import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useCommitField } from './useCommitField';
-import { credentialPlaceholder } from './credentialField';
+import CredentialRow from './CredentialRow';
 import CompanionUpdateDialog from '../CompanionUpdateDialog.jsx';
 
 // The desktop's connection to the Shockwave companion (server URL + API key).
@@ -243,17 +243,12 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
 
         <Field>
           <FieldLabel htmlFor="companion-key">API key</FieldLabel>
-          <Input
+          <CredentialRow
             id="companion-key"
-            type="password"
-            placeholder={credentialPlaceholder(hasStoredKey)}
+            saved={hasStoredKey}
             value={keyDraft}
             onChange={(e) => onKeyChange(e.target.value)}
             onBlur={commitKey}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            className="font-mono"
           />
           <FieldDescription>
             Also printed by the installer. Encrypted on this machine with your OS keychain. Only this
