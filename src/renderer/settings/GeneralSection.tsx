@@ -57,31 +57,7 @@ export default function GeneralSection({
   }, []);
 
   return (
-    <SettingsSection title="General" description="App-wide preferences: time, color theme, and editor display.">
-      {/* Not a display setting, which is why this page isn't called Appearance
-          any more. It lived on a Cron page while the desktop ran its own
-          scheduler; cron moved to the companion and took that page's reason to
-          exist with it, but the zone is used app-wide — schedules, run times,
-          and the agent's idea of today's date. */}
-      <SettingsGroup title="Time">
-        <Field>
-          <FieldLabel htmlFor="timezone">Timezone</FieldLabel>
-          <Combobox
-            id="timezone"
-            className="font-mono"
-            options={zones}
-            value={timezone || 'UTC'}
-            onChange={(v) => onTimezoneChange?.(v.trim() || 'UTC')}
-            placeholder="UTC"
-          />
-          <FieldDescription>
-            The one timezone the whole system uses — scheduled runs, run times, and the agent's date. Type to filter (e.g. <span className="font-mono">New_York</span>).
-          </FieldDescription>
-        </Field>
-      </SettingsGroup>
-
-      <SettingsDivider />
-
+    <SettingsSection title="General" description="App-wide preferences: color theme, editor display, and time.">
       <SettingsGroup title="Theme">
         <Field>
           <FieldLabel htmlFor="theme-mode">Color theme</FieldLabel>
@@ -147,6 +123,33 @@ export default function GeneralSection({
             />
           </Field>
         )}
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      {/* Last, not first. Not a display setting — which is why this page isn't
+          called Appearance any more — but also not the reason anyone opens it:
+          it's set once, when the companion is first set up, and then never
+          again, while theme and editor display are what people come back for.
+          It lived on a Cron page while the desktop ran its own scheduler; cron
+          moved to the companion and took that page's reason to exist with it,
+          but the zone is used app-wide — schedules, run times, and the agent's
+          idea of today's date. */}
+      <SettingsGroup title="Time">
+        <Field>
+          <FieldLabel htmlFor="timezone">Timezone</FieldLabel>
+          <Combobox
+            id="timezone"
+            className="font-mono"
+            options={zones}
+            value={timezone || 'UTC'}
+            onChange={(v) => onTimezoneChange?.(v.trim() || 'UTC')}
+            placeholder="UTC"
+          />
+          <FieldDescription>
+            The one timezone the whole system uses — scheduled runs, run times, and the agent's date. Type to filter (e.g. <span className="font-mono">New_York</span>).
+          </FieldDescription>
+        </Field>
       </SettingsGroup>
     </SettingsSection>
   );
