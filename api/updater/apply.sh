@@ -32,7 +32,15 @@ RAW="${SHOCKWAVE_RAW_BASE:-https://raw.githubusercontent.com/$REPO/$TAG/api}"
 # in a URL and in .env — nothing but a plain version tag may pass.
 echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "apply: invalid tag"; exit 1; }
 
-FILES="docker-compose.yml traefik/traefik.yml traefik/gen-router.sh updater/watch.sh updater/apply.sh"
+# Every runtime file that lives on the host. `host/shockwave` is the command on
+# PATH: /usr/local/bin/shockwave is a symlink to it, made once at install, so
+# replacing this file IS how a command update reaches the box — no write outside
+# $COMPANION_DIR (the only thing mounted here) and no new symlink, ever.
+FILES="docker-compose.yml traefik/traefik.yml traefik/gen-router.sh updater/watch.sh updater/apply.sh host/shockwave"
+# Files that are executed directly rather than via `sh <file>`, so their mode
+# matters. `curl -o` writes 644 and `mv` preserves it — without this the command
+# on PATH would land unrunnable.
+EXECUTABLE="host/shockwave"
 
 fetch() { # fetch <relpath> <dest>
   case "$RAW" in
@@ -73,6 +81,9 @@ echo "apply: image pulled"
 for f in $FILES; do
   mkdir -p "$COMPANION_DIR/$(dirname "$f")"
   mv "$STAGE/$f" "$COMPANION_DIR/$f"
+done
+for f in $EXECUTABLE; do
+  chmod 755 "$COMPANION_DIR/$f"
 done
 
 # ── 4. Pin the tag in .env + restart ────────────────────────────────────────

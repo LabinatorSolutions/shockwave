@@ -286,6 +286,40 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 // Domain set: Let's Encrypt owns the certificate, so delete any self-signed
 // leftovers rather than leaving a private key on disk claiming to be this server
 // and still registered as Traefik's default.
+/**
+ * COMPANION_HOST and COMPANION_DOMAIN are one thing — this server's public
+ * address — split across two variables whose real difference is which TLS mode
+ * you get. Nothing validated that the value suited the variable, so an IP in
+ * COMPANION_DOMAIN silently produced the worst outcome available:
+ *
+ *   settleTls deletes our self-signed certificate (a real one is supposedly
+ *   coming) -> Let's Encrypt can never issue for a bare IP, so none arrives ->
+ *   Traefik serves the throwaway certificate it generates at EVERY startup.
+ *
+ * The server answers fine, so nothing looks broken — except the fingerprint
+ * changes on every restart and every desktop is asked to approve a different
+ * identity each time, which is precisely how you teach someone to click through
+ * the one prompt that catches a real attack.
+ *
+ * An IP can only ever mean self-signed, so the intent is unambiguous: move it to
+ * COMPANION_HOST and carry on. Normalised HERE, before anything reads either
+ * variable, so every consumer (TLS, the Telegram webhook URL) sees one answer.
+ * Fixing it in place would be a config write from a process that must not own
+ * config; this fixes behaviour and says what to change.
+ *
+ * `traefik/gen-router.sh` makes the same call for Traefik's router — it is a
+ * different container and cannot see this. The two must agree.
+ */
+function normalizeTlsEnv(): void {
+  const domain = (process.env.COMPANION_DOMAIN || '').trim();
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(domain)) return;
+  process.env.COMPANION_HOST = domain;
+  process.env.COMPANION_DOMAIN = '';
+  log.warn({ address: domain },
+    'COMPANION_DOMAIN is an IP address — Let\'s Encrypt cannot issue for one. Using it as COMPANION_HOST '
+    + '(self-signed, approve the fingerprint once). Move it to COMPANION_HOST in .env to silence this.');
+}
+
 async function settleTls(): Promise<void> {
   if (process.env.COMPANION_DOMAIN) {
     await removeSelfSignedCert();
@@ -298,6 +332,7 @@ async function settleTls(): Promise<void> {
 }
 
 (async () => {
+  normalizeTlsEnv(); // must run before ANY reader of COMPANION_HOST/DOMAIN
   await settleTls();
   await ensureSchema(pool);
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json

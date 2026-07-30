@@ -23,7 +23,8 @@
 #   5. docker compose up -d  — pulls ghcr.io/stephengpope/shockwave-companion.
 #   6. Waits for /health, prints the server URL, API key, and — with no domain —
 #      the certificate fingerprint you approve in the desktop app.
-#   7. Installs `shockwave-fingerprint` and `shockwave-rotate-cert` on PATH.
+#   7. Installs the `shockwave` command on PATH (subcommands: fingerprint,
+#      rotate-cert, status, logs, version).
 #
 # Re-running is the update path: refreshes the compose/config files, pulls the
 # newest image, recreates changed containers. Data lives on named volumes.
@@ -132,8 +133,8 @@ fi
 
 # ── Runtime files ───────────────────────────────────────────────────────────
 say "Fetching companion files into $DIR ..."
-$SUDO mkdir -p "$DIR/traefik" "$DIR/updater"
-for f in docker-compose.yml init.sql traefik/traefik.yml traefik/gen-router.sh updater/watch.sh updater/apply.sh; do
+$SUDO mkdir -p "$DIR/traefik" "$DIR/updater" "$DIR/host"
+for f in docker-compose.yml init.sql traefik/traefik.yml traefik/gen-router.sh updater/watch.sh updater/apply.sh host/shockwave; do
   curl -fsSL "$RAW/$f" | $SUDO tee "$DIR/$f" >/dev/null || fail "failed to fetch $f"
 done
 ok "Files fetched (ref: $REF)"
@@ -160,6 +161,23 @@ env_set() {
                printf '%s=%s\n' '$1' '$2' >> '$ENV_FILE.tmp'; \
                mv '$ENV_FILE.tmp' '$ENV_FILE'"
 }
+
+# An IP is not a domain. Let's Encrypt only issues for names, so an IP in
+# COMPANION_DOMAIN leaves the server with no certificate of its own and Traefik
+# serving the throwaway one it regenerates at every startup — a new fingerprint
+# to approve after every restart. It can only mean self-signed, so treat it as
+# the address and say so. `normalizeTlsEnv` (api) and gen-router.sh make the same
+# call at runtime, for boxes whose .env already has it.
+case "$DOMAIN" in
+  # Reject non-IP characters first, so a hostname that starts like an IP
+  # (10.0.0.1.nip.io) keeps its Let's Encrypt certificate.
+  *[!0-9.]*) ;;
+  [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+    say "--domain is an IP address; using it as this server's address (self-signed certificate)."
+    PUBLIC_IP="$DOMAIN"
+    DOMAIN=""
+    ;;
+esac
 
 if $SUDO test -f "$ENV_FILE"; then
   ok ".env exists — secrets kept (delete $ENV_FILE to regenerate)"
@@ -201,39 +219,27 @@ EOF
   ok ".env created (secrets generated, chmod 600)"
 fi
 
-# ── Helper commands on PATH ─────────────────────────────────────────────────
-# Two things you'll want later and shouldn't have to remember a docker
-# incantation for: read the certificate's fingerprint, and replace it.
-$SUDO sh -c "cat > '$DIR/shockwave-fingerprint'" <<EOF
-#!/bin/sh
-# Print this server's TLS certificate fingerprint. Compare it against the one the
-# desktop app shows before you approve it.
-set -eu
-cd "$DIR"
-exec docker compose exec -T api \\
-  openssl x509 -in /etc/traefik/dynamic/companion.crt -noout -fingerprint -sha256
-EOF
-$SUDO sh -c "cat > '$DIR/shockwave-rotate-cert'" <<EOF
-#!/bin/sh
-# Replace this server's TLS certificate. Deletes the current one and restarts the
-# api, which creates a fresh one at boot — one code path, no second
-# implementation to drift. Traefik's file watcher picks it up on its own.
+# ── The one command on PATH ─────────────────────────────────────────────────
+# ONE symlink, to a file that ships with the release. Its target path never
+# changes, so upgrades keep the command current by replacing that file — and
+# never need to write outside $DIR, which they cannot do.
 #
-# Every desktop will stop connecting until you approve the new fingerprint, which
-# is the point: rotating is how you recover from a stolen private key.
-set -eu
-cd "$DIR"
-docker compose exec -T api rm -f /etc/traefik/dynamic/companion.crt \\
-                                 /etc/traefik/dynamic/companion.key
-docker compose restart api >/dev/null
-printf 'New fingerprint — approve this in the desktop app:\\n'
-sleep 3
-exec "$DIR/shockwave-fingerprint"
-EOF
-$SUDO chmod 755 "$DIR/shockwave-fingerprint" "$DIR/shockwave-rotate-cert"
-$SUDO ln -sf "$DIR/shockwave-fingerprint" /usr/local/bin/shockwave-fingerprint
-$SUDO ln -sf "$DIR/shockwave-rotate-cert" /usr/local/bin/shockwave-rotate-cert
-ok "Installed: shockwave-fingerprint, shockwave-rotate-cert"
+# This used to generate a script per command here and symlink each one. Those
+# scripts existed only as text inside this installer, so upgrades had no way to
+# deliver them: a box installed before a command existed never got it, and a
+# changed command never reached any existing box. Adding a subcommand now means
+# editing host/shockwave and cutting a release — nothing to install.
+$SUDO chmod 755 "$DIR/host/shockwave"
+$SUDO ln -sf "$DIR/host/shockwave" /usr/local/bin/shockwave
+# Retire the per-command symlinks from before the dispatcher. Left in place they
+# point at files this installer no longer writes, so they'd be broken commands
+# on PATH that report a missing file rather than telling you the name changed.
+for old in shockwave-fingerprint shockwave-rotate-cert; do
+  if [ -L "/usr/local/bin/$old" ] || [ -f "$DIR/$old" ]; then
+    $SUDO rm -f "/usr/local/bin/$old" "$DIR/$old"
+  fi
+done
+ok "Installed: shockwave (try: shockwave fingerprint)"
 
 # ── Up ──────────────────────────────────────────────────────────────────────
 say "Pulling images + starting containers..."
@@ -287,8 +293,8 @@ fi
 printf '\nNotes:\n'
 printf '  - Ports 80 + 443 must be open (cloud firewall / security group).\n'
 if [ -z "$DOMAIN" ]; then
-  printf '  - Show the fingerprint again any time:  shockwave-fingerprint\n'
-  printf '  - Replace the certificate:              shockwave-rotate-cert\n'
+  printf '  - Show the fingerprint again any time:  shockwave fingerprint\n'
+  printf '  - Replace the certificate:              shockwave rotate-cert\n'
   printf '  - Add a domain later (real certificate, no fingerprint to approve):\n'
   printf '      re-run this script with --domain=your-domain --cert-email=you@example.com\n'
 fi
