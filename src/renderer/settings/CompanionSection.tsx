@@ -196,7 +196,7 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
   return (
     <SettingsSection
       title="Companion"
-      description="Shockwave stores your settings, secrets, workspaces, and chats on your companion server. Point the app at it here — every other page needs this connection."
+      description="Your settings, secrets, workspaces, and chats live on your companion server. Every other page needs this connection."
     >
       <SettingsGroup>
         {/* Version mismatch rides at the top of the page, not down by Connect.
@@ -216,7 +216,7 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
         )}
         {verCheck?.status === 'companion-newer' && (
           <p className="text-xs text-muted-foreground">
-            The companion ({verCheck.companion}) is newer than this app — update the desktop app to match.
+            Companion ({verCheck.companion}) is newer than this app — update the desktop app.
           </p>
         )}
 
@@ -234,10 +234,11 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
             autoCorrect="off"
             className="font-mono"
           />
+          {/* The self-signed caveat used to be spelled out here, for a case most
+              users hit once. The approval panel below explains it in context and
+              only when it applies. */}
           <FieldDescription>
-            The Server URL the installer printed when it finished. With no domain set that&rsquo;s your
-            server&rsquo;s IP address over https, and the certificate is self-signed &mdash; you&rsquo;ll be asked
-            to approve it once.
+            Printed by the installer. With no domain, your server&rsquo;s IP over https.
           </FieldDescription>
         </Field>
 
@@ -251,8 +252,7 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
             onBlur={commitKey}
           />
           <FieldDescription>
-            Also printed by the installer. Encrypted on this machine with your OS keychain. Only this
-            key leaves the app — your secrets stay on the companion.
+            Also printed by the installer. Encrypted in your OS keychain.
           </FieldDescription>
         </Field>
 
@@ -300,8 +300,8 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
           {status === 'connected' && approvedFp && (
             <div className="mt-2">
               <p className="text-muted-foreground">
-                Approved certificate. Run <code className="font-mono">shockwave-fingerprint</code> on the
-                server to check it still matches.
+                Approved certificate &mdash; compare with{' '}
+                <code className="font-mono">shockwave-fingerprint</code> on the server.
               </p>
               <p className="mt-1 font-mono break-all">{approvedFp}</p>
               <Button
@@ -319,18 +319,19 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
           {status === 'needsApproval' && cert && (
             <>
               <p className="mt-1 text-muted-foreground">
+                {/* Kept concrete on purpose. These two are the only text on the
+                    page a user must actually weigh — everything else was trimmed
+                    so these stand out rather than compete. */}
                 {firstConnection ? (
                   <>
-                    {cert.host} uses a self-signed certificate, so nothing vouches for it. Check the
-                    fingerprint below matches the one the installer printed, then approve it. From
-                    then on, anything different stops the connection and brings you back here.
+                    {cert.host} is self-signed, so nothing vouches for it. Approve only if this
+                    fingerprint matches the one the installer printed.
                   </>
                 ) : (
                   <>
-                    {cert.host} is answering with a different certificate than the one you approved.
-                    That happens when the server is rebuilt, moves to a new address, or regenerates
-                    its certificate &mdash; and it is also what someone impersonating your server
-                    looks like. Only continue if you know why it changed.
+                    {cert.host} is offering a different certificate than the one you approved. Normal
+                    after a rebuild or move &mdash; and also what an impostor looks like. Continue
+                    only if you know why it changed.
                   </>
                 )}
               </p>
