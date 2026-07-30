@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import Combobox from '../Combobox.jsx';
 import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
+import { useCommitField } from './useCommitField';
+import { credentialPlaceholder } from './credentialField';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -31,8 +33,7 @@ const THINKING_LABELS: Record<string, string> = {
   xhigh: 'Extra high',
 };
 
-function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, onChange, onKeyChange }) {
-  const [showKey, setShowKey] = useState(false);
+function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextWindow, thinkingLevel, onChange, onKeyChange }) {
   const [providers, setProviders] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([]);
@@ -40,6 +41,17 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
   const [validateMsg, setValidateMsg] = useState('');
 
   const isCompatible = provider === COMPATIBLE_SLUG;
+
+  // All three commit on blur (see useCommitField) — same rule as every other
+  // settings text box. The Test button below also reads the endpoint, so
+  // per-keystroke writes meant it was re-armed against every partial URL.
+  const baseUrlField = useCommitField(baseUrl ?? '', (next) => onChange({ baseUrl: next }));
+  // Write-only: starts empty, commits only what was typed.
+  const keyField = useCommitField('', (next) => onKeyChange(next));
+  const ctxField = useCommitField(
+    contextWindow == null ? '' : String(contextWindow),
+    (next) => onChange({ contextWindow: next ? Number(next) : undefined }),
+  );
 
   // Providers come from pi-ai's registry plus our injected openai-compatible
   // (intersected with our supported set in main). Fetched once on mount.
@@ -77,13 +89,19 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
   }, [provider, model]);
 
   // Reset the transient Test result whenever the inputs it validated change.
-  useEffect(() => { setValidateState('idle'); setValidateMsg(''); }, [provider, baseUrl, apiKey]);
+  useEffect(() => { setValidateState('idle'); setValidateMsg(''); }, [provider, baseUrl, hasKey]);
 
   const handleValidate = async () => {
     setValidateState('loading');
     setValidateMsg('');
     try {
-      const result = await window.api.agent.validateConnection({ baseUrl, apiKey });
+      // Drafts, not the stored props: clicking Test blurs the input, which
+      // commits, but that write is async — the props are still one edit behind
+      // at this point. The drafts are always the freshest values on screen.
+      const result = await window.api.agent.validateConnection({
+        baseUrl: baseUrlField.value,
+        apiKey: keyField.value,
+      });
       if (result.ok) {
         setValidateState('ok');
         if (result.models?.length) {
@@ -137,9 +155,10 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
             id={`${idPrefix}-base-url`}
             className="font-mono"
             type="text"
-            value={baseUrl ?? ''}
+            value={baseUrlField.value}
             placeholder="http://localhost:11434/v1"
-            onChange={(e) => onChange({ baseUrl: e.target.value })}
+            onChange={(e) => baseUrlField.onChange(e.target.value)}
+            onBlur={baseUrlField.onBlur}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
@@ -194,9 +213,10 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
             id={`${idPrefix}-ctx`}
             type="number"
             min={1}
-            value={contextWindow ?? ''}
+            value={ctxField.value}
             placeholder="128000"
-            onChange={(e) => onChange({ contextWindow: e.target.value ? Number(e.target.value) : undefined })}
+            onChange={(e) => ctxField.onChange(e.target.value)}
+            onBlur={ctxField.onBlur}
           />
           <FieldDescription className="text-xs">Tokens the model can hold. Leave blank for 128000.</FieldDescription>
         </Field>
@@ -233,17 +253,16 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
           <InputGroupInput
             id={`${idPrefix}-key`}
             className="font-mono"
-            type={showKey ? 'text' : 'password'}
-            value={apiKey}
-            onChange={(e) => onKeyChange(e.target.value)}
+            type="password"
+            placeholder={credentialPlaceholder(hasKey)}
+            value={keyField.value}
+            onChange={(e) => keyField.onChange(e.target.value)}
+            onBlur={keyField.onBlur}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
           />
           <InputGroupAddon align="inline-end">
-            <InputGroupButton onClick={() => setShowKey((v) => !v)}>
-              {showKey ? 'Hide' : 'Show'}
-            </InputGroupButton>
             {/* Test is openai-compatible only: it probes {baseUrl}/models, which is
                 uniform for OpenAI-style endpoints. Cloud providers have non-uniform
                 /models paths + auth, and pi already supplies their model lists, so
@@ -251,7 +270,7 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
             {isCompatible && (
               <InputGroupButton
                 onClick={handleValidate}
-                disabled={validateState === 'loading' || !baseUrl}
+                disabled={validateState === 'loading' || !baseUrlField.value}
                 title="Test connection (GET /models)"
               >
                 {validateLabel}
@@ -272,23 +291,23 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
 export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caProvider = codingAgent?.provider ?? DEFAULT_PROVIDER_SLUG;
   const caModel = codingAgent?.model ?? '';
-  const caProviderKeys = codingAgent?.providerKeys ?? {};
-  // The active provider's key (each provider keeps its own — switching doesn't lose it).
-  const caApiKey = caProviderKeys[caProvider] ?? '';
+  // Main strips provider keys, so the screen only learns WHICH providers have one.
+  const caHasKey = !!(codingAgent?.hasProviderKey ?? {})[caProvider];
   const caBaseUrl = codingAgent?.baseUrl ?? '';
   const caContextWindow = codingAgent?.contextWindow;
   const caThinkingLevel = codingAgent?.thinkingLevel ?? 'medium';
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
-    providerKeys: caProviderKeys,
     baseUrl: caBaseUrl,
     contextWindow: caContextWindow,
     thinkingLevel: caThinkingLevel,
     ...patch,
   });
-  // Key edits write into the active provider's slot, leaving other providers' keys intact.
-  const updateKey = (value) => updateCa({ providerKeys: { ...caProviderKeys, [caProvider]: value } });
+  // Only the slot being typed into. The server merges rather than treating the map
+  // as complete (see reconcileProviderKeys), so other providers' keys are untouched
+  // and there is no need to hold — or resend — any of them.
+  const updateKey = (value) => { if (value) updateCa({ providerKeys: { [caProvider]: value } }); };
 
   return (
     <SettingsSection
@@ -300,7 +319,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
           idPrefix="coding-agent"
           provider={caProvider}
           model={caModel}
-          apiKey={caApiKey}
+          hasKey={caHasKey}
           baseUrl={caBaseUrl}
           contextWindow={caContextWindow}
           thinkingLevel={caThinkingLevel}

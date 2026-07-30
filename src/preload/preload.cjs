@@ -234,6 +234,28 @@ contextBridge.exposeInMainWorld('api', {
     // Companion version check + remote upgrade (the updater sidecar).
     apiCheckVersion: () => ipcRenderer.invoke('api:checkVersion'),
     apiUpgradeCompanion: () => ipcRenderer.invoke('api:upgradeCompanion'),
+    /** Approve a companion TLS fingerprint the user has just been shown. The only
+     *  path that stores one.
+     *  @param {string} fingerprint @returns {Promise<{ok: boolean, error?: string}>} */
+    approveCert: (fingerprint) => ipcRenderer.invoke('api:approveCert', { fingerprint }),
+    /** Un-approve the stored companion certificate.
+     *  @returns {Promise<{ok: boolean}>} */
+    forgetCert: () => ipcRenderer.invoke('api:forgetCert'),
+    /** A certificate awaiting approval right now, or null. Asked on load, because
+     *  the push below can fire before the window is listening.
+     *  @returns {Promise<{host: string, approved: string|null, offered: string}|null>} */
+    pendingCert: () => ipcRenderer.invoke('api:pendingCert'),
+    /** Fires when the app held a connection because the companion's certificate
+     *  isn't the approved one. Once per distinct fingerprint, not per request.
+     *  The server is UP — this is not an offline state. `approved: null` means
+     *  nothing has ever been approved for this server.
+     *  @param {(c: {host: string, approved: string|null, offered: string}) => void} cb
+     *  @returns {() => void} unsubscribe */
+    onCertNeedsApproval: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('companion:cert-needs-approval', listener);
+      return () => ipcRenderer.removeListener('companion:cert-needs-approval', listener);
+    },
     // Telegram connect/disconnect/status — actions run on the companion.
     telegramStatus: () => ipcRenderer.invoke('telegram:status'),
     telegramConnect: (opts) => ipcRenderer.invoke('telegram:connect', opts),

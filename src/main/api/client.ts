@@ -4,17 +4,41 @@
 // local fallback — no local DB).
 
 import { readApiConfig } from './config.js';
-import { companionFetch } from './net.js';
+import { companionFetch, getPendingCert, hostOf, clearPendingCert, type PendingCert } from './net.js';
 
-export type ApiErrorKind = 'unreachable' | 'unauthorized' | 'server' | 'config';
+// 'needsApproval' is deliberately separate from 'unreachable': the server
+// answered, the app just held the connection because its certificate isn't the
+// approved one. Reporting that as offline would be a lie, would look identical
+// to the server being down, and would give the user no route to the one screen
+// that can resolve it.
+export type ApiErrorKind = 'unreachable' | 'unauthorized' | 'server' | 'config' | 'needsApproval';
 
 export class ApiError extends Error {
   kind: ApiErrorKind;
-  constructor(kind: ApiErrorKind, message: string) {
+  /** Present on 'needsApproval' — the offered and previously-approved fingerprints. */
+  cert?: PendingCert;
+  constructor(kind: ApiErrorKind, message: string, cert?: PendingCert) {
     super(message);
     this.kind = kind;
+    if (cert) this.cert = cert;
     this.name = 'ApiError';
   }
+}
+
+// A held connection surfaces as a generic fetch failure, so tell the two apart by
+// whether the verify proc parked a certificate for THIS host moments ago.
+function transportError(err: any, url: string): ApiError {
+  const cert = getPendingCert(hostOf(url));
+  if (cert) {
+    return new ApiError(
+      'needsApproval',
+      cert.approved
+        ? "The server's certificate has changed. Review it in Settings → Companion."
+        : 'This server needs to be approved in Settings → Companion.',
+      cert,
+    );
+  }
+  return new ApiError('unreachable', `Can't reach the Shockwave server: ${err?.message ?? err}`);
 }
 
 const TIMEOUT_MS = 8000;
@@ -42,10 +66,13 @@ async function request(method: string, pathname: string, body?: any): Promise<an
       signal: ctrl.signal,
     });
   } catch (err: any) {
-    throw new ApiError('unreachable', `Can't reach the Shockwave server: ${err?.message ?? err}`);
+    throw transportError(err, target);
   } finally {
     clearTimeout(timer);
   }
+  // Got a response, so the certificate was accepted — drop any parked one so a
+  // stale entry can't be offered for approval later.
+  clearPendingCert();
   if (res.status === 401) throw new ApiError('unauthorized', 'The server rejected the API key.');
   if (!res.ok) throw new ApiError('server', `Server error (HTTP ${res.status}).`);
   if (res.status === 204) return null;
@@ -58,17 +85,27 @@ export const api = {
   patch: (p: string, body: any) => request('PATCH', p, body),
   post: (p: string, body?: any) => request('POST', p, body ?? {}),
   del: (p: string) => request('DELETE', p),
-  // Reachability probe for the connect/test flow. Also surfaces the companion's
-  // release version ('v1.0.21' from a published image, 'dev' for local builds)
-  // so callers can spot a stale companion.
-  async health(url: string, apiKey: string): Promise<{ ok: boolean; version?: string }> {
+  // Reachability probe for the Connect flow. Two things beyond ok/not-ok:
+  //
+  //  - `version` — the companion's release ('v1.0.21' from a published image,
+  //    'dev' for a local build), so callers can spot a stale companion.
+  //  - `cert` — a certificate awaiting approval, reported separately from a plain
+  //    failure so Settings can show the fingerprint and ask, rather than claiming
+  //    it "couldn't reach" a server that is plainly up.
+  //
+  // NEVER approves anything — it only reports.
+  async health(url: string, apiKey: string): Promise<{ ok: boolean; version?: string; cert?: PendingCert }> {
     const t = new URL('health', url.endsWith('/') ? url : `${url}/`).href;
     try {
       const r = await companionFetch(t, { headers: { Authorization: `Bearer ${apiKey}` } });
+      clearPendingCert(); // answered ⇒ certificate accepted
       if (!r.ok) return { ok: false };
       const j = await r.json().catch(() => ({}));
       return { ok: true, version: typeof j.version === 'string' ? j.version : undefined };
-    } catch { return { ok: false }; }
+    } catch {
+      const cert = getPendingCert(hostOf(t));
+      return cert ? { ok: false, cert } : { ok: false };
+    }
   },
   // Ask the companion to upgrade itself to `tag` (POST /update -> the updater
   // sidecar). Reads the error body — `updater-unavailable` means a pre-sidecar

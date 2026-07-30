@@ -1,15 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import CompanionUpdateDialog from '../CompanionUpdateDialog.jsx';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { SettingsSection, SettingsGroup } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from '@/components/ui/input-group';
+import { useCommitField } from './useCommitField';
+import { credentialPlaceholder } from './credentialField';
+import CompanionUpdateDialog from '../CompanionUpdateDialog.jsx';
 
 // The desktop's connection to the Shockwave companion (server URL + API key).
 // Every other settings page reads/writes through this connection, so this page
@@ -18,99 +14,184 @@ import {
 //
 // The URL is stored plaintext; the key is safeStorage-wrapped in main. Neither
 // crosses back to the renderer — api:read returns only { url, hasApiKey }.
+//
+// ── Two acts, both explicit ──────────────────────────────────────────────────
+//
+// Fields still store on blur, like every other settings page. But storing is not
+// connecting: **Connect** goes and looks at the server, and **Approve** is what
+// records its certificate. Neither happens on its own.
+//
+// Nothing here can approve a certificate. `api:test` only reports;
+// `api:approveCert` is the single path that stores one, and it is reachable only
+// from the button underneath a fingerprint the user is looking at. An earlier
+// design adopted an unknown certificate automatically during a 30s window after
+// a connect attempt — which decided first approval FOR the user without ever
+// showing them a fingerprint, so someone intercepting first setup got recorded
+// silently and permanently. Don't reintroduce an automatic path. See
+// "Companion TLS" in src/main/CLAUDE.md.
+//
+// Editing either field drops the connection back to "not connected", so the
+// status line can never show a stale green for details that have since changed.
+
+type Status = 'idle' | 'checking' | 'connected' | 'failed' | 'needsApproval';
+
+interface CertInfo { host: string; approved: string | null; offered: string }
+
 export default function CompanionSection({ onReadyChange }: { onReadyChange?: (ready: boolean) => void }) {
-  const [url, setUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');       // '' = leave stored key untouched
+  const [storedUrl, setStoredUrl] = useState('');
   const [hasStoredKey, setHasStoredKey] = useState(false);
-  const [showKey, setShowKey] = useState(false);
-  const [status, setStatus] = useState<'unknown' | 'ok' | 'error'>('unknown');
+  const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  // Companion-vs-desktop version check (runs after a successful connection).
+  // Write-only: the key never reads back (api:read returns hasApiKey, not the
+  // key), so this stays a local draft cleared once stored, rather than a
+  // useCommitField over a stored value there is no way to read.
+  const [keyDraft, setKeyDraft] = useState('');
+  // The certificate the server offered, when it isn't the approved one.
+  // `approved === null` = never approved (first connection); a value = approved
+  // once and has since changed. Different question, different wording.
+  const [cert, setCert] = useState<CertInfo | null>(null);
+  // The certificate currently approved on this machine. Shown while connected so
+  // the user can check it against `shockwave-fingerprint` on the server whenever
+  // they like — not only during first setup. Empty when the server has a
+  // publicly-trusted certificate, since then nothing is pinned.
+  const [approvedFp, setApprovedFp] = useState('');
+  // Companion-vs-desktop version check. Runs after a successful connection: the
+  // two are cut from the same release tag, so a mismatch means one side is stale.
   const [verCheck, setVerCheck] = useState<{ status: string; desktop?: string; companion?: string } | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
-
-  const emitReady = (ready: boolean) => onReadyChange?.(ready);
 
   const refreshVersionCheck = () => {
     window.api.settings.apiCheckVersion().then(setVerCheck).catch(() => setVerCheck(null));
   };
 
-  // Load the stored config + verify reachability on open.
+  const emitReady = useCallback((ready: boolean) => { onReadyChange?.(ready); }, [onReadyChange]);
+
+  // Only the newest probe may publish. Press Connect twice, or edit a field
+  // mid-probe, and a slower earlier reply must not overwrite a newer result.
+  const probeReq = useRef(0);
+
+  // Drop to "not connected" without probing. Called when the stored details
+  // change and when a field is edited — a green line describing a URL you have
+  // since changed is a lie, and this page gates every other page.
+  const disconnect = useCallback((msg: string) => {
+    probeReq.current++;              // invalidate anything in flight
+    setStatus('idle');
+    setMessage(msg);
+    setCert(null);
+    setVerCheck(null); // it described the connection we just dropped
+    emitReady(false);
+  }, [emitReady]);
+
+  // Probe. Reports only — it cannot approve a certificate.
+  const connect = useCallback(async (url: string, apiKey?: string) => {
+    if (!url.trim()) { disconnect(''); return; }
+    const req = ++probeReq.current;
+    setStatus('checking');
+    setMessage(`Contacting ${url.trim()}…`);
+    try {
+      const args: any = { url: url.trim() };
+      if (apiKey) args.apiKey = apiKey;
+      const r = await window.api.settings.apiTest(args);
+      if (probeReq.current !== req) return;
+      if (r.ok) {
+        // No message — the row's heading already says "Connected", and repeating
+        // it rendered "Connected / Connected." one under the other.
+        setStatus('connected'); setMessage(''); setCert(null); emitReady(true);
+        // Re-read: an approval that just happened changes what's stored.
+        window.api.settings.apiRead().then((c) => setApprovedFp(c.certFingerprint || '')).catch(() => {});
+        refreshVersionCheck();
+      } else if (r.certNeedsApproval) {
+        setStatus('needsApproval'); setMessage(''); setCert(r.certNeedsApproval); emitReady(false);
+      } else {
+        setStatus('failed'); setMessage(r.error || 'Could not reach the companion.'); setCert(null); emitReady(false);
+      }
+    } catch (err: any) {
+      if (probeReq.current !== req) return;
+      setStatus('failed');
+      setMessage(err?.message || 'Connection attempt failed.');
+      setCert(null);
+      emitReady(false);
+    }
+  }, [disconnect, emitReady]);
+
+  // On open: show what's stored and re-probe. Safe now that a probe can't
+  // approve anything — it either confirms an already-approved server or reports
+  // that one is waiting. Opening a page decides nothing.
   useEffect(() => {
     let alive = true;
     (async () => {
       const c = await window.api.settings.apiRead();
       if (!alive) return;
-      setUrl(c.url || '');
+      setStoredUrl(c.url || '');
       setHasStoredKey(!!c.hasApiKey);
-      if (c.url && c.hasApiKey) {
-        const r = await window.api.settings.apiTest({ url: c.url });
-        if (!alive) return;
-        setStatus(r.ok ? 'ok' : 'error');
-        setMessage(r.ok ? `Connected${r.version ? ` — companion ${r.version}` : ''}.` : (r.error || 'Could not reach the companion.'));
-        emitReady(!!r.ok);
-        if (r.ok) refreshVersionCheck();
-      } else {
-        setStatus('unknown');
-        emitReady(false);
-      }
+      setApprovedFp(c.certFingerprint || '');
+      if (c.url && c.hasApiKey) connect(c.url);
+      else { setMessage('Enter your server details, then press Connect.'); emitReady(false); }
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist URL + key (if a new one was entered). Does not test — readiness is
-  // owned by the separate Test button.
-  const onSave = async () => {
-    setSaving(true);
-    setMessage('');
+  // Store only. Connecting is the button's job.
+  const save = useCallback(async (patch: any) => {
     try {
-      const patch: any = { url: url.trim() };
-      if (apiKey) patch.apiKey = apiKey;
       const w = await window.api.settings.apiWrite(patch);
-      setUrl(w.url);
+      setStoredUrl(w.url);
       setHasStoredKey(!!w.hasApiKey);
-      setApiKey('');
-      setShowKey(false);
-      setStatus('unknown');
-      setMessage('Saved. Test the connection to verify.');
-      emitReady(false);
+      disconnect('Saved. Press Connect.');
     } catch (err: any) {
-      setStatus('error');
+      setStatus('failed');
       setMessage(err?.message || 'Failed to save the connection.');
       emitReady(false);
-    } finally {
-      setSaving(false);
     }
+  }, [disconnect, emitReady]);
+
+  const urlField = useCommitField(storedUrl, (next) => { save({ url: next.trim() }); });
+
+  // Typing invalidates a live "Connected" immediately — before the blur that
+  // stores it — so the line always describes what's in the boxes.
+  const onUrlChange = (next: string) => {
+    urlField.onChange(next);
+    if (status === 'connected' || status === 'needsApproval') disconnect('Press Connect to use the new address.');
+  };
+  const onKeyChange = (next: string) => {
+    setKeyDraft(next);
+    if (status === 'connected' || status === 'needsApproval') disconnect('Press Connect to use the new key.');
   };
 
-  // Health-check the current config. Uses the typed key if one is entered
-  // (test-before-save), else the stored key.
-  const onTest = async () => {
-    setTesting(true);
-    setMessage('');
-    try {
-      const args: any = { url: url.trim() };
-      if (apiKey) args.apiKey = apiKey;
-      const r = await window.api.settings.apiTest(args);
-      setStatus(r.ok ? 'ok' : 'error');
-      setMessage(r.ok ? `Connected${r.version ? ` — companion ${r.version}` : ''}.` : (r.error || 'Could not reach the companion.'));
-      emitReady(!!r.ok);
-      if (r.ok) refreshVersionCheck(); else setVerCheck(null);
-    } catch (err: any) {
-      setStatus('error');
-      setMessage(err?.message || 'Connection test failed.');
-      emitReady(false);
-    } finally {
-      setTesting(false);
-    }
+  const commitKey = () => {
+    if (!keyDraft) return;
+    const value = keyDraft;
+    setKeyDraft('');
+    save({ url: urlField.value.trim(), apiKey: value });
   };
 
-  const hasKey = !!apiKey || hasStoredKey;
-  const canSave = !!url.trim() && hasKey && !saving && !testing;
-  const canTest = !!url.trim() && hasKey && !saving && !testing;
+  // The typed key if one is sitting in the box (it may not have blurred yet),
+  // else the stored one.
+  const onConnect = () => connect(urlField.value, keyDraft || undefined);
+  const canConnect = !!urlField.value.trim() && (!!keyDraft || hasStoredKey) && status !== 'checking';
+
+  // The one path that pins a certificate — and only for the fingerprint rendered
+  // above the button. Re-probes afterwards so the row reflects the real result
+  // rather than assuming approval was enough.
+  const onApprove = async () => {
+    if (!cert) return;
+    const r = await window.api.settings.approveCert(cert.offered);
+    if (!r?.ok) { setStatus('failed'); setMessage(r?.error || 'Could not store the certificate.'); return; }
+    setCert(null);
+    await connect(urlField.value.trim(), keyDraft || undefined);
+  };
+
+  // Un-approve, then re-probe — which lands back on the approval panel with the
+  // fingerprint on screen, so the next approval is a fresh look rather than a
+  // dead end.
+  const onForget = async () => {
+    await window.api.settings.forgetCert();
+    setApprovedFp('');
+    await connect(urlField.value.trim(), keyDraft || undefined);
+  };
+
+  const firstConnection = !cert?.approved;
 
   return (
     <SettingsSection
@@ -119,55 +200,151 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
     >
       <SettingsGroup>
         <Field>
-          <FieldLabel htmlFor="companion-url">Companion URL</FieldLabel>
+          <FieldLabel htmlFor="companion-url">Server URL</FieldLabel>
           <Input
             id="companion-url"
             type="text"
-            placeholder="https://api.example.com"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://203.0.113.10"
+            value={urlField.value}
+            onChange={(e) => onUrlChange(e.target.value)}
+            onBlur={urlField.onBlur}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
             className="font-mono"
           />
+          <FieldDescription>
+            The Server URL the installer printed when it finished. With no domain set that&rsquo;s your
+            server&rsquo;s IP address over https, and the certificate is self-signed &mdash; you&rsquo;ll be asked
+            to approve it once.
+          </FieldDescription>
         </Field>
 
         <Field>
           <FieldLabel htmlFor="companion-key">API key</FieldLabel>
-          <InputGroup>
-            <InputGroupInput
-              id="companion-key"
-              type={showKey ? 'text' : 'password'}
-              placeholder={hasStoredKey ? '•••••••• (stored — leave blank to keep)' : 'Paste your API key'}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-              autoCorrect="off"
-              className="font-mono"
-            />
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton onClick={() => setShowKey((v) => !v)}>
-                {showKey ? 'Hide' : 'Show'}
-              </InputGroupButton>
-            </InputGroupAddon>
-          </InputGroup>
+          <Input
+            id="companion-key"
+            type="password"
+            placeholder={credentialPlaceholder(hasStoredKey)}
+            value={keyDraft}
+            onChange={(e) => onKeyChange(e.target.value)}
+            onBlur={commitKey}
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            className="font-mono"
+          />
           <FieldDescription>
-            Encrypted on this machine with your OS keychain. Only this key leaves the app — your secrets stay on the companion.
+            Also printed by the installer. Encrypted on this machine with your OS keychain. Only this
+            key leaves the app — your secrets stay on the companion.
           </FieldDescription>
         </Field>
 
-        <div className="flex items-center gap-2">
-          <Button type="button" size="sm" className="w-fit" onClick={onSave} disabled={!canSave}>
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-          <Button type="button" size="sm" variant="outline" className="w-fit" onClick={onTest} disabled={!canTest}>
-            {testing ? 'Testing…' : 'Test connection'}
-          </Button>
-          {status === 'ok' && <span className="text-xs text-success">{message}</span>}
-          {status === 'error' && <span className="text-xs text-destructive">{message}</span>}
-          {status === 'unknown' && message && <span className="text-xs text-muted-foreground">{message}</span>}
+        {/* One status row, always present. This page gates every other page, so
+            its state has to be unmissable rather than a small grey note. */}
+        <div
+          className={[
+            'rounded-lg border px-3 py-2.5 text-xs',
+            status === 'connected' ? 'border-success/40 bg-success-soft'
+              : status === 'failed' ? 'border-destructive/40 bg-destructive/5'
+              : status === 'needsApproval' ? 'border-ring/50 bg-ring/5'
+              : 'border-border bg-raise',
+          ].join(' ')}
+        >
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden
+              className={[
+                'size-2 shrink-0 rounded-full',
+                status === 'connected' ? 'bg-success'
+                  : status === 'failed' ? 'bg-destructive'
+                  : status === 'needsApproval' ? 'bg-ring'
+                  : status === 'checking' ? 'bg-muted-foreground animate-pulse'
+                  : 'bg-muted-foreground/50',
+              ].join(' ')}
+            />
+            <span className="font-medium">
+              {status === 'connected' ? 'Connected'
+                : status === 'checking' ? 'Connecting…'
+                : status === 'failed' ? "Couldn't connect"
+                : status === 'needsApproval'
+                  ? (firstConnection ? 'Approve this server' : 'This server’s identity has changed')
+                  : 'Not connected'}
+            </span>
+          </div>
+
+          {status !== 'needsApproval' && message && (
+            <p className="mt-1 text-muted-foreground">{message}</p>
+          )}
+
+          {/* Connected on an approved certificate — show which one, so it can be
+              checked against `shockwave-fingerprint` on the server at any time,
+              not just during setup. Absent for a publicly-trusted certificate,
+              where nothing is pinned and there's nothing to compare. */}
+          {status === 'connected' && approvedFp && (
+            <div className="mt-2">
+              <p className="text-muted-foreground">
+                Approved certificate. Run <code className="font-mono">shockwave-fingerprint</code> on the
+                server to check it still matches.
+              </p>
+              <p className="mt-1 font-mono break-all">{approvedFp}</p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-2 w-fit"
+                onClick={onForget}
+              >
+                Forget it
+              </Button>
+            </div>
+          )}
+
+          {status === 'needsApproval' && cert && (
+            <>
+              <p className="mt-1 text-muted-foreground">
+                {firstConnection ? (
+                  <>
+                    {cert.host} uses a self-signed certificate, so nothing vouches for it. Check the
+                    fingerprint below matches the one the installer printed, then approve it. From
+                    then on, anything different stops the connection and brings you back here.
+                  </>
+                ) : (
+                  <>
+                    {cert.host} is answering with a different certificate than the one you approved.
+                    That happens when the server is rebuilt, moves to a new address, or regenerates
+                    its certificate &mdash; and it is also what someone impersonating your server
+                    looks like. Only continue if you know why it changed.
+                  </>
+                )}
+              </p>
+              <dl className="mt-2 space-y-1 font-mono break-all">
+                {!firstConnection && (
+                  <div>
+                    <dt className="inline text-muted-foreground">Approved: </dt>
+                    <dd className="inline">{cert.approved}</dd>
+                  </div>
+                )}
+                <div>
+                  <dt className="inline text-muted-foreground">
+                    {firstConnection ? 'Fingerprint: ' : 'Now offering: '}
+                  </dt>
+                  <dd className="inline">{cert.offered || '(unknown)'}</dd>
+                </div>
+              </dl>
+              {/* Not the page's primary — Connect is. First approval isn't
+                  destructive; replacing one that changed can mean an impostor. */}
+              <Button
+                type="button"
+                size="sm"
+                variant={firstConnection ? 'outline' : 'destructive'}
+                className="mt-3 w-fit"
+                onClick={onApprove}
+              >
+                {firstConnection ? 'Approve and connect' : 'Approve the new certificate'}
+              </Button>
+            </>
+          )}
         </div>
 
         {verCheck?.status === 'companion-older' && (
@@ -186,6 +363,10 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
             The companion ({verCheck.companion}) is newer than this app — update the desktop app to match.
           </p>
         )}
+
+        <Button type="button" size="sm" className="w-fit" onClick={onConnect} disabled={!canConnect}>
+          {status === 'checking' ? 'Connecting…' : 'Connect'}
+        </Button>
       </SettingsGroup>
 
       <CompanionUpdateDialog
@@ -193,7 +374,7 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
         onClose={() => setUpdateOpen(false)}
         desktop={verCheck?.desktop}
         companion={verCheck?.companion}
-        onUpdated={() => { refreshVersionCheck(); onTest(); }}
+        onUpdated={() => { refreshVersionCheck(); onConnect(); }}
       />
     </SettingsSection>
   );

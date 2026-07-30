@@ -9,7 +9,7 @@ import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
-import { prepareCheckout, checkIn } from './git.js';
+import { prepareCheckout, checkIn, syncAndPush } from './git.js';
 import { gitFix } from './gitFixer.js';
 
 export interface CronRunResult { chatId: string; checkIn: string; }
@@ -74,13 +74,15 @@ export async function runCronJob(
   }
 
   const stamp = new Date().toISOString();
-  let result = await checkIn(dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`);
-  // Deterministic path couldn't resolve it → hand to the git-fixer agent.
+  let result = await checkIn(dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, pat);
+  // Deterministic path couldn't resolve it → hand to the git-fixer agent. It
+  // resolves and commits with no credentials of its own; the push is ours,
+  // after it verifies clean (see gitFixer.ts).
   if (result === 'conflict') {
     const fixed = await gitFix(dir, w.defaultBranch, {
       provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl,
     });
-    result = fixed ? 'pushed' : 'conflict';
+    result = fixed ? await syncAndPush(dir, w.defaultBranch, pat) : 'conflict';
   }
 
   // A turn can end badly WITHOUT throwing: pi reports it as the last assistant

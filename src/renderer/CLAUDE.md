@@ -232,6 +232,52 @@ shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest 
 - **Button hierarchy: at most ONE primary (purple, default variant) button per settings page / dialog** — the page's main action. Everything else is `outline` (secondary), `ghost` (row icons), or `destructive`. Form-only pages (auto-saving selects/switches) have zero primaries.
 - Icon buttons in chrome: 26px hit targets `size-[26px] rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground`; rail buttons 34px. Active state: `bg-selected text-primary`.
 - Menus → `DropdownMenu`; anchored pickers that must not own left-click → controlled `Popover` + `PopoverAnchor` (see SortBar's bookmark picker).
+- `SelectContent` defaults to `position="popper"` — it opens BELOW the trigger. Don't
+  pass `position="item-aligned"`: that's Radix's macOS convention where the menu
+  covers the trigger, and with nothing selected it has no item to align to and looks
+  broken. Our vendored copy had drifted to `item-aligned` as the default, so ten of
+  eleven Selects inherited the overlay; the one author who hit it patched their own
+  call site instead of the default, which is why it survived.
+
+**When a setting saves — one rule, no Save buttons.** An audit found six different
+save models across fourteen sections, so these are now fixed:
+
+- **Text / password / number inputs commit on BLUR**, via `useCommitField`
+  (`settings/useCommitField.ts`). Never write per keystroke: each keystroke is a
+  round-trip to the companion, and anything with a side effect re-fires it too.
+  The GitHub PAT hit this first (typing a token did ~90 writes *and* ~90 sync-engine
+  restarts, against 90 half-tokens); the AssemblyAI key hit it a second way, where
+  each write re-armed the "is this key usable?" check and a stale failure landing
+  last left the Test button dead until you left the page. `useCommitField` also
+  **flushes on unmount**, which is what makes having no Save button safe — closing
+  the modal mid-edit can't drop the value.
+- **Toggles, dropdowns, comboboxes and sliders commit on change** (sliders on
+  `onValueCommit`). There's no partial state to protect.
+- **Everything goes through the section's `on*Change` prop → `persistSettings`.**
+  Never call `window.api.settings.write` from a section: it skips the Saving/Saved
+  badge and leaves `settingsRef` stale, so a later diffed save computes its patch
+  against a value the server already moved past. (Cron's timezone did exactly this.)
+- **No Save buttons.** A button in Settings means an *action* — Telegram's
+  Connect (registers a webhook), Agent Secrets' Add, Workspaces' Add, Advanced's
+  Rebuild, the Companion cert Trust. Not "write this form down." Companion used to
+  have Save *and* Test, and Test said "Connected." while storing nothing — the
+  button that reported success was the one that persisted nothing.
+- **A validate/verify step must never be the only thing that saves**, and must not
+  be required to save. A Verify/Connect button is fine — it's an action — it just
+  can't be load-bearing for persistence. Companion is the worked example: fields
+  store on blur, **Connect** probes, **Approve** trusts the certificate. Storing
+  is not connecting, and neither Connect nor page-open can grant trust (see
+  "Companion TLS" in `src/main/CLAUDE.md`). Editing either field drops the status
+  row back to "not connected" — this page gates every other page, so it must
+  never show a green line for details that have since changed.
+- **Placeholders are format examples, never lookalikes for a real value.**
+  `github_pat_…`, `123456:ABC-DEF…`, `https://203.0.113.10`. Companion's key hint
+  was `••••••••`, which a masked input is indistinguishable from — so pasting a key
+  looked like it had done nothing.
+- **Concurrent commits need a request guard.** Blur two fields in a row and two
+  checks are in flight; without a monotonic request id the *last response* wins
+  rather than the newest request. Both `CompanionSection` and `useVoiceInput` carry
+  one.
 
 **Other rules that still hold:**
 - Labels describe the control, not the section ("Color theme", not "Theme" again).

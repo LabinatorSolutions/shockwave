@@ -18,8 +18,17 @@ ARG VERSION=dev
 ENV NODE_ENV=production PORT=8080 APP_VERSION=$VERSION
 WORKDIR /app
 # git + CA certs: the cron runner shallow-clones workspace repos over HTTPS.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+#
+# openssl is named EXPLICITLY even though ca-certificates already depends on it.
+# The `openssl` CLI is load-bearing twice over: selfSigned.ts shells out to it to
+# create and inspect the TLS certificate, and that now happens at boot where a
+# failure is fatal (settleTls in server.ts). `shockwave-fingerprint` runs it in
+# this container too. Relying on it arriving transitively means a future base-image
+# or dependency change turns "the server won't start" into the first symptom.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssl \
   && rm -rf /var/lib/apt/lists/*
+# Fail the BUILD, not the first boot, if the CLI isn't actually there.
+RUN openssl version
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/init.sql ./init.sql

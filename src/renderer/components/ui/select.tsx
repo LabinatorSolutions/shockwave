@@ -51,7 +51,12 @@ function SelectTrigger({
 function SelectContent({
   className,
   children,
-  position = "item-aligned",
+  // Open BELOW the trigger, not on top of it. Radix's "item-aligned" default
+  // positions the menu so the selected item covers the trigger (a macOS native
+  // convention), and with nothing selected it has no item to align to and looks
+  // broken. Upstream shadcn defaults to popper for the same reason; this copy
+  // had drifted, so every Select except Telegram's inherited the overlay.
+  position = "popper",
   align = "center",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {

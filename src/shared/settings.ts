@@ -64,7 +64,12 @@ export interface CodingAgentSettings {
   // (AES-256-GCM). Replaces the former single `apiKey` so switching providers keeps
   // each key. openai-compatible's key lives here too (under 'openai-compatible');
   // its baseUrl/contextWindow stay in the active fields below.
-  providerKeys: Record<string, string>;
+  // Present in MAIN only. The renderer is given `hasProviderKey` instead — see
+  // stripCredentials in src/main/settingsStore.ts — so a screen that never holds a
+  // key cannot send a stale one back.
+  providerKeys?: Record<string, string>;
+  /** Renderer-facing: which provider slugs have a key stored. Never the values. */
+  hasProviderKey?: Record<string, boolean>;
   // OpenAI-compatible endpoint URL (Ollama, LM Studio, vLLM, remote gateways).
   // Empty for built-in providers; set only when provider === 'openai-compatible'.
   baseUrl: string;
@@ -112,7 +117,10 @@ export interface AgentSecret {
   name: string;
   description: string;
   kind?: 'static' | 'oauth';
-  token: string;
+  /** Present in MAIN only; stripped before the renderer (see `hasToken`). */
+  token?: string;
+  /** Renderer-facing: a token is stored. Never the value. */
+  hasToken?: boolean;
   oauth?: AgentSecretOAuth;
   createdAt?: number;
   updatedAt?: number;
@@ -156,8 +164,10 @@ export interface Settings {
   // `WorkspaceData` below), loaded on workspace switch.
   codingAgent: CodingAgentSettings;
   agentSecrets: AgentSecret[];
-  transcription: { provider: string; apiKey: string };
-  sync: { pat: string; pullIntervalSeconds: number };
+  // `apiKey` is present in MAIN only; the renderer gets `hasApiKey`.
+  transcription: { provider: string; apiKey?: string; hasApiKey?: boolean };
+  // `pat` is present in MAIN only; the renderer gets `hasPat`.
+  sync: { pat?: string; hasPat?: boolean; pullIntervalSeconds: number };
   // The one unified system timezone (synced). The companion uses it for cron
   // schedules and the agent's "current date"; the desktop uses it for display.
   // IANA name, e.g. "America/New_York"; default "UTC".

@@ -1,5 +1,6 @@
 import React from 'react';
 import { THEME_MODES } from '../constants.js';
+import { useCommitField } from './useCommitField';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -34,6 +35,15 @@ export default function AppearanceSection({
   treePanel,
   onTreePanelChange,
 }) {
+  // Commits on blur (see useCommitField). Typed digit-by-digit, so per-keystroke
+  // writes also meant "1" and "10" both being saved on the way to "100" — and a
+  // clamp firing against each partial value.
+  const countField = useCommitField(String(treePanel?.count ?? 10), (next) => {
+    const n = Math.round(Number(next));
+    if (!Number.isFinite(n) || n < 1) return;
+    onTreePanelChange?.({ ...treePanel, count: Math.min(50, n) });
+  });
+
   return (
     <SettingsSection title="Appearance" description="Choose the color theme and editor display options.">
       <SettingsGroup title="Theme">
@@ -95,12 +105,9 @@ export default function AppearanceSection({
               min={1}
               max={50}
               className="w-24"
-              value={treePanel?.count ?? 10}
-              onChange={(e) => {
-                const n = Math.round(Number(e.target.value));
-                if (!Number.isFinite(n) || n < 1) return;
-                onTreePanelChange?.({ ...treePanel, count: Math.min(50, n) });
-              }}
+              value={countField.value}
+              onChange={(e) => countField.onChange(e.target.value)}
+              onBlur={countField.onBlur}
             />
           </Field>
         )}

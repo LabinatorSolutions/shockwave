@@ -33,8 +33,12 @@ import { ensureCliShims, prependPath } from './cliTools.js';
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
 // encryption were replaced wholesale; the signatures here are unchanged, so
 // every call site below (and in oauth.ts / cron.ts) is untouched.
-import { readSettings, readSettingsSafe, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
+import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
 import { readApiConfig, writeApiConfig } from './api/config.js';
+import {
+  approveFingerprint, forgetFingerprint, approvedFingerprint,
+  onCertNeedsApproval, readServerCert, getPendingCert,
+} from './api/net.js';
 import os from 'node:os';
 import { api } from './api/client.js';
 import { classifyVersions } from './versionCompare.js';
@@ -891,7 +895,11 @@ ipcMain.handle('context:editorMenu', async (evt, { hasSelection, hasFilePath, ha
 ipcMain.handle('settings:read', async () => {
   // Boot-safe: an unconfigured/offline server yields defaults (+ machine-local)
   // rather than throwing, so the app still boots and can show a connect prompt.
-  const { settings } = await readSettingsSafe();
+  //
+  // Credentials are stripped here — this and the `settings:changed` push are the
+  // only two doors to the renderer. It gets `hasProviderKey` / `hasApiKey` /
+  // `hasPat` / `hasToken` instead of values.
+  const { settings } = await readSettingsForRenderer();
   return settings;
 });
 
@@ -903,7 +911,10 @@ ipcMain.handle('settings:write', async (_evt, obj) => {
 // ── API connection config (URL + key) ───────────────────────────────────────
 ipcMain.handle('api:read', () => {
   const c = readApiConfig();
-  return { url: c.url, hasApiKey: !!c.apiKey };
+  // The fingerprint is NOT a secret — it's sent in the clear on every TLS
+  // handshake — and showing it is the only way the user can check the app against
+  // what `shockwave-fingerprint` prints on the server.
+  return { url: c.url, hasApiKey: !!c.apiKey, certFingerprint: c.certFingerprint };
 });
 ipcMain.handle('api:write', (_evt, patch) => {
   const next: any = {};
@@ -912,11 +923,35 @@ ipcMain.handle('api:write', (_evt, patch) => {
   const c = writeApiConfig(next);
   return { ok: true, url: c.url, hasApiKey: !!c.apiKey };
 });
+// Probe the connection. This NEVER approves anything — it only reports. A
+// certificate the app held on comes back as `certNeedsApproval` for the user to
+// look at; `approved: null` means this server has never been approved here.
 ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
   const key = apiKey || readApiConfig().apiKey;
   if (!url || !key) return { ok: false, error: 'URL and API key are both required.' };
-  const h = await api.health(url, key);
-  return h.ok ? { ok: true, version: h.version } : { ok: false, error: 'Could not reach the server with that URL and key.' };
+  const res = await api.health(url, key);
+  if (res.ok) return { ok: true, version: res.version };
+
+  // Ask the server for its certificate DIRECTLY rather than hoping the verify
+  // proc happened to park one. Chromium caches its certificate verdict per host
+  // per session: the proc runs on the first connection and never again, so a
+  // second Connect press produced nothing to show and the user got "could not
+  // reach the server" for a server that was up and merely un-approved — with no
+  // route to the approval panel for the rest of the session.
+  const seen = await readServerCert(url);
+  if (seen && !seen.trusted) {
+    const approved = approvedFingerprint();
+    if (seen.offered !== approved) {
+      return {
+        ok: false,
+        error: approved
+          ? "This server's certificate has changed since you approved it."
+          : 'This server has not been approved on this machine yet.',
+        certNeedsApproval: { host: seen.host, approved: approved || null, offered: seen.offered },
+      };
+    }
+  }
+  return { ok: false, error: 'Could not reach the server with that URL and key.' };
 });
 
 // ── Companion version check + remote upgrade ────────────────────────────────
@@ -935,6 +970,31 @@ ipcMain.handle('api:checkVersion', async () => {
 ipcMain.handle('api:upgradeCompanion', async () => {
   return api.triggerUpdate(`v${app.getVersion()}`);
 });
+
+// The ONE place a certificate becomes approved: the user pressed Approve on a
+// fingerprint Settings put in front of them. Deliberately not reachable from
+// api:test — probing a connection must never be able to approve one.
+ipcMain.handle('api:approveCert', (_evt, { fingerprint }) => {
+  if (typeof fingerprint !== 'string' || !fingerprint) return { ok: false, error: 'No fingerprint provided.' };
+  approveFingerprint(fingerprint);
+  return { ok: true };
+});
+
+// Un-approve. For when the user compared the app's fingerprint against the
+// server's and they didn't match — without this, the only way to clear an
+// approval was to change the URL.
+ipcMain.handle('api:forgetCert', () => {
+  forgetFingerprint();
+  return { ok: true };
+});
+
+// Is a certificate waiting for approval right now? The renderer asks on load.
+//
+// Registering the push early isn't sufficient on its own: the first stopped
+// connection usually happens before the window exists, and a message sent to a
+// window that isn't listening yet is simply lost — there is no replay. So the
+// renderer pulls once at startup as well as subscribing.
+ipcMain.handle('api:pendingCert', () => getPendingCert(undefined, 5 * 60_000) ?? null);
 
 // Telegram — the desktop UI triggers these; the actions (setWebhook, token
 // storage) happen on the companion, which owns the bot.
@@ -986,8 +1046,12 @@ ipcMain.handle('oauth:disconnect', async (_evt, name) => {
 // token does, which is just the WebSocket session credential.
 ipcMain.handle('voice:getToken', async () => {
   // readSettingsSafe (not readSettings) so an unreachable companion returns a
-  // clean {error} result instead of rejecting the IPC — voice is optional.
-  const { settings } = await readSettingsSafe();
+  // clean {error} result instead of rejecting the IPC — voice is optional. This is
+  // prefetched on mount, so a throw here logged an unhandled rejection in the
+  // renderer on every launch. Report the REAL reason too: "not configured" is a
+  // lie when the key is configured and the server simply isn't reachable.
+  const { settings, online, reason } = await readSettingsSafe();
+  if (!online) return { error: reason || "Can't reach your companion server." };
   const apiKey = settings.transcription?.apiKey;
   if (!apiKey) return { error: 'Voice transcription not configured' };
   try {
@@ -1151,7 +1215,13 @@ ipcMain.handle('sync:checkGit', async () => {
 // already saved one (otherwise the UI gates them out) so we read straight
 // from disk. Returns null + an error result if PAT isn't set.
 async function readSyncPat() {
-  const settings = await readSettings();
+  // Safe read: settings live on the companion, so an unreachable or un-approved
+  // one made this THROW out of whichever IPC handler called it — an unhandled
+  // rejection in the renderer rather than a message. And report the real reason:
+  // "Connect a GitHub account first" for a companion problem sends the user to
+  // fix the wrong thing.
+  const { settings, online, reason } = await readSettingsSafe();
+  if (!online) return { ok: false, error: reason || "Can't reach your companion server." };
   const pat = settings.sync?.pat || '';
   if (!pat) return { ok: false, error: 'Connect a GitHub account first.' };
   return { ok: true, pat };
@@ -1313,7 +1383,10 @@ ipcMain.handle('sync:listRepos', async () => {
 // `sync:status` and consumed by the status-bar icon.
 
 ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds }) => {
-  const settings = await readSettings();
+  // Safe read — a throw here rejected in the renderer on every workspace open.
+  // No PAT means the engine emits `unconfigured` and the icon hides, which is the
+  // right outcome for a companion we can't read.
+  const { settings } = await readSettingsSafe();
   const pat = settings.sync?.pat || '';
   const ws = await findWorkspaceByPath(workspacePath);
   const win = BrowserWindow.fromWebContents(evt.sender);
@@ -1349,7 +1422,7 @@ ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disable
   // The flag lives on the workspace row, so the renderer learns about it the
   // same way it learns about any other workspace change.
   await notifyWorkspacesChanged();
-  const settings = await readSettings();
+  const { settings } = await readSettingsSafe(); // never throw into the renderer
   const nextSync = settings.sync;
 
   // Reconcile only if this is the active workspace. The engine is bound to
@@ -2134,6 +2207,16 @@ app.whenReady().then(async () => {
   }
   // Point the models.dev catalog cache at userData (its offline fallback file).
   initModelCatalog(app.getPath('userData'));
+  // Registered BEFORE anything makes a companion request. A stopped connection is
+  // not an outage — the server is up and answering — so say so plainly and point
+  // at the one screen that can resolve it. This used to sit AFTER startLiveFeed(),
+  // whose first connection is usually the first stopped one, so the very first
+  // notice went to nobody and no warning appeared at launch at all.
+  onCertNeedsApproval((c) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('companion:cert-needs-approval', c);
+    }
+  });
   // Hold the companion's live feed open for the whole session, so a Telegram or
   // cron turn streams into the UI whether or not that chat is on screen.
   startLiveFeed();

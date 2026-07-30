@@ -98,6 +98,8 @@ export default function SettingsModal({
   onTranscriptionChange,
   sync,
   onSyncChange,
+  timezone,
+  onTimezoneChange,
   onRebuildCache,
   appUpdate,
   saveStatus,
@@ -271,7 +273,13 @@ export default function SettingsModal({
               onReload={onReloadSecrets}
             />
           )}
-          {effectiveActive === SETTINGS_SECTIONS.CRON && <CronSection onOpenCronPanel={onOpenCronPanel} />}
+          {effectiveActive === SETTINGS_SECTIONS.CRON && (
+            <CronSection
+              timezone={timezone}
+              onTimezoneChange={onTimezoneChange}
+              onOpenCronPanel={onOpenCronPanel}
+            />
+          )}
           {effectiveActive === SETTINGS_SECTIONS.TELEGRAM && <TelegramSection workspaces={workspaces} />}
         </div>
       </DialogContent>

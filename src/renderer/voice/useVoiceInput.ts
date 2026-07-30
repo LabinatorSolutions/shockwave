@@ -51,25 +51,39 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
   const tokenTimeRef = useRef(0);
   const TOKEN_MAX_AGE = 50_000;
 
-  // Consumers pass a fresh `getToken` arrow every render; keep it in a ref so
-  // fetchVoiceToken can stay stable (empty deps) and the mount effect runs once.
-  // Without this the effect re-fired on every render and spammed voice:getToken.
+  // Callers pass `getToken` as an inline arrow, so it's a new function every
+  // render. Held in a ref instead of a dep: as a dep it made fetchVoiceToken new
+  // every render too, which turned the mount-only prefetch below into a
+  // fetch-on-every-render — one AssemblyAI token request per keystroke while
+  // typing the key, all racing each other.
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
 
+  // Only the newest request may publish. Without this the LAST response to land
+  // won, not the newest one: on Settings → Transcription the request fired before
+  // the key was stored (which fails) could resolve after the one fired after it
+  // (which succeeds), pinning voiceAvailable false. That's why "Test microphone"
+  // stayed greyed out until you left the page and came back.
+  const tokenReqRef = useRef(0);
+
   const fetchVoiceToken = useCallback(async () => {
+    const req = ++tokenReqRef.current;
     let result;
     try {
       result = await getTokenRef.current();
     } catch (err) {
-      // IPC rejects (not a {error} result) when the server is unreachable.
+      // The IPC REJECTS (rather than returning {error}) when the companion is
+      // unreachable, so this has to catch as well as read the result.
       result = { error: err instanceof Error ? err.message : String(err) };
     }
+    const stale = req !== tokenReqRef.current;
     if (!result.error) {
+      // Cache the token even when stale — it's still valid, and dropping it
+      // would just cost the next click a round-trip.
       tokenRef.current = result.token;
       tokenTimeRef.current = Date.now();
-      setVoiceAvailable(true);
-    } else {
+      if (!stale) setVoiceAvailable(true);
+    } else if (!stale) {
       setVoiceAvailable(false);
     }
     return result;
@@ -221,5 +235,7 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     cleanup();
   }, [cleanup]);
 
-  return { voiceAvailable, isConnecting, isRecording, startRecording, stopRecording };
+  // `recheck` is for the settings page: the prefetch above is mount-only, and
+  // the key is read server-side, so saving a new key needs an explicit re-ask.
+  return { voiceAvailable, isConnecting, isRecording, startRecording, stopRecording, recheck: fetchVoiceToken };
 }

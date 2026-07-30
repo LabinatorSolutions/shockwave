@@ -131,16 +131,19 @@ export async function writeSettings(db: Db, key: Buffer, patch: any): Promise<an
   return readSettings(db, key);
 }
 
+// Write the provider keys PRESENT in the patch. Absent slots are left alone.
+//
+// This used to treat the map as the complete list and delete every slot missing
+// from it, which is why the desktop had to resend all of them on every unrelated
+// edit — change a model, and the whole key map rode along or the keys were gone.
+// That made it impossible to stop handing the keys to the renderer: the first
+// save after would have arrived with an empty map and wiped them.
+//
+// Deleting is still possible and still explicit — an empty string deletes the row
+// (see putSecret), which is what clearing the field sends. Absent and empty are
+// now different things, and only one of them destroys anything.
 async function reconcileProviderKeys(c: Tx, key: Buffer, map: Record<string, any>) {
   const prefix = 'codingAgent.providerKeys.';
-  const keep = new Set(Object.keys(map).map((s) => `${prefix}${s}`));
-  const rows = await c.select({ field: secretValue.field }).from(secretValue)
-    .where(and(eq(secretValue.owner, SETTINGS_SECRET_OWNER), like(secretValue.field, `${prefix}%`)));
-  for (const r of rows) {
-    if (!keep.has(r.field)) {
-      await c.delete(secretValue).where(and(eq(secretValue.owner, SETTINGS_SECRET_OWNER), eq(secretValue.field, r.field)));
-    }
-  }
   for (const [slug, val] of Object.entries(map)) {
     await putSecret(c, key, SETTINGS_SECRET_OWNER, `${prefix}${slug}`, typeof val === 'string' ? val : '');
   }

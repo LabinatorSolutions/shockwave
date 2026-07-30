@@ -18,7 +18,7 @@ import { initScheduler, nextRuns } from './scheduler.js';
 import { mintToken } from './oauth.js';
 import { initSweeper } from './sweeper.js';
 import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus, syncCommands as tgSyncCommands } from './telegram/webhook.js';
-import { detectPublicIp, ensureSelfSignedCert } from './telegram/selfSigned.js';
+import { configuredHost, ensureSelfSignedCert, readCertPem, removeSelfSignedCert } from './telegram/selfSigned.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
 
 const log = pino({ base: undefined });
@@ -36,6 +36,23 @@ if (masterKey.length !== 32) {
   process.exit(1);
 }
 const apiKeyHash = crypto.createHash('sha256').update(API_KEY).digest();
+
+// Drop the three secrets from the environment now that they're held as locals.
+//
+// pi spawns the agent's `bash` with `{ ...process.env }` (its getShellEnv), and
+// gitFixer/git.ts spawn shells with the default inherited env — so anything the
+// agent is told to run could `env` and read the master key that decrypts every
+// row in secret_value, the bearer key, and the Postgres password. Telegram and
+// cron turns run unattended, so the instruction can arrive as a file in a repo,
+// a cron.json prompt, or a DM. Deleting here covers every spawn site at once
+// rather than filtering env at each one (and remembering to for the next one).
+//
+// NOT complete on Linux: /proc/<pid>/environ is served from the block handed
+// over at exec, which unsetenv doesn't touch, so the originals survive there.
+// This closes `env`/`printenv`; the full fix is to stop passing them as env.
+delete process.env.MASTER_KEY;
+delete process.env.API_KEY;
+delete process.env.DATABASE_URL;
 
 const pool = makePool(DATABASE_URL);
 const db = getDb(pool);
@@ -190,19 +207,23 @@ app.delete('/workspaces/:id', handle((req) => store.deleteWorkspace(db, req.para
 // ── Telegram (desktop Settings triggers these companion actions) ─────────────
 app.post('/telegram/connect', handle(async (req) => {
   // COMPANION_DOMAIN set -> a real domain (Let's Encrypt) or an ngrok host: the
-  // cert is already trusted, so just register the URL. Unset -> a public server
-  // with no domain: detect our public IP, mint a self-signed cert Traefik serves,
-  // and upload its PEM so Telegram trusts it.
+  // cert is already trusted, so just register the URL. Unset -> hand Telegram a
+  // copy of the certificate made at boot.
+  //
+  // This must NEVER create a certificate. It used to, which meant the server's
+  // identity changed the first time Telegram was connected — after every desktop
+  // had already approved the previous one. Creation happens once, at boot.
   const domain = process.env.COMPANION_DOMAIN;
   let publicUrl: string;
   let certificatePem: string | undefined;
   if (domain) {
     publicUrl = `https://${domain}`;
   } else {
-    const ip = await detectPublicIp();
-    certificatePem = await ensureSelfSignedCert(ip);
-    await new Promise((r) => setTimeout(r, 2000)); // let Traefik's file watcher load the cert
-    publicUrl = `https://${ip}`;
+    const host = configuredHost();
+    const pem = await readCertPem();
+    if (!pem) throw new Error('No certificate on disk — restart the companion so it can create one.');
+    certificatePem = pem;
+    publicUrl = `https://${host}`;
   }
   return tgConnect(pool, masterKey, {
     botToken: String(req.body?.botToken ?? ''),
@@ -254,7 +275,30 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   res.status(err?.status || 500).json({ error: 'request error' });
 });
 
+// The server's TLS identity, settled before it starts answering.
+//
+// No domain: create-or-reuse the self-signed certificate for COMPANION_HOST. A
+// failure here is FATAL — coming up anyway means Traefik serves its own
+// throwaway certificate, desktops approve that, and the real one replaces it
+// later. A server whose identity is about to change is worse than one that
+// didn't start, so it exits the same way a missing MASTER_KEY does.
+//
+// Domain set: Let's Encrypt owns the certificate, so delete any self-signed
+// leftovers rather than leaving a private key on disk claiming to be this server
+// and still registered as Traefik's default.
+async function settleTls(): Promise<void> {
+  if (process.env.COMPANION_DOMAIN) {
+    await removeSelfSignedCert();
+    log.info('COMPANION_DOMAIN set — using Let\'s Encrypt; removed any self-signed leftovers');
+    return;
+  }
+  const host = configuredHost();
+  await ensureSelfSignedCert(host);
+  log.info({ host }, 'self-signed certificate ready');
+}
+
 (async () => {
+  await settleTls();
   await ensureSchema(pool);
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
   initSweeper();                                // reclaims idle per-run working dirs (TTL)
