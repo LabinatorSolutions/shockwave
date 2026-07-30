@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { SettingsSection, SettingsGroup } from './SectionUI';
+import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -11,7 +13,11 @@ import {
 // registers the webhook, and runs the turns) — this page just triggers those
 // actions. A message to the bot runs the agent on the bot's workspace (picked
 // below, or /workspace in the bot) and streams the reply back to Telegram.
-export default function TelegramSection({ workspaces }: { workspaces?: any[] }) {
+export default function TelegramSection({ workspaces, transcription, onTranscriptionChange }: {
+  workspaces?: any[];
+  transcription?: any;
+  onTranscriptionChange?: (next: any) => void;
+}) {
   const [status, setStatus] = useState<any>(null);
   const [botToken, setBotToken] = useState('');
   const [userId, setUserId] = useState('');
@@ -113,6 +119,34 @@ export default function TelegramSection({ workspaces }: { workspaces?: any[] }) 
           </>
         )}
         {msg && <p className={msg.ok ? 'text-xs text-success' : 'text-xs text-destructive'}>{msg.text}</p>}
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      {/* Voice notes to the bot are transcribed on the COMPANION (AssemblyAI, the
+          same `transcription.apiKey` the desktop mic uses) because the agent takes
+          text only — so there is a transcript here that the desktop mic path never
+          produces, and this decides whether the bot says it out loud before acting.
+          Spread the whole slice: `onTranscriptionChange` REPLACES the renderer's
+          copy, so a bare `{echoTelegramTranscript}` would drop `hasApiKey` and make
+          the Transcription page read as if no key were stored until the next push. */}
+      <SettingsGroup title="Voice notes">
+        <Field>
+          <Label className="gap-2.5 text-[13px] font-normal">
+            <Checkbox
+              checked={!!transcription?.echoTelegramTranscript}
+              onCheckedChange={(v) => onTranscriptionChange?.({
+                ...(transcription ?? { provider: 'assemblyai' }),
+                echoTelegramTranscript: v === true,
+              })}
+            />
+            Echo the transcript back in the chat
+          </Label>
+          <FieldDescription>
+            Posts what was heard as 🎤 “…” before the agent runs, so a misheard word
+            is distinguishable from a misunderstood instruction.
+          </FieldDescription>
+        </Field>
       </SettingsGroup>
     </SettingsSection>
   );

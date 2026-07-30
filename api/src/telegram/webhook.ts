@@ -149,13 +149,18 @@ async function resolveText(db: DB, key: Buffer, client: TelegramClient, dm: numb
       return null;
     }
     await client.sendChatAction(dm, 'typing').catch(() => {});
-    const transcript = await transcribeAudio(db, key, await client.downloadFile(audio.file_id));
+    const tr = (await store.readSettings(db, key))?.transcription;
+    const transcript = await transcribeAudio(tr?.apiKey, await client.downloadFile(audio.file_id));
     if (transcript === null) {
       await client.sendMessage(dm, '🎤 Voice transcription is not set up — add an AssemblyAI key in the desktop app under Transcription.');
       return null;
     }
     if (!transcript) { await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
-    await client.sendMessage(dm, `🎤 “${transcript}”`); // show what was heard before acting on it
+    // Optional: show what was heard before acting on it, so a mis-transcription is
+    // distinguishable from a misunderstood instruction. Off unless switched on
+    // (Settings → Transcription) — `?? false` at the point of use, since the
+    // companion stores no defaults and an unset row must not fake a value.
+    if (tr?.echoTelegramTranscript ?? false) await client.sendMessage(dm, `🎤 “${transcript}”`);
     return transcript;
   }
 

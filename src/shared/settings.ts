@@ -165,7 +165,10 @@ export interface Settings {
   codingAgent: CodingAgentSettings;
   agentSecrets: AgentSecret[];
   // `apiKey` is present in MAIN only; the renderer gets `hasApiKey`.
-  transcription: { provider: string; apiKey?: string; hasApiKey?: boolean };
+  // `echoTelegramTranscript`: after transcribing an inbound Telegram voice note,
+  // post the transcript back to the chat as `🎤 "…"` before running the turn.
+  // Unset ⇒ off (the consumer reads `?? false` — see api/src/telegram/webhook.ts).
+  transcription: { provider: string; apiKey?: string; hasApiKey?: boolean; echoTelegramTranscript?: boolean };
   // `pat` is present in MAIN only; the renderer gets `hasPat`.
   sync: { pat?: string; hasPat?: boolean; pullIntervalSeconds: number };
   // The one unified system timezone (synced). The companion uses it for cron

@@ -294,7 +294,11 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     // Carry the presence FLAGS through — main strips the values, so these are the
     // only thing telling a field whether a credential is stored. Dropping them here
     // is why every box read as empty.
-    const tr: Transcription = { provider: disk.transcription?.provider || 'assemblyai', hasApiKey: !!disk.transcription?.hasApiKey };
+    const tr: Transcription = {
+      provider: disk.transcription?.provider || 'assemblyai',
+      hasApiKey: !!disk.transcription?.hasApiKey,
+      echoTelegramTranscript: !!disk.transcription?.echoTelegramTranscript,
+    };
     const sy: SyncSettings = {
       hasPat: !!disk.sync?.hasPat,
       pullIntervalSeconds: typeof disk.sync?.pullIntervalSeconds === 'number' && disk.sync.pullIntervalSeconds > 0 ? disk.sync.pullIntervalSeconds : 10,

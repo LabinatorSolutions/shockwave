@@ -291,7 +291,13 @@ export default function SettingsModal({
               onReload={onReloadSecrets}
             />
           )}
-          {effectiveActive === SETTINGS_SECTIONS.TELEGRAM && <TelegramSection workspaces={workspaces} />}
+          {effectiveActive === SETTINGS_SECTIONS.TELEGRAM && (
+            <TelegramSection
+              workspaces={workspaces}
+              transcription={transcription}
+              onTranscriptionChange={onTranscriptionChange}
+            />
+          )}
         </div>
       </DialogContent>
     </Dialog>

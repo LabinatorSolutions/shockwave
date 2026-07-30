@@ -1,12 +1,11 @@
 // Server-side voice transcription for Telegram voice notes, via AssemblyAI —
-// the same `transcription.apiKey` setting the desktop uses for its microphone,
-// read here directly from the store.
+// the same `transcription.apiKey` setting the desktop uses for its microphone.
+// The caller reads it (it reads the neighbouring `echoTelegramTranscript` from
+// the same settings object) and hands it in, so one voice note costs one
+// settings read, not one per consumer.
 //
 // Telegram sends voice notes as OGG/Opus, which AssemblyAI accepts as-is, so the
 // audio is uploaded byte-for-byte with no conversion.
-
-import * as store from '../store.js';
-import type { Db } from '../db.js';
 
 const BASE = 'https://api.assemblyai.com/v2';
 const POLL_MS = 1500;
@@ -17,8 +16,7 @@ const MAX_POLLS = 60; // ~90s ceiling — a Telegram voice note is far shorter
  * caller should say so rather than ignore the user), or `''` when the audio held
  * no speech. Throws if AssemblyAI reports a failure.
  */
-export async function transcribeAudio(db: Db, key: Buffer, audio: Buffer): Promise<string | null> {
-  const apiKey = (await store.readSettings(db, key))?.transcription?.apiKey;
+export async function transcribeAudio(apiKey: string | undefined, audio: Buffer): Promise<string | null> {
   if (!apiKey) return null;
   const headers = { authorization: apiKey };
 
