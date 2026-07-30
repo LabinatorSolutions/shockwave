@@ -29,6 +29,7 @@ import { cn } from '@/lib/utils';
 import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, VIEW_MODES, SAVE_STATES, TREE_SORT_ORDERS, FILE_ACTIONS } from './constants.js';
 import SortBar from './SortBar.jsx';
 import TreePanel from './TreePanel.jsx';
+import { openFileContextMenu } from './fileContextMenu.js';
 import { parseDailyNoteDate } from './dailyNote.js';
 import { collectTemplateFiles } from './templates.js';
 import { useLinkIndex } from './hooks/useLinkIndex.js';
@@ -950,6 +951,8 @@ export default function App() {
   // File-delete confirmation state — holds the path(s) the user asked to delete
   // (one or many). The ConfirmDialog renders below. Folder delete has its own.
   const [deleteCandidates, setDeleteCandidates] = useState<any>(null);
+  // Which quick-access-panel row is being renamed in place (path), if any.
+  const [panelRenamePath, setPanelRenamePath] = useState<string | null>(null);
   const [folderDeleteCandidate, setFolderDeleteCandidate] = useState<string | null>(null);
   // Whole-tree conflict actions awaiting the user's confirm.
   const [resetToRemotePending, setResetToRemotePending] = useState(false);
@@ -1394,6 +1397,30 @@ export default function App() {
     // title-bar commit.
     await renameFileWithTransitions(id, name);
   }, [tree, fileOps, selectedFolderPath, writeNow, showError, renameFileWithTransitions, linkIndex, renameTabsPath]);
+
+  const checkTreeRenameConflict = useCallback(
+    (name, id) => findTreeRenameConflict({ tree, currentPath: id, newName: name }),
+    [tree],
+  );
+
+  // ---- quick-access panel rows (Recent Files / Daily Notes) ----
+  // They're the same TreeNodes the tree renders, so they get the same context
+  // menu and run the same actions. Rename edits the row that was clicked.
+  const onTreePanelContextMenu = useCallback((path) => {
+    void openFileContextMenu({
+      paths: [path],
+      getIsBookmarked: isBookmarked,
+      onRename: () => setPanelRenamePath(path),
+      onFileAction: onFileActionWithBookmarks,
+    });
+  }, [isBookmarked, onFileActionWithBookmarks]);
+
+  const onPanelRenameSubmit = useCallback((path, name) => {
+    setPanelRenamePath(null);
+    const current = path.slice(path.lastIndexOf('/') + 1);
+    if (!name || name === current) return;
+    void onTreeRename({ id: path, name });
+  }, [onTreeRename]);
 
   // ---- URL prompt (used by editor "Add" / "Edit" external link) ----
   // Always resolves to { url, text } | null. `text` is undefined in Add mode.
@@ -1933,7 +1960,7 @@ export default function App() {
               onMoveItems={onMoveItems}
               disableDrop={disableDrop || conflictFilterActive}
               conflictMode={conflictFilterActive}
-              checkRenameConflict={(name, id) => findTreeRenameConflict({ tree, currentPath: id, newName: name })}
+              checkRenameConflict={checkTreeRenameConflict}
               getIsBookmarked={isBookmarked}
               onRootContextMenu={onRootContextMenu}
               // Content-sized (tree-wrap owns the scroll) in bookmark mode and
@@ -1969,12 +1996,22 @@ export default function App() {
                 items={treePanelData.recent}
                 activePath={activeFile}
                 onOpen={onTreePanelOpen}
+                onContextMenu={onTreePanelContextMenu}
+                renamingPath={panelRenamePath}
+                checkRenameConflict={checkTreeRenameConflict}
+                onRenameSubmit={onPanelRenameSubmit}
+                onRenameCancel={() => setPanelRenamePath(null)}
               />
               <TreePanel
                 title="Daily Notes"
                 items={treePanelData.daily}
                 activePath={activeFile}
                 onOpen={onTreePanelOpen}
+                onContextMenu={onTreePanelContextMenu}
+                renamingPath={panelRenamePath}
+                checkRenameConflict={checkTreeRenameConflict}
+                onRenameSubmit={onPanelRenameSubmit}
+                onRenameCancel={() => setPanelRenamePath(null)}
               />
             </>
           )}

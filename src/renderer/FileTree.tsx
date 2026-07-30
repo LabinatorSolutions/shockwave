@@ -3,9 +3,8 @@ import { Tree } from 'react-arborist';
 import { useDrop } from 'react-dnd';
 import { HTML5Backend, NativeTypes } from 'react-dnd-html5-backend';
 import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
-import { FILE_ACTIONS } from './constants.js';
+import { openFileContextMenu } from './fileContextMenu.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
-import { isOpenable } from './MediaView.js';
 import { cn } from '@/lib/utils';
 
 // Row visuals shared with TreePanel (same look as the file browser).
@@ -192,12 +191,14 @@ export default FileTree;
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
-// Rename input. Files show the FULL literal name (incl. extension) — no `.md`
-// hiding. Live collision check turns the field red (like the title bar) and
-// blocks Enter; blur/Escape revert. Folders keep their plain behavior.
-function RenameInput({ node, isFolder, checkRenameConflict }: any) {
-  const [val, setVal] = useState(node.data.name);
-  const conflict = !isFolder && checkRenameConflict ? checkRenameConflict(val, node.id) : false;
+// Rename input, shared by the tree rows and the quick-access panel below them —
+// renaming always happens in the row the user clicked, so this is deliberately
+// free of any react-arborist node. Files show the FULL literal name (incl.
+// extension) — no `.md` hiding. Live collision check turns the field red (like
+// the title bar) and blocks Enter; blur/Escape revert.
+export function RenameInput({ initialValue, checkConflict, onSubmit, onCancel }: any) {
+  const [val, setVal] = useState(initialValue);
+  const conflict = checkConflict ? !!checkConflict(val) : false;
   return (
     <input
       autoFocus
@@ -207,12 +208,12 @@ function RenameInput({ node, isFolder, checkRenameConflict }: any) {
       )}
       value={val}
       onChange={(e) => setVal(e.target.value)}
-      onBlur={() => node.reset()}
+      onBlur={() => onCancel()}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') node.reset();
+        if (e.key === 'Escape') onCancel();
         if (e.key === 'Enter') {
-          if (conflict) node.reset();
-          else node.submit(e.currentTarget.value);
+          if (conflict) onCancel();
+          else onSubmit(e.currentTarget.value);
         }
       }}
     />
@@ -293,27 +294,13 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, onI
       targetPaths = [node.id];
     }
 
-    const allMd = targetPaths.every((p) => p.toLowerCase().endsWith('.md'));
-    // "Open in new tab" is offered for any file the app can actually open
-    // (.md + image/video/drawing), not just markdown.
-    const allOpenable = targetPaths.every((p) => isOpenable(p));
-    const allBookmarked = getIsBookmarked
-      ? targetPaths.every((p) => getIsBookmarked(p))
-      : !!isBookmarked;
-    const action = await window.api.showFileContextMenu({
-      isMd: allMd,
-      isOpenable: allOpenable,
-      isBookmarked: allBookmarked,
-      selectionCount: targetPaths.length,
-      conflictMode: !!conflictMode,
+    await openFileContextMenu({
+      paths: targetPaths,
+      getIsBookmarked: getIsBookmarked ?? (() => !!isBookmarked),
+      conflictMode,
+      onRename: () => node.edit(),
+      onFileAction,
     });
-    if (!action) return;
-    if (action === FILE_ACTIONS.RENAME) {
-      // Rename is single-only (the menu template hides it when multi).
-      node.edit();
-    } else if (onFileAction) {
-      onFileAction(action, targetPaths);
-    }
   };
 
   return (
@@ -355,7 +342,12 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, onI
       </span>
       {isFolder ? <TreeFolderIcon /> : <TreeFileIcon />}
       {node.isEditing ? (
-        <RenameInput node={node} isFolder={isFolder} checkRenameConflict={checkRenameConflict} />
+        <RenameInput
+          initialValue={node.data.name}
+          checkConflict={(v) => !isFolder && checkRenameConflict && checkRenameConflict(v, node.id)}
+          onSubmit={(v) => node.submit(v)}
+          onCancel={() => node.reset()}
+        />
       ) : (
         <span className={cn('truncate', isFolder && 'font-medium')}>{node.data.name}</span>
       )}

@@ -82,6 +82,12 @@ Both of these are library-integration traps that fail *silently* and intermitten
 
 Note also that react-arborist rows receive an inline `paddingLeft` (the nesting indent) that beats any class padding, and that the tree's dnd backend is scoped to the tree element via `dndRootElement` — see "Sidebar→editor image drag" below.
 
+### The file context menu is shared, not the tree's
+
+`fileContextMenu.ts` (`openFileContextMenu`) owns the menu for **every** list that shows files — the tree and the quick-access panel (`TreePanel.tsx`) below it. The panel's rows are the same `TreeNode`s the tree renders (`treePanelData` in `App.tsx` flattens the same state), so everything downstream keys on paths and just works; the panel had no `onContextMenu` at all, which made real files look fake.
+
+**Rename edits the row that was right-clicked** — the tree's row via `node.edit()`, the panel's via `panelRenamePath` in `App.tsx` — and `RenameInput` (exported from `FileTree.tsx`) is deliberately free of any `NodeApi` so both can host it. Routing the panel's rename up into the tree instead is the obvious-looking shortcut and is wrong three ways: `editNode`'s `tree.get(id)` guard only sees *visible* nodes (`idToIndex` is built from `visibleNodes`), so a file in a collapsed folder silently no-ops; `scrollToItem` does nothing in `contentSized` mode because `.tree-wrap` owns the scroll, so the input can open off-screen; and in bookmark-filter mode the tree holds only bookmarked files, so the row isn't there to edit at all. Editing in place has none of those cases.
+
 ## Wiki-link UX inside the editor
 
 - `wikiLinks.ts` — CodeMirror `ViewPlugin` that replaces `[[…]]` ranges with a clickable `LinkWidget` (calls back into `onLinkClick`, which opens or creates the target via `useFileOps.onLinkClick`).
