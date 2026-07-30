@@ -199,6 +199,27 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
       description="Shockwave stores your settings, secrets, workspaces, and chats on your companion server. Point the app at it here — every other page needs this connection."
     >
       <SettingsGroup>
+        {/* Version mismatch rides at the top of the page, not down by Connect.
+            It only ever renders while connected (`disconnect` clears verCheck),
+            but it's the one thing here that needs doing rather than setting up
+            once — below the fields and the status row it was missed. */}
+        {verCheck?.status === 'companion-older' && (
+          <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+            <div className="text-sm">
+              Update available — companion <span className="font-mono">{verCheck.companion}</span> →{' '}
+              <span className="font-mono">v{String(verCheck.desktop ?? '').replace(/^v/, '')}</span>
+            </div>
+            <Button type="button" size="sm" variant="outline" onClick={() => setUpdateOpen(true)}>
+              Update companion
+            </Button>
+          </div>
+        )}
+        {verCheck?.status === 'companion-newer' && (
+          <p className="text-xs text-muted-foreground">
+            The companion ({verCheck.companion}) is newer than this app — update the desktop app to match.
+          </p>
+        )}
+
         <Field>
           <FieldLabel htmlFor="companion-url">Server URL</FieldLabel>
           <Input
@@ -346,23 +367,6 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
             </>
           )}
         </div>
-
-        {verCheck?.status === 'companion-older' && (
-          <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
-            <div className="text-sm">
-              Update available — companion <span className="font-mono">{verCheck.companion}</span> →{' '}
-              <span className="font-mono">v{String(verCheck.desktop ?? '').replace(/^v/, '')}</span>
-            </div>
-            <Button type="button" size="sm" variant="outline" onClick={() => setUpdateOpen(true)}>
-              Update companion
-            </Button>
-          </div>
-        )}
-        {verCheck?.status === 'companion-newer' && (
-          <p className="text-xs text-muted-foreground">
-            The companion ({verCheck.companion}) is newer than this app — update the desktop app to match.
-          </p>
-        )}
 
         <Button type="button" size="sm" className="w-fit" onClick={onConnect} disabled={!canConnect}>
           {status === 'checking' ? 'Connecting…' : 'Connect'}
