@@ -13,7 +13,7 @@ export {
 
 export const SETTINGS_SECTIONS = Object.freeze({
   COMPANION: 'companion',
-  APPEARANCE: 'appearance',
+  GENERAL: 'general',
   TRANSCRIPTION: 'transcription',
   UPDATES: 'updates',
   ADVANCED: 'advanced',
@@ -25,7 +25,6 @@ export const SETTINGS_SECTIONS = Object.freeze({
   WORKSPACE_SKILLS: 'workspace-skills',
   AGENT_LLM: 'agent-llm',
   AGENT_SECRETS: 'agent-secrets',
-  CRON: 'cron',
   TELEGRAM: 'telegram',
 });
 

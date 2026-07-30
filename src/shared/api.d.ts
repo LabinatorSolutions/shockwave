@@ -461,9 +461,6 @@ export interface CronView {
   activeWorkspace: string | null;
   exists?: boolean;
   fileError: string | null;
-  enabled: boolean;
-  maxCatchupHours: number;
-  maxRunMinutes: number;
   jobs: CronJobView[];
   inFlight: boolean;
   runningJobName: string | null;

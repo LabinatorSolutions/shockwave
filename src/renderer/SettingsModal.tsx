@@ -13,9 +13,8 @@ import {
 import { cn } from '@/lib/utils';
 import WorkspacesSection from './settings/WorkspacesSection.jsx';
 import GitHubSection from './settings/GitHubSection.jsx';
-import AppearanceSection from './settings/AppearanceSection.jsx';
+import GeneralSection from './settings/GeneralSection.jsx';
 import AgentChatSection from './settings/AgentChatSection.jsx';
-import CronSection from './settings/CronSection.jsx';
 import WorkspaceSkillsSection from './settings/WorkspaceSkillsSection.jsx';
 import AgentSecretsSection from './settings/AgentSecretsSection.jsx';
 import DailyNoteSection from './settings/DailyNoteSection.jsx';
@@ -36,7 +35,7 @@ function buildNav(workspaceLabel) {
   return [
     { kind: 'header', label: 'General' },
     { kind: 'item', id: SETTINGS_SECTIONS.COMPANION, label: 'Companion' },
-    { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
+    { kind: 'item', id: SETTINGS_SECTIONS.GENERAL, label: 'General' },
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
     { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
     { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
@@ -49,12 +48,11 @@ function buildNav(workspaceLabel) {
     { kind: 'header', label: 'AI Agent' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
-    { kind: 'item', id: SETTINGS_SECTIONS.CRON, label: 'Cron Settings' },
     { kind: 'item', id: SETTINGS_SECTIONS.TELEGRAM, label: 'Telegram' },
   ];
 }
 
-const DEFAULT_SECTION = SETTINGS_SECTIONS.APPEARANCE;
+const DEFAULT_SECTION = SETTINGS_SECTIONS.GENERAL;
 
 // Per-workspace sections need an active workspace. Shown when none is open.
 function NoWorkspaceNote() {
@@ -103,7 +101,6 @@ export default function SettingsModal({
   onRebuildCache,
   appUpdate,
   saveStatus,
-  onOpenCronPanel,
 }) {
   // null = still checking on open; every non-Server page is disabled until the
   // server connection is confirmed reachable.
@@ -116,15 +113,24 @@ export default function SettingsModal({
     ? SETTINGS_SECTIONS.COMPANION
     : active;
 
-  // Move `active` to where we're actually showing. Overriding only the DERIVED
-  // value left `active` pointing at the default section, so the instant the gate
-  // released — pressing Approve, which connects — the page jumped away from
-  // Companion to Appearance, mid-task, with the confirmation you were reading
-  // still on screen for a fraction of a second. Keep the two in step so releasing
-  // the gate has nothing to snap back to.
+  // Once the check has FAILED, move `active` itself to Companion. Overriding only
+  // the DERIVED value left `active` pointing at the default section, so the
+  // instant the gate released — pressing Approve, which connects — the page
+  // jumped away from Companion to General, mid-task, with the confirmation you
+  // were reading still on screen for a fraction of a second.
+  //
+  // `apiReady === false`, NOT `gated`: gated is also true while the check is
+  // still running, and rewriting `active` then destroyed every deep link into
+  // this modal (Cron's "Cron Settings", the chat sidebar's API Secrets, …). The
+  // requested section was overwritten before the answer came back, and a
+  // successful answer had nothing left to restore — every one of them landed on
+  // Companion. While checking, the derived value alone keeps Companion on screen,
+  // which it must: CompanionSection is what runs the probe.
   useEffect(() => {
-    if (gated && active !== SETTINGS_SECTIONS.COMPANION) setActive(SETTINGS_SECTIONS.COMPANION);
-  }, [gated, active]);
+    if (apiReady === false && active !== SETTINGS_SECTIONS.COMPANION) {
+      setActive(SETTINGS_SECTIONS.COMPANION);
+    }
+  }, [apiReady, active]);
 
   const activeWs = (workspaces || []).find((w) => w.id === activeWorkspaceId);
   const workspaceLabel = activeWs ? `Workspace · ${activeWs.name}` : 'Workspace';
@@ -198,14 +204,16 @@ export default function SettingsModal({
           {effectiveActive === SETTINGS_SECTIONS.COMPANION && (
             <CompanionSection onReadyChange={setApiReady} />
           )}
-          {effectiveActive === SETTINGS_SECTIONS.APPEARANCE && (
-            <AppearanceSection
+          {effectiveActive === SETTINGS_SECTIONS.GENERAL && (
+            <GeneralSection
               themeMode={themeMode}
               onThemeModeChange={onThemeModeChange}
               hideLineNumbers={hideLineNumbers}
               onHideLineNumbersChange={onHideLineNumbersChange}
               treePanel={treePanel}
               onTreePanelChange={onTreePanelChange}
+              timezone={timezone}
+              onTimezoneChange={onTimezoneChange}
             />
           )}
           {effectiveActive === SETTINGS_SECTIONS.WORKSPACES && (
@@ -281,13 +289,6 @@ export default function SettingsModal({
               secrets={agentSecrets ?? []}
               onChange={onAgentSecretsChange}
               onReload={onReloadSecrets}
-            />
-          )}
-          {effectiveActive === SETTINGS_SECTIONS.CRON && (
-            <CronSection
-              timezone={timezone}
-              onTimezoneChange={onTimezoneChange}
-              onOpenCronPanel={onOpenCronPanel}
             />
           )}
           {effectiveActive === SETTINGS_SECTIONS.TELEGRAM && <TelegramSection workspaces={workspaces} />}

@@ -24,10 +24,6 @@ const DEFAULT_CANONICAL: Settings = {
   transcription: { provider: 'assemblyai', hasApiKey: false },
   sync: { hasPat: false, pullIntervalSeconds: 10 },
   timezone: 'UTC',
-  // Cron is managed in main via window.api.cron.* (main persists the slice); the
-  // renderer never writes it through persistSettings. Present here only to satisfy
-  // the Settings type + hydrate a default before disk load.
-  cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
   chatSidebarOpen: true,
   chatSidebarWidth: 360,
   sidebarWidth: 260,
@@ -262,8 +258,8 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
         if (settings.appearance.treePanel) setTreePanel(settings.appearance.treePanel);
         settingsRef.current = { ...settingsRef.current, appearance: settings.appearance };
       }
-      // `cron` and `windowBounds` are main-owned and have no renderer state to
-      // update; they're in MAIN_OWNED_KEYS so they're never written back either.
+      // `windowBounds` is main-owned and has no renderer state to update; it's in
+      // MAIN_OWNED_KEYS so it's never written back either.
     });
     return off;
   }, [syncRef, onWorkspacesPushed]);
@@ -327,9 +323,6 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       transcription: tr,
       sync: sy,
       timezone: typeof disk.timezone === 'string' ? disk.timezone : 'UTC',
-      // Main-owned (MAIN_OWNED_KEYS) — mirrored here only so settingsRef matches
-      // the Settings type; the renderer never writes it back.
-      cron: disk.cron ?? { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
       chatSidebarOpen: typeof disk.chatSidebarOpen === 'boolean' ? disk.chatSidebarOpen : true,
       chatSidebarWidth: typeof disk.chatSidebarWidth === 'number' ? disk.chatSidebarWidth : 360,
       sidebarWidth: typeof disk.sidebarWidth === 'number' ? disk.sidebarWidth : 260,

@@ -30,7 +30,7 @@ import {
 // setting is either set (a row exists) or unset (no row); nothing here invents
 // one, so the desktop can never show a value the DB — and every other reader
 // (Telegram, cron) — doesn't have. That mismatch was the provider bug.
-const LOCAL_KEYS = ['windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen', 'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'cron'] as const;
+const LOCAL_KEYS = ['windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen', 'viewMode', 'treeSortOrder', 'bookmarkFilterActive'] as const;
 const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
   windowBounds: null,
   sidebarWidth: 260,
@@ -39,7 +39,6 @@ const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
   viewMode: 'live',
   treeSortOrder: 'name-asc',
   bookmarkFilterActive: false,
-  cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
 };
 
 /**
@@ -100,7 +99,7 @@ function parentOf(path: string, flag: string): string {
 }
 
 // Broadcasts changed top-level keys + a fresh read to the renderer, for
-// main-initiated writes (OAuth refresh, window bounds, cron). Credentials are
+// main-initiated writes (OAuth refresh, window bounds). Credentials are
 // stripped — this is one of the two doors to the renderer.
 // Returns whether the broadcast actually went out. A failed read means the
 // companion is unreachable, and the ONLY safe response is to send nothing: the

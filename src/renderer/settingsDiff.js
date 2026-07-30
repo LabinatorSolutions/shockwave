@@ -30,7 +30,7 @@ export const COLLECTION_KEYS = ['workspaces', 'agentSecrets'];
 
 // Top-level keys main owns. The renderer holds hydrated copies (they arrive on
 // read) but must never author them.
-export const MAIN_OWNED_KEYS = ['windowBounds', 'cron'];
+export const MAIN_OWNED_KEYS = ['windowBounds'];
 
 // Open-ended MAPS whose keys can be added AND removed. They must travel whole so
 // the store can reconcile removals: a per-leaf diff only walks what's present,
@@ -38,7 +38,7 @@ export const MAIN_OWNED_KEYS = ['windowBounds', 'cron'];
 // providerKeys meant a deleted API key stayed encrypted in the DB and
 // reappeared on the next read.
 //
-// Everything else in settings has fixed keys (appearance, sync, cron, …) or
+// Everything else in settings has fixed keys (appearance, sync, …) or
 // reconciles as a collection (workspaces, agentSecrets).
 export const MAP_KEYS = ['codingAgent.providerKeys'];
 

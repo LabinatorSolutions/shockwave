@@ -49,7 +49,7 @@ test('collections pass through whole, even when unchanged', () => {
 });
 
 test('main-owned keys are never authored by the renderer', () => {
-  assert.deepEqual(buildPatch({ windowBounds: { x: 1 }, cron: { enabled: true } }, {}), {});
+  assert.deepEqual(buildPatch({ windowBounds: { x: 1 } }, {}), {});
 });
 
 test('arrays are compared structurally, not by identity', () => {

@@ -10,7 +10,6 @@ import { readLocalSettings, getWorkspaceLocal } from './localSettings.js';
 
 const EMPTY = {
   activeWorkspace: null as string | null, exists: false, fileError: null as string | null,
-  enabled: true, maxCatchupHours: 0, maxRunMinutes: 0,
   jobs: [] as any[], inFlight: false, runningJobName: null as string | null,
 };
 

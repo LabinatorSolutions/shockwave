@@ -102,7 +102,7 @@ The correlator buffers unlinks and pairs them with subsequent adds:
 Settings have two homes, and `settingsStore.ts` hides the split behind `readSettings`/`writeSettings` — one flat `Settings` object, so every call site in `main.ts`/`oauth.ts` and the whole renderer is unchanged:
 
 - **Synced settings** (agent config + provider keys, agent secrets, `sync.pat`, transcription, appearance, timezone, workspace *identity*) live on the **companion** (Postgres) — the single source of truth, which encrypts every credential. The desktop reaches them through the API client in `src/main/api/` (`readSettings` → `GET /settings`, `writeSettings` → `PATCH /settings`). See **`api/CLAUDE.md`** for the storage + encryption model.
-- **Machine-local settings** (window/view state, the cron master toggle, the active workspace, each workspace's checkout path + sync toggle) live in `<userData>/local-settings.json` (`src/main/api/localSettings.ts`) and never sync.
+- **Machine-local settings** (window/view state, the active workspace, each workspace's checkout path + sync toggle) live in `<userData>/local-settings.json` (`src/main/api/localSettings.ts`) and never sync.
 - **The companion connection itself** — URL + API key — lives in `<userData>/api.json` (`src/main/api/config.ts`), the key `safeStorage`-wrapped. This is the **only** secret the desktop stores locally; all other secrets are on the companion.
 
 ### Companion TLS — verify, then pin
@@ -225,11 +225,12 @@ The manifest (`SOUL.md`, `AGENTS.md`, `.ignore`, `.gitignore`) and `ensureWorksp
 
 ## Scheduled runs (cron) — companion-side
 
-Cron **runs on the companion** now (`api/src/scheduler.ts` + `cronRun.ts` — see `api/CLAUDE.md`), not in main. `cron.json` at the workspace root is still the job source of truth. The desktop keeps only three thin pieces:
+Cron **runs on the companion** now (`api/src/scheduler.ts` + `cronRun.ts` — see `api/CLAUDE.md`), not in main. `cron.json` at the workspace root is still the job source of truth. The desktop keeps only two thin pieces:
 
-- A machine-local master toggle + windows (`settings.cron`, in `local-settings.json`).
 - A **read-only view** — `src/main/api/cron.ts` composes job definitions from the active workspace's local `cron.json` with run status from `GET /workspace/:id/cron/state`.
 - Two IPC channels: `cron:read` and `cron:runNow` (→ `POST /workspace/:id/cron/:name/run`). There are no `cron:setEnabled`/`setMaxCatchupHours`/`setMaxRunMinutes` handlers and no `cron:state`/`cron:chatsChanged` push events.
+
+There is **no `settings.cron`** and no cron settings page. The master toggle, refresh cadence, and max-run are the companion's env (`CRON_ENABLED`, `CRON_REFRESH_SCHEDULE`, `CRON_MAX_RUN_MINUTES`) — the desktop cannot write them, so a local copy could only ever lie. One did: after the desktop scheduler was deleted, `settings.cron` stayed in `local-settings.json` with nothing reading it, `cronRead` hardcoded `enabled: true`, and the panel kept an "it's off — turn it on…" banner wired to a page with no switch.
 
 ## GitHub sync
 

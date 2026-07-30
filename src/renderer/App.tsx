@@ -257,11 +257,11 @@ export default function App() {
   useEffect(() => { if (!hasConflicts) setConflictFilterActive(false); }, [hasConflicts]);
 
   // Cron: keep the rail icon's badge current (amber = malformed cron.json; dot =
-  // enabled with jobs). Mount-once subscription to the main-side push.
+  // has jobs). Mount-once subscription to the main-side push.
   useEffect(() => {
     const apply = (v: any) => {
       if (v?.fileError) setCronBadge('error');
-      else if (v?.enabled && (v?.jobs?.length ?? 0) > 0) setCronBadge('on');
+      else if ((v?.jobs?.length ?? 0) > 0) setCronBadge('on');
       else setCronBadge('none');
     };
     window.api.cron.read().then(apply).catch(() => {});
@@ -2295,7 +2295,6 @@ export default function App() {
         open={cronOpen}
         onClose={() => setCronOpen(false)}
         onOpenFile={(p) => { if (graphMode) setGraphMode(false); openInActiveTab(p); }}
-        onOpenSettings={() => { setCronOpen(false); openSettings(SETTINGS_SECTIONS.CRON); }}
         onRunStarted={(chatId) => {
           // The run executes on the companion — open its chat so it streams here
           // live (running elsewhere → the composer freezes + subscribes to the feed).
@@ -2344,7 +2343,6 @@ export default function App() {
           onRebuildCache={rebuildLinkCache}
           appUpdate={appUpdate}
           saveStatus={saveStatus}
-          onOpenCronPanel={() => { setSettingsOpen(false); setCronOpen(true); }}
         />
       )}
     </div>

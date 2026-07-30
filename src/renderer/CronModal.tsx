@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Play, AlertTriangle, FileText, Loader2, Settings2 } from 'lucide-react';
+import { Play, AlertTriangle, FileText, Loader2 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
@@ -7,9 +7,11 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { CronView, CronJobView } from '../shared/api';
 
-// The in-app cron experience: the live schedule + manual Run-now buttons. The
-// CONFIG (master on/off, catch-up window, max-run) lives in Settings → Cron
-// Settings — this panel is the operational view, not a settings page.
+// The in-app cron experience: the live schedule + manual Run-now buttons. There
+// is no cron settings page to pair it with — the desktop stopped running the
+// scheduler, so the knobs that page held (master on/off, catch-up window,
+// max-run) are the companion's env now (CRON_ENABLED, CRON_REFRESH_SCHEDULE,
+// CRON_MAX_RUN_MINUTES). This panel is the whole in-app surface.
 //
 // One-way by design: cron.json (the file) is the source of truth for the jobs +
 // their enabled flag. This panel DISPLAYS that state (read-only) and can trigger
@@ -65,9 +67,9 @@ function JobRow({ job, busy, running, onRun }: { job: CronJobView; busy: boolean
   );
 }
 
-export default function CronModal({ open, onClose, onOpenFile, onOpenSettings, onRunStarted }: {
+export default function CronModal({ open, onClose, onOpenFile, onRunStarted }: {
   open: boolean; onClose: () => void;
-  onOpenFile?: (path: string) => void; onOpenSettings?: () => void;
+  onOpenFile?: (path: string) => void;
   onRunStarted?: (chatId: string) => void;
 }) {
   const [view, setView] = useState<CronView | null>(null);
@@ -99,13 +101,7 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings, o
           <DialogTitle>Scheduled Jobs</DialogTitle>
           <DialogDescription>
             The agent's schedule for the active workspace, read from <span className="font-mono">cron.json</span>.
-            Run a task now; enable, disable, or edit jobs in the file. Master switch and windows are in{' '}
-            {onOpenSettings ? (
-              <button type="button" onClick={onOpenSettings}
-                className="font-medium text-foreground underline underline-offset-2 hover:opacity-80">
-                Cron Settings
-              </button>
-            ) : 'Cron Settings'}.
+            Runs execute on your companion server. Run a task now; enable, disable, or edit jobs in the file.
           </DialogDescription>
         </DialogHeader>
 
@@ -115,20 +111,6 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings, o
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {!view?.enabled && (
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs">
-                <span className="text-muted-foreground">
-                  Scheduling is <span className="font-medium text-foreground">off</span> — jobs won't fire
-                  automatically.
-                </span>
-                {onOpenSettings && (
-                  <Button variant="outline" size="sm" className="h-6 shrink-0 px-2 text-xs" onClick={onOpenSettings}>
-                    Turn on…
-                  </Button>
-                )}
-              </div>
-            )}
-
             {view?.fileError && (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" /><span>{view.fileError}</span>
@@ -149,19 +131,14 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings, o
               </div>
             )}
 
-            <div className="flex items-center gap-1">
-              {view?.exists && onOpenFile && (
+            {view?.exists && onOpenFile && (
+              <div className="flex items-center gap-1">
                 <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground"
                   onClick={() => { onClose(); onOpenFile(`${view.activeWorkspace}/cron.json`); }}>
                   <FileText className="size-3.5" /> Open cron.json
                 </Button>
-              )}
-              {onOpenSettings && (
-                <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={onOpenSettings}>
-                  <Settings2 className="size-3.5" /> Cron Settings
-                </Button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
       </DialogContent>

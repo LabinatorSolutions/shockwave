@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { THEME_MODES } from '../constants.js';
 import { useCommitField } from './useCommitField';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import Combobox from '../Combobox';
 import {
   Select,
   SelectContent,
@@ -27,13 +28,15 @@ const TREE_PANEL_OPTIONS = [
   { value: 'both', label: 'Files + Notes' },
 ];
 
-export default function AppearanceSection({
+export default function GeneralSection({
   themeMode,
   onThemeModeChange,
   hideLineNumbers,
   onHideLineNumbersChange,
   treePanel,
   onTreePanelChange,
+  timezone,
+  onTimezoneChange,
 }) {
   // Commits on blur (see useCommitField). Typed digit-by-digit, so per-keystroke
   // writes also meant "1" and "10" both being saved on the way to "100" — and a
@@ -44,8 +47,41 @@ export default function AppearanceSection({
     onTreePanelChange?.({ ...treePanel, count: Math.min(50, n) });
   });
 
+  // Every IANA zone Chromium knows, so the value is always one the server can
+  // actually resolve — a typo'd zone name would silently fall back to UTC on the
+  // companion and fire every scheduled job at the wrong hour.
+  const zones = useMemo(() => {
+    let list: string[] = [];
+    try { list = (Intl as any).supportedValuesOf?.('timeZone') ?? []; } catch { /* older runtime */ }
+    return ['UTC', ...list.filter((z) => z !== 'UTC')];
+  }, []);
+
   return (
-    <SettingsSection title="Appearance" description="Choose the color theme and editor display options.">
+    <SettingsSection title="General" description="App-wide preferences: time, color theme, and editor display.">
+      {/* Not a display setting, which is why this page isn't called Appearance
+          any more. It lived on a Cron page while the desktop ran its own
+          scheduler; cron moved to the companion and took that page's reason to
+          exist with it, but the zone is used app-wide — schedules, run times,
+          and the agent's idea of today's date. */}
+      <SettingsGroup title="Time">
+        <Field>
+          <FieldLabel htmlFor="timezone">Timezone</FieldLabel>
+          <Combobox
+            id="timezone"
+            className="font-mono"
+            options={zones}
+            value={timezone || 'UTC'}
+            onChange={(v) => onTimezoneChange?.(v.trim() || 'UTC')}
+            placeholder="UTC"
+          />
+          <FieldDescription>
+            The one timezone the whole system uses — scheduled runs, run times, and the agent's date. Type to filter (e.g. <span className="font-mono">New_York</span>).
+          </FieldDescription>
+        </Field>
+      </SettingsGroup>
+
+      <SettingsDivider />
+
       <SettingsGroup title="Theme">
         <Field>
           <FieldLabel htmlFor="theme-mode">Color theme</FieldLabel>

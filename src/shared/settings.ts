@@ -8,7 +8,7 @@
 // No defaults are merged on read: a DB setting is either set (a row exists) or
 // unset, and consumers that need a value either require it (error if unset) or
 // fall back at the point of use. The ONE exception is machine-local settings
-// (window/view state, cron, the active workspace), which live in a userData file
+// (window/view state, the active workspace), which live in a userData file
 // and DO have desktop defaults — see LOCAL_DEFAULTS in src/main/settingsStore.ts.
 //
 // Credentials are never stored here in the clear: the companion encrypts them in
@@ -172,14 +172,11 @@ export interface Settings {
   // schedules and the agent's "current date"; the desktop uses it for display.
   // IANA name, e.g. "America/New_York"; default "UTC".
   timezone: string;
-  // Scheduled runs (cron). Machine-local and global: `enabled` is the master
-  // on/off (gates FIRING only — watching/validation/UI stay live when off), and
-  // cron follows the active workspace. Job definitions live per-workspace in
-  // `<workspace>/cron.json`; only these knobs are global settings.
-  // `maxCatchupHours`: a missed run fires only if its most-recent occurrence is
-  // within this window (else it rolls forward). `maxRunMinutes`: a run exceeding
-  // this is aborted so a hung provider can't wedge the scheduler.
-  cron: { enabled: boolean; maxCatchupHours: number; maxRunMinutes: number };
+  // Scheduled runs (cron) have NO settings here. The desktop stopped running the
+  // scheduler; the companion owns execution and its knobs are that server's env
+  // (CRON_ENABLED, CRON_REFRESH_SCHEDULE, CRON_MAX_RUN_MINUTES). Job definitions
+  // live per-workspace in `<workspace>/cron.json`. The in-app surface is the
+  // schedule panel (CronModal) — read-only over that file, plus Run now.
   chatSidebarOpen: boolean;
   chatSidebarWidth: number;
   sidebarWidth: number;
