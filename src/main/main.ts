@@ -944,8 +944,20 @@ ipcMain.handle('api:write', (_evt, patch) => {
   if (typeof patch?.url === 'string') next.url = patch.url;
   if (typeof patch?.apiKey === 'string') next.apiKey = patch.apiKey;
   const c = writeApiConfig(next);
+  // Point the live feed at whatever was just configured. Connecting doesn't get
+  // its own "now refresh the workspaces" line — it re-establishes the feed, and
+  // the feed opening is the ONE rule that refreshes (see setCompanionOnline).
+  // It also makes connecting immediate: the retry loop backs off to 30s, so
+  // without this a freshly-entered URL could sit unread for half a minute.
+  stopLiveFeed();
+  setCompanionOnline(false);
+  startLiveFeed();
   return { ok: true, url: c.url, hasApiKey: !!c.apiKey };
 });
+
+// Asked once on load: the push below can fire before the window is listening,
+// same reason `api:pendingCert` exists.
+ipcMain.handle('companion:getState', () => ({ online: companionOnline }));
 // Probe the connection. This NEVER approves anything — it only reports. A
 // certificate the app held on comes back as `certNeedsApproval` for the user to
 // look at; `approved: null` means this server has never been approved here.
@@ -1733,11 +1745,61 @@ let feedAbort: (() => void) | null = null;
 let feedRetry: NodeJS.Timeout | null = null;
 let feedBackoff = 1000;
 
+// ── Companion connection state — ONE rule, not a list of refresh call sites ──
+//
+// The workspace list lives on the companion; the renderer holds an in-memory
+// copy. Refreshing that copy used to happen in exactly one place — the boot read
+// — so a desktop that started while the companion was down kept an empty list
+// for the whole session, and neither the companion coming back nor connecting
+// one in Settings asked again. Restarting the app was the only recovery.
+//
+// The fix is not another refresh call at each of those sites; that's the pattern
+// that missed them in the first place. It's a single rule: WHENEVER THE
+// COMPANION BECOMES REACHABLE, re-read and push. The live feed already knows —
+// its stream opening means the companion answered, its `done()` means we lost
+// it — so that transition is the only trigger, and every case (boot, reconnect
+// after an upgrade restart, Settings → Connect) is the same event.
+let companionOnline = false;
+let refreshRetry: NodeJS.Timeout | null = null;
+
+// Push the companion-owned settings the renderer mirrors. The read can fail even
+// though the feed just opened (a blip between the two requests), and a dropped
+// push here is the whole bug — the renderer would sit on an empty list with no
+// further transition to trigger another attempt, since the feed stays connected.
+// So retry, bounded, and give up rather than poll forever: losing the feed is
+// itself a transition, and that path will try again.
+const REFRESH_RETRY_MS = [2000, 5000, 15_000];
+async function refreshCompanionData(attempt = 0) {
+  if (refreshRetry) { clearTimeout(refreshRetry); refreshRetry = null; }
+  if (!companionOnline) return; // went offline mid-flight; the next open retries
+  if (await notifyWorkspacesChanged()) return;
+  const delay = REFRESH_RETRY_MS[attempt];
+  if (delay === undefined) {
+    console.warn('[companion] gave up refreshing workspaces after reconnect');
+    return;
+  }
+  refreshRetry = setTimeout(() => void refreshCompanionData(attempt + 1), delay);
+}
+
+function setCompanionOnline(online: boolean) {
+  if (companionOnline === online) return; // edge-triggered: reconnect churn is not news
+  companionOnline = online;
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('companion:state', { online });
+  }
+  // Going online is the refresh. Going offline pushes NOTHING but the flag: a
+  // degraded read returns an empty workspace list, and broadcasting that would
+  // clear the renderer's good copy, which is the bug this exists to fix.
+  if (online) void refreshCompanionData();
+  else if (refreshRetry) { clearTimeout(refreshRetry); refreshRetry = null; }
+}
+
 function startLiveFeed() {
   if (feedAbort) return;
   let opened = false;
   const done = () => {
     feedAbort = null;
+    setCompanionOnline(false);
     // Reconnect forever. Anything that happened while we were down was missed,
     // so the renderer re-reads its loaded chats once we're back.
     if (feedRetry) clearTimeout(feedRetry);
@@ -1765,6 +1827,7 @@ function startLiveFeed() {
       // running) reconnected silently — chat resync stalled, and nothing could
       // hang off "the companion came back".
       opened = true;
+      setCompanionOnline(true);
       announceReconnect();
       void onFeedOpen();
     });

@@ -293,6 +293,16 @@ export interface ShockwaveApi {
      *  empty field can't mean "delete this" — every credential it holds reads as
      *  empty and is stripped from saves on purpose. Deleting is explicit. */
     deleteCredential(path: string): Promise<{ ok: boolean; error?: string }>;
+    /** Whether the companion is reachable right now. Asked on load — the push
+     *  below can fire before the window is listening. */
+    companionState(): Promise<{ online: boolean }>;
+    /** Fires when the companion becomes reachable, or stops being. Edge-triggered.
+     *
+     *  Becoming reachable is the ONE trigger that refreshes companion-owned data:
+     *  main follows it with a `settings:changed` push carrying `workspaces`. Boot,
+     *  reconnect after an upgrade restart, and Settings → Connect are all the same
+     *  event, so none of them needs its own refresh. */
+    onCompanionState(cb: (s: { online: boolean }) => void): () => void;
     /** Approve a companion certificate the user has been shown. The only path
      *  that stores one. Refuses any fingerprint main didn't itself read off the
      *  configured server — the value on screen is the only approvable value. */

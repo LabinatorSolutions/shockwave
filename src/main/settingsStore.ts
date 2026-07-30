@@ -102,15 +102,22 @@ function parentOf(path: string, flag: string): string {
 // Broadcasts changed top-level keys + a fresh read to the renderer, for
 // main-initiated writes (OAuth refresh, window bounds, cron). Credentials are
 // stripped — this is one of the two doors to the renderer.
-async function emitChanged(keys: string[]) {
-  if (!keys.length) return;
+// Returns whether the broadcast actually went out. A failed read means the
+// companion is unreachable, and the ONLY safe response is to send nothing: the
+// degraded read returns an empty workspace list, so broadcasting it would clear
+// the renderer's good copy. Callers that need the push to land (the
+// became-reachable refresh in main.ts) retry on `false`.
+async function emitChanged(keys: string[]): Promise<boolean> {
+  if (!keys.length) return false;
   try {
     const settings = stripCredentials(await readSettings());
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('settings:changed', { keys, settings });
     }
+    return true;
   } catch (err: any) {
     console.warn('[settings] could not emit change event:', err?.message ?? err);
+    return false;
   }
 }
 
@@ -213,8 +220,9 @@ export async function patchAgentSecretOAuth(name: string, patch: Record<string, 
   await emitChanged(['agentSecrets']);
 }
 
-export async function notifyWorkspacesChanged(): Promise<void> {
-  await emitChanged(['workspaces', 'activeWorkspaceId']);
+/** @returns whether the push landed — see `emitChanged`. */
+export async function notifyWorkspacesChanged(): Promise<boolean> {
+  return emitChanged(['workspaces', 'activeWorkspaceId']);
 }
 
 // Obsolete — data lives on the server now. No-op so the boot call site is unchanged.

@@ -246,6 +246,20 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('api:companionUpdated', h);
       return () => ipcRenderer.removeListener('api:companionUpdated', h);
     },
+    /** Whether the companion is reachable right now. Asked on load, because the
+     *  push below can fire before the window is listening.
+     *  @returns {Promise<{online: boolean}>} */
+    companionState: () => ipcRenderer.invoke('companion:getState'),
+    /** Fires when the companion becomes reachable or stops being reachable.
+     *  Edge-triggered, so reconnect churn doesn't spam. Becoming reachable is
+     *  also what refreshes the workspace list — main follows this with a
+     *  `settings:changed` push carrying `workspaces`.
+     *  @param {(s: {online: boolean}) => void} cb @returns {() => void} unsubscribe */
+    onCompanionState: (cb) => {
+      const h = (_evt, payload) => cb(payload);
+      ipcRenderer.on('companion:state', h);
+      return () => ipcRenderer.removeListener('companion:state', h);
+    },
     /** Approve a companion TLS fingerprint the user has just been shown. The only
      *  path that stores one.
      *  @param {string} fingerprint @returns {Promise<{ok: boolean, error?: string}>} */

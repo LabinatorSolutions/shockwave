@@ -208,6 +208,12 @@ export default function App() {
   // once workspacePath exists).
   const [systemPrefersDark, setSystemPrefersDark] = useState(false);
   const [bootDone, setBootDone] = useState(false);
+  // Whether the companion is reachable, pushed from main (`companion:state`).
+  // The workspace list comes from the companion and nowhere else, so an empty
+  // list while this is false means "couldn't ask", NOT "you have none" — and the
+  // empty state has to say so. Seeded true so the first paint isn't a flash of
+  // "unreachable" before main answers.
+  const [companionOnline, setCompanionOnline] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const sidebarWidthRef = useRef(260);
   const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
@@ -231,6 +237,12 @@ export default function App() {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const workspacePath = activeWorkspace?.path ?? null;
   const workspacePathRef = useSyncRef(workspacePath);
+  // Read by the `onWorkspacesPushed` callback, which is deliberately stable
+  // (`[]` deps) — same discipline as the fs:changed and sync listeners: a push
+  // handler that rebuilt every render would churn its subscription.
+  const bootDoneRef = useSyncRef(bootDone);
+  const activeWorkspaceIdRef = useSyncRef(activeWorkspaceId);
+  const loadWorkspaceRef = useRef<((ws: any) => Promise<void>) | null>(null);
 
   // Conflict files surfaced by the sync engine on its paused status (relative
   // POSIX paths → workspace-absolute). Drives the conflict-resolution view.
@@ -272,11 +284,41 @@ export default function App() {
     onWorkspacesPushed: useCallback((list, activeId) => {
       setWorkspaces(list);
       setActiveWorkspaceId(activeId);
-    }, []),
+      // This push now also arrives when the companion becomes reachable, which
+      // covers the case boot could not: the app started while the companion was
+      // down, so boot got an empty list and never opened anything. Setting the
+      // active id alone would leave a half-loaded workspace — `workspacePath` is
+      // derived from it, so the path would go live with no tree and no watcher
+      // — so the workspace has to actually be loaded here.
+      //
+      // Guarded on `!activeWorkspaceIdRef.current`: if a workspace is already
+      // open, this push is a routine refresh (a reconnect, a rename) and must
+      // not tear down and reload what the user is working in. Guarded on
+      // `bootDone` because the feed can open before boot finishes, and boot owns
+      // the first load — without it both would load the same workspace and race.
+      if (!bootDoneRef.current || activeWorkspaceIdRef.current) return;
+      const ws = list.find((w: any) => w.id === activeId);
+      if (ws?.path) void loadWorkspaceRef.current?.(ws);
+      // Refs only — all stable identities, so the callback still never rebuilds.
+    }, [bootDoneRef, activeWorkspaceIdRef]),
   });
 
   // App-update status: feeds the editor-pane "Update available" pill + Settings → Updates.
   const appUpdate = useAppUpdate();
+
+  // Companion reachability. Asked once (the push can fire before this window is
+  // listening), then kept current by main's edge-triggered `companion:state`.
+  // Nothing here refetches the workspace list — main does that on the same
+  // transition and pushes it through `settings:changed`. This is only so the UI
+  // can tell "couldn't reach the companion" apart from "no workspaces".
+  useEffect(() => {
+    let alive = true;
+    window.api.settings.companionState()
+      .then((s) => { if (alive) setCompanionOnline(!!s?.online); })
+      .catch(() => {});
+    const off = window.api.settings.onCompanionState(({ online }) => setCompanionOnline(!!online));
+    return () => { alive = false; off(); };
+  }, []);
 
   // Companion-version boot check — once per app run. A companion behind this
   // desktop opens the update dialog; a companion AHEAD means this desktop is
@@ -817,6 +859,7 @@ export default function App() {
       intervalSeconds: syncRef.current?.pullIntervalSeconds,
     }).catch(() => {});
   }, [writeNow, resetTabs, linkIndex, loadWorkspaceData]);
+  loadWorkspaceRef.current = loadWorkspace;
 
   // Settings → Advanced → "Rebuild link cache". Discards the persisted parse
   // cache for the active workspace and re-parses every .md from scratch, then
@@ -2082,7 +2125,15 @@ export default function App() {
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center text-[13px] text-muted-2">
-            {bootDone ? `Welcome to ${APP_NAME}. Add a workspace from the gear icon to get started.` : ''}
+            {/* An empty workspace list means one of two very different things,
+                and they used to render identically. Workspaces live on the
+                companion, so with it unreachable the list is empty because we
+                couldn't ask — telling the user to add one sends them to fix the
+                wrong thing. This clears itself: main pushes the list the moment
+                the companion answers. */}
+            {!bootDone ? '' : !companionOnline
+              ? `Can't reach your companion server. ${APP_NAME} will pick your workspaces back up as soon as it's back.`
+              : `Welcome to ${APP_NAME}. Add a workspace from the gear icon to get started.`}
           </div>
         )}
         {/* Toasts anchor to the editor pane (bottom-right, lifted above the
