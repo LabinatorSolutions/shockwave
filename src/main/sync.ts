@@ -229,9 +229,12 @@ function guardArgs() {
 // ─── git spawn wrapper ─────────────────────────────────────────────────────
 
 /**
- * Spawn `git` with optional PAT injected via GIT_ASKPASS env. Returns the
- * full {ok, code, stdout, stderr} so callers can pattern-match on git's
- * exit codes and messages.
+ * Spawn `git` with an optional PAT, passed on the child's GITHUB_PAT env and
+ * answered by the command-line credential helper (there is no askpass script on
+ * disk — see the Auth model in src/main/CLAUDE.md). A PAT also brings guardArgs()
+ * along, since the token is then in the environment of git running inside a
+ * directory the coding agent controls. Returns the full {ok, code, stdout,
+ * stderr} so callers can pattern-match on git's exit codes and messages.
  *
  * IMPORTANT: pass timeoutMs for any network-bound command (clone/fetch/pull/
  * push) — git can hang indefinitely on a broken connection.

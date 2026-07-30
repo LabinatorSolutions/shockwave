@@ -4,21 +4,43 @@ React 19 + Vite renderer. Vite root is `src/renderer/` (configured in `electron.
 
 `main.tsx` also installs a window-level dragover/drop preventer for `Files` drags so a stray drop outside an explicit handler doesn't navigate the renderer away to the file URL.
 
-Cross-cutting invariants (terminology, link-index rules, parser parity, save-before-mutate) live in the **root `CLAUDE.md`** — read that first.
+Cross-cutting invariants (terminology, link-index rules, parser parity, save-before-mutate) live in the **root `CLAUDE.md`** — read that first. Settings-page policy (when a value saves, credential handling, the per-section inventory) lives in **`settings/CLAUDE.md`**.
 
 ## State model
 
 `App.tsx` is the orchestrator. Heavy state lives in hooks under `hooks/`:
 
-- `useTabs` — tabs, `activeTabId`, per-path view state, per-tab back/forward history. Tabs may be drafts (`isDraft: true, path: null`); `promoteTabPath(tabId, newPath)` flips a draft to a real file once the caller has created it on disk. The actual create-on-disk happens inside `writeNow` in `App.tsx` (see "Save lifecycle" below) — a draft has no file until its first save fires.
+- `useTabs` — tabs, `activeTabId`, per-path view state, per-tab back/forward history. Tabs may be drafts (`isDraft: true, path: null`); `promoteTabPath(tabId, newPath)` flips a draft to a real file once the caller has created it on disk. The actual create-on-disk happens inside `writeNow` in `App.tsx` (see "Save lifecycle" below) — a draft has no file until its first save fires. It also owns the **editor's parked document states**: everywhere it forgets or re-keys `viewStateByPath` (close, delete, rename, workspace switch) it makes the matching `evictDocument` / `renameDocument` / `clearDocuments` call — see "Per-document undo history" below. Add a new case to one and you must add it to both, or a closed file's undo stack leaks or a renamed file comes back with an empty one.
 - `useLinkIndex` — wraps `createMetadataCache()` (in `metadataCache.js`, modeled on and named after Obsidian's) behind a ref + a `version` counter, `bump()`ed after every mutation. The cache owns `resolvedLinks` (source→dest paths), `unresolvedLinks`, the reverse backlinks, and a PRIVATE basename→paths "phone book"; it resolves links itself via `getFirstLinkpathDest` (rules in the pure `linkResolver.js`). There is no public `pageIndex` — consumers call `cache.getFirstLinkpathDest` / `candidatesFor` / `getBacklinksForFile`. Rename/move reference rewrites (`renameOps.js`) capture a context snapshot (`captureRewriteContext`) before the cache re-keys so resolution stays correct regardless of order.
 - `useFileOps` — rename/duplicate/delete/link-click, and the `treeAndIndexChanged()` helper that re-reads the tree and bumps the link index after any structural change.
 - `useSyncRef` — keeps a ref in sync with a value/callback so a stable closure (e.g. `writeNow`) can read fresh state without being rebuilt.
-- `useSettings` — owns all persisted settings: the canonical `settingsRef`, `persistSettings` (diffs via `settingsDiff.js`, sends a minimal patch to main), `hydrateSettings` (seeds from the companion read at boot), the per-field setters, and the `settings:changed` listener. **No default-merge** — its `DEFAULT_CANONICAL` placeholder starts UNSET for DB-backed values (empty provider/model) so the renderer never invents a value the DB doesn't have; `hydrateSettings` fills from the companion. See "Settings sub-folder" below.
+- `useSettings` — owns all persisted settings: the canonical `settingsRef`, `persistSettings` (diffs via `settingsDiff.js`, sends a minimal patch to main), `hydrateSettings` (seeds from the companion read at boot), the per-field setters, and the `settings:changed` listener. **No default-merge** — its `DEFAULT_CANONICAL` placeholder starts UNSET for DB-backed values (empty provider/model) so the renderer never invents a value the DB doesn't have; `hydrateSettings` fills from the companion. Section-level save policy lives in `settings/CLAUDE.md`.
 - `useFsWatcher` — the external-change (`fs:changed`) listener; see its own section below.
 - `useBookmarks`, `useDailyNote`, `useSendToAgent`, `useAppUpdate` — bookmarks, per-workspace daily-note config, the "send file to agent" flow, and the auto-update status.
 
-The **Editor** (`Editor.tsx`) is imperative: parent gets a ref with `setContent / getText / getViewState / clear / flashRanges / setReadOnly / focus`. `App.tsx` loads content into the editor via an effect that watches `activeFile` — this decouples load timing from React state-update ordering. The `dark` prop recreates the EditorView (theme can't be reconfigured live). `viewMode` toggles the live-preview decoration bundle via a Compartment — cursor, history, and scroll all survive a reconfigure.
+The **Editor** (`Editor.tsx`) is imperative: parent gets a ref with `loadDocument / setContent / getText / getViewState / clear / flashRanges / setReadOnly / focus`, plus `evictDocument / renameDocument / clearDocuments`. `App.tsx` loads content into the editor via an effect that watches `activeFile` — this decouples load timing from React state-update ordering. The `dark` prop recreates the EditorView (theme can't be reconfigured live). `viewMode` toggles the live-preview decoration bundle via a Compartment — cursor, history, and scroll all survive a reconfigure.
+
+### Per-document undo history
+
+**`loadDocument(key, text, viewState)` shows a DIFFERENT document; `setContent(text, viewState)` replaces the text of the one already on screen.** Use the wrong one and you either lose an undo stack or leak one across files.
+
+There is ONE CodeMirror view for the whole app and tabs swap documents through it. CodeMirror keeps undo history inside `EditorState`, so a single shared state meant a single shared undo stack — pressing undo past the start of your edits in the current file walked back through the *document swap itself* and restored the previous file's text into the current tab. That is not a stale render: undo is a user edit, so it marked the tab dirty and the autosave then wrote the wrong file's content to disk.
+
+So the editor follows CodeMirror's intended multi-document pattern — one `EditorState` per document, swapped in with `view.setState()`. `loadDocument` parks the outgoing document's state in `docStatesRef` and restores the incoming one. Load-bearing details:
+
+- **Keys are DOCUMENT identity, not tab identity**: the file path, or `draft:<tabId>` before a draft has a file. One tab walks between files via back/forward, and two tabs on one file share a stack (as in VS Code). Draft promotion **re-keys** (`renameDocument(draftKey, activeFile)`), or a file would come back with an empty stack after its first save.
+- **A parked state is only reused while it still matches the text just read from disk.** If the file changed underneath us (agent, git pull, another machine), its history describes text that no longer exists → start clean.
+- `setContent` keeps history on purpose — it backs the external-change reload path, where being able to undo an outside writer's change is the point.
+- States are built by a factory reading the **current** compartment config, so a state created while raw mode is on doesn't come back with live preview; the lazily-loaded grammar for non-markdown files is re-applied after the swap (`setState` replaces compartment contents wholesale).
+- The cursor/scroll restore dispatches with `Transaction.addToHistory.of(false)` — it isn't an edit, and recording it would make the first undo in a freshly-opened file do nothing but move the cursor.
+- Cache is capped at `MAX_DOC_STATES` (24, LRU) — a parked state holds its whole document plus history. Losing one costs only that file's undo stack.
+- A theme toggle rebuilds the view and resets history; parked states are bound to the old extension instances.
+
+### Companion reachability
+
+The workspace list lives on the companion and the renderer holds an in-memory copy, so **an empty list means one of two very different things** and they used to render identically. `App.tsx` tracks `companionOnline` from `settings.companionState()` (asked once on load — the push can beat the window listening) + `settings.onCompanionState()`, and the empty state says "can't reach your companion server" rather than "add a workspace" while it's false. Seeded `true` so the first paint isn't a flash of "unreachable" before main answers.
+
+**The renderer never refreshes companion-owned data itself.** Main has one rule — the live feed opening *is* the reachable signal — and pushes the refreshed list down the existing `settings:changed` channel (see "Connection state" in `src/main/CLAUDE.md`). So `onWorkspacesPushed` also has to handle the case boot couldn't: the app started while the companion was down, boot got an empty list, and nothing is open. Setting the active id alone would leave a half-loaded workspace (`workspacePath` derives from it, so the path goes live with no tree and no watcher), so that callback actually loads the workspace — guarded on `!activeWorkspaceIdRef.current` (a push with something already open is a routine refresh and must not tear down what the user is working in) and on `bootDone` (the feed can open before boot finishes, and boot owns the first load). It reads both through refs so the callback identity stays stable — same discipline as the `fs:changed` and sync listeners.
 
 ## Save lifecycle
 
@@ -46,6 +68,15 @@ Do NOT add `linkIndex` (or any per-render object) to the listener's `useEffect` 
 
 In-app file operations call `fileOps.treeAndIndexChanged()` directly AND get echoed by the watcher, so they paper over watcher bugs; external changes (terminal, pi coding agent, other apps) rely solely on this path. If external changes stop updating the sidebar, the listener-churn pattern is the first place to look.
 
+## File tree (`FileTree.tsx`) — two react-arborist rules
+
+Both of these are library-integration traps that fail *silently* and intermittently, so they read as flaky UI rather than bugs.
+
+- **The `<Tree>` children render-prop must be a stable module-level component** (`NodeWithExtras`), never an inline arrow. react-arborist renders it AS A COMPONENT (`const Node = tree.renderNode` inside its `RowContainer`), so a new function identity each render is a new component *type* — React unmounts and remounts every row subtree. That destroys the rename input mid-edit: its `useState` re-initializes from `node.data.name`, so a background re-render (the app has some on a ~10s cadence) silently reverts what the user typed. Everything the row needs beyond react-arborist's own props travels via `NodeExtrasContext`, so it updates without remounting. `onToggle`/`onMove` are stable callbacks for the same reason — otherwise arborist rebuilds its `NodeApi` list every render.
+- **`SafeHTML5Backend` wraps react-dnd's manager to filter dead drop-target ids.** The HTML5 backend dispatches `hover` from a `requestAnimationFrame` using ids captured at dragover; arborist re-registers every row's drop target whenever it rebuilds its node list — including `tree.open(parentId)` inside its own drop handler — so a queued hover can fire against ids that no longer exist and dnd-core throws an uncaught "Expected targetIds to be registered" mid-drag (seen dropping a file onto a folder).
+
+Note also that react-arborist rows receive an inline `paddingLeft` (the nesting indent) that beats any class padding, and that the tree's dnd backend is scoped to the tree element via `dndRootElement` — see "Sidebar→editor image drag" below.
+
 ## Wiki-link UX inside the editor
 
 - `wikiLinks.ts` — CodeMirror `ViewPlugin` that replaces `[[…]]` ranges with a clickable `LinkWidget` (calls back into `onLinkClick`, which opens or creates the target via `useFileOps.onLinkClick`).
@@ -55,6 +86,9 @@ In-app file operations call `fileOps.treeAndIndexChanged()` directly AND get ech
 - `markdownLinks.ts` — renders `[text](url)` as a clickable link showing just `text`; reveals raw syntax when the cursor touches it. Also exports `findLinkAtPos` so the editor context menu can offer Edit / Remove for the link under the cursor (handles both plain text links and image-wrapping links like `[![alt](src)](url)`).
 - `imageWidgets.ts` — replaces `![alt](url)` ranges with an `<img>`. URLs resolve relative to the active file's folder (or absolute, or `http(s)://`) and are served via the `app://media/<rel>` protocol — see "Image pipeline" below.
 - `diffFlash.ts` — accent-color (indigo) flash decoration applied when the watcher reloads the active file and the renderer wants to highlight what changed (word-level diff via the `diff` npm package).
+- `codeBlocks.ts` — `` `inline code` `` as a monospace pill and ```` ``` ```` fences as a full-width block, backticks hidden until the cursor touches the node (same reveal convention as `hideMarkdownMarkers.ts`). Two plugins on purpose so their `RangeSetBuilder`s never mix mark and line decorations. Styling lives in `app.css` (`.cm-inline-code` / `.cm-code-block*`) so dark mode rides the `--bg-code` token instead of a per-theme `HighlightStyle`.
+- `listContinue.ts` / `blankLineOutdent.ts` — Enter behavior in lists and todos: continue the marker, and outdent a blank indented line rather than re-copying its indent.
+- `indentGuides.ts` / `hangingIndent.ts` — vertical indent guides, and wrapped lines hanging at their own indent. Both answer "how wide is this leading whitespace?" and **must agree exactly** or the guides drift off the text they sit left of, so the geometry is one shared module, `indentMetrics.ts`. Widths are **measured** — the font's space advance via a canvas, not a `ch` grid — because CodeMirror forbids layout reads during an update and a proportional font has no grid.
 
 ## View mode + editor status bar
 
@@ -118,7 +152,9 @@ The composer's microphone button uses `voice/useVoiceInput.js`, which streams 16
 4. The worklet posts 4096-sample Float32 chunks back to the main thread; we convert to `Int16` and send over the WebSocket, while emitting per-chunk RMS volume for the `VoiceBars` visualization (`voice/VoiceBars.tsx`).
 5. AssemblyAI returns `Turn` messages — partials (`end_of_turn: false`) call `onPartialTranscript`; finals (`end_of_turn: true`) call `onTranscript`. The composer renders partials in a faded color and commits finals into the text.
 
-**Mic permission gotcha**: Electron prompts for microphone access on the first `getUserMedia` call and persistently grants it for the origin. The Settings → Transcription "Test microphone" button (`settings/TranscriptionSection.tsx`) exists primarily so users can trigger that one-time prompt in Settings, where they expect it — without it, the first click of the chat composer's mic would prompt mid-conversation. The "Test microphone" UI also verifies the key works end-to-end.
+`useVoiceInput` also returns `recheck` (= `fetchVoiceToken`) for the settings page, since the mount prefetch is mount-only. It resolves to the token result, so a caller can report *why* a mint failed rather than reducing it to a boolean — that's what Transcription's Verify does (see `settings/CLAUDE.md`). It carries a request guard: without one the last response to land won rather than the newest, and a request fired before the key was stored could resolve after a successful one and pin `voiceAvailable` false.
+
+**Mic permission gotcha**: Electron prompts for microphone access on the first `getUserMedia` call and persistently grants it for the origin. The Settings → Transcription "Test microphone" button (`settings/TranscriptionSection.tsx`) exists primarily so users can trigger that one-time prompt in Settings, where they expect it — without it, the first click of the chat composer's mic would prompt mid-conversation. Checking the *key* is a separate, cheaper action (Verify) and is that page's primary.
 
 ## GitHub sync (renderer side)
 
@@ -180,24 +216,11 @@ Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD
 - **`SortBar`** (above the file tree): bookmark filter toggle, quick-search opener, sort menu, collapse-all. The sort menu offers Name asc/desc, Modified new→old/old→new, Created new→old/old→new (`TREE_SORT_ORDERS` in `constants.ts`). Folders always stay first in A→Z order; the sort only re-orders files inside their folder. Sort is persisted to settings. `buildTree` in main stats every file for `mtimeMs` and `birthtimeMs` so the renderer can sort without re-statting.
 - **`QuickSearch`** (`QuickSearch.tsx`): modal launched from the sort bar. Empty query → top 10 files by the active sort order. With a query → `fuzzysort` ranks every file by workspace-relative path so typing `j/2026` finds `Journal/2026-05-24.md`. Matches are highlighted via `segmentsFromIndexes`. Arrow keys + Enter; Esc closes.
 
-## Settings sub-folder
+## Settings
 
-`SettingsModal.tsx` is the host; each section lives in `settings/` and is listed in `SETTINGS_SECTIONS` (`constants.ts`). **The modal gates every non-Companion page** until the companion is confirmed reachable — an `apiReady` state forces the Companion page and disables the other nav items ("Connect to your server first"). The gate is modal-scoped; `App.tsx` has no full-app block, it just reads settings at boot.
+`SettingsModal.tsx` is the host; every section lives in `settings/`. **Deep doc: `settings/CLAUDE.md`** — when a value saves, credential handling, verify buttons, and the per-section inventory. Read it before touching any `settings/*.tsx`.
 
-- `CompanionSection.tsx` — the companion connection every other page depends on: URL (plaintext) + API key via `window.api.settings.apiRead()` / `apiWrite()` / `apiTest({url, apiKey})`. `apiRead` returns only `{ url, hasApiKey }` — the key never comes back to the renderer (it's `safeStorage`-wrapped in main). A successful test also shows the companion's version and runs `apiCheckVersion`; `companion-older` renders an "Update companion" row opening `CompanionUpdateDialog`.
-- `CompanionUpdateDialog.tsx` (root of `src/renderer/`, rendered by both App.tsx and CompanionSection) — the remote-upgrade flow, **fire-and-forget**: confirm (versions + "in-flight Telegram/cron runs will be interrupted") → `apiUpgradeCompanion` → toast "started" → close. Completion arrives asynchronously: main watches the live feed reconnect after the companion's restart, re-checks the version, and pushes `api:companionUpdated`, which App.tsx toasts. Nothing waits or polls — an earlier version owned a poll loop behind a non-dismissable overlay, and one hung health check locked the entire app; don't reintroduce a blocking "updating…" phase. `updater-unavailable` (pre-sidecar companion) surfaces the install one-liner. App.tsx also runs a version check once on boot (mount effect): `companion-older` opens the dialog, `companion-newer` toasts "update the desktop app", everything else is silent.
-- `AppearanceSection.tsx` — theme mode, hide-line-numbers.
-- `WorkspacesSection.tsx` — the workspace list (open / rename / remove / per-row sync switch / set-up-here). "Add workspace" opens `AddWorkspaceDialog`.
-- `GitHubSection.tsx` — PAT (encrypted at rest on the companion) + `sync:verifyPat`, sync interval, `sync:checkGit` presence check.
-- `AddWorkspaceDialog.tsx` — the one way to add a workspace. **The folder is asked FIRST**, because it decides what's left to ask: `workspace:inspectFolder` classifies it as `clone` (already a checkout — the repo is known, so only a name is needed), `empty` (the Create new / Clone existing choice appears), or `occupied` (refused). That's why there's no "adopt existing folder" mode to hunt for — it's just what happens when you pick a folder that already is one.
-- `TranscriptionSection.tsx` — AssemblyAI API key + "Test microphone" button (see Voice input above).
-- `AgentChatSection.tsx` — provider, model, and a **per-provider API key map** (`codingAgent.providerKeys`, a `MAP_KEY` in `settingsDiff.js`, so a whole map travels on save), plus reasoning level (`agent:listThinkingLevels`) and, for openai-compatible, an endpoint check (`agent:validateConnection`). The system prompt isn't editable here — it's assembled from the workspace's `SOUL.md` + the helper (see `agent-core/CLAUDE.md`); the section points users at `SOUL.md` / `AGENTS.md`. Provider + model lists come from `agent:listProviders` / `agent:listModels`.
-- `AgentSecretsSection.tsx` — two credential kinds. **Static tokens** (`Add token`): `{name, description, token}`, edited inline. **OAuth connections** (`Connect account`): a provider `Select` (from `oauth:listPresets`) + a dependent **Setup** `Select` of curated scope bundles (`preset.setups`, e.g. "Gmail — read") that fills the always-editable scopes field + client id/secret; submit persists the connection then kicks `oauth:startConnect` (system browser). Reconnect/expired reuse the stored config, so re-auth needs no re-typing. Rows show a `StatusBadge` + Connect/Reconnect + Disconnect. Names unique case-insensitive; all secret material encrypted at rest **on the companion**. The OAuth connect/disconnect writes tokens on the companion, so the section calls `onReload` (→ `useSettings.reloadAgentSecrets`) to refresh status **without** re-persisting (which would clobber the companion-written tokens).
-- `WorkspaceSkillsSection.tsx` ("Manage Skills") — per-workspace: import a `SKILL.md`-bearing folder into the workspace, and toggle each **built-in** skill on/off for this workspace (the `builtinSkills` map, absent ⇒ enabled, via `workspaceSettings:update`). Replaces the old global/workspace skills tabs.
-- `TemplatesSection.tsx` — per-workspace template folder. `DailyNoteSection.tsx` — daily-note format + target folder (also per-workspace). Both persist via `workspaceSettings:update`, not global settings.
-- `CronSection.tsx` — the cron master toggle + windows (opens the cron panel). `TelegramSection.tsx` — connect/disconnect the Telegram bot + a workspace picker for where its messages run (`telegram:*`; the companion owns it). `UpdatesSection.tsx` — auto-update status (`useAppUpdate`). `AdvancedSection.tsx` — maintenance actions (e.g. rebuild the link cache).
-
-The modal's title-bar shows a small `Saving…` / `Saved` / `Save failed` badge driven by `saveStatus` in `App.tsx` (`persistSettings` increments an in-flight counter so overlapping writes don't flash `saved` early). The save badge fades back to idle 1.5s after the last write completes.
+One piece lives out here because two callers render it: **`CompanionUpdateDialog.tsx`** (root of `src/renderer/`, rendered by both `App.tsx` and `CompanionSection`) — the remote-upgrade flow, **fire-and-forget**: confirm (versions + "in-flight Telegram/cron runs will be interrupted") → `apiUpgradeCompanion` → toast "started" → close. Completion arrives asynchronously: main watches the live feed reconnect after the companion's restart, re-checks the version, and pushes `api:companionUpdated`, which App.tsx toasts. Nothing waits or polls — an earlier version owned a poll loop behind a non-dismissable overlay, and one hung health check locked the entire app; don't reintroduce a blocking "updating…" phase. `updater-unavailable` (pre-sidecar companion) surfaces the install one-liner. App.tsx also runs a version check once on boot (mount effect): `companion-older` opens the dialog, `companion-newer` toasts "update the desktop app", everything else is silent.
 
 ## Theme & design tokens
 
@@ -220,14 +243,14 @@ shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest 
 - `ErrorMessage.tsx` — shadcn Alert (destructive) banner.
 - `QuickSearch.tsx` — cmdk Command in a Dialog; fuzzysort does the ranking (`shouldFilter={false}`).
 - `Combobox.tsx` / `settings/FolderCombobox.tsx` — custom input + filtered listbox (freeForm typing), Tailwind-styled.
-- Toasts: `sonner` `<Toaster>` mounted in `App.tsx` OUTSIDE the `.app` grid (a stray grid child adds an implicit row and squeezes the layout). Use `toast()` for background events only; inline errors stay `ErrorMessage`.
+- Toasts: `sonner` `<Toaster>` mounted in `App.tsx`, anchored bottom-right of the editor pane — over the content being read, not the chat column. Two placement constraints, both learned: it must **not** be a direct child of the `.app` grid (a stray grid child adds an implicit row and squeezes the layout), and it must **not** live inside a scroller (its own class swaps sonner's `fixed` for `absolute`, so an `overflow-y-auto` ancestor would scroll it away with the content). Its containing block is therefore a `relative`, non-scrolling wrapper. Use `toast()` for background events only; inline errors stay `ErrorMessage`.
 
 ## UI conventions (read before building any new dialog / settings page)
 
 **Everything new is Tailwind + shadcn.** Compose `components/ui/*` primitives; style with Tailwind utilities against the semantic tokens (`bg-background`, `text-muted-foreground`, `border-border`, `bg-selected`, `bg-raise`, …). Never hardcode hex colors, never use `dark:` overrides for colors the tokens already handle, no `style={{}}` for colors/borders/fonts.
 
 **Templates:**
-- New settings section → copy `settings/AppearanceSection.tsx`: `<SettingsSection title description>` + `<SettingsGroup title>` per concern + `<SettingsDivider />` between groups (scaffolding in `settings/SectionUI.tsx`, 360px measure; pass `wide` for entity lists). Controls: shadcn `Field`/`FieldLabel`/`FieldDescription`, `Input`, `InputGroup` (Show/Hide, Verify addons), `Select`, `Checkbox`, `Switch`, `Slider`, `Button`. Wire into `SettingsModal.tsx`'s NAV + `SETTINGS_SECTIONS` in `constants.ts`.
+- New settings section → copy `settings/AppearanceSection.tsx`: `<SettingsSection title description>` + `<SettingsGroup title>` per concern + `<SettingsDivider />` between groups (scaffolding in `settings/SectionUI.tsx`, 360px measure; pass `wide` for entity lists). Controls: shadcn `Field`/`FieldLabel`/`FieldDescription`, `Input`, `Select`, `Checkbox`, `Switch`, `Slider`, `Button` — and `settings/CredentialRow.tsx` for anything holding a secret. (`InputGroup` is vendored but no longer used by anything; it was how credential fields carried addons, and that shape is what `CredentialRow` replaced.) Wire into `SettingsModal.tsx`'s NAV + `SETTINGS_SECTIONS` in `constants.ts`.
 - New modal dialog → shadcn `Dialog`/`DialogContent`/`DialogHeader`/`DialogFooter` (or the legacy-API `Dialog.tsx` wrapper); confirms → `ConfirmDialog`. Footer buttons: `Button` (default = primary, `variant="outline"` = cancel, `variant="destructive"` = irreversible).
 - **Button hierarchy: EXACTLY ONE primary (blue, default variant) per settings page / dialog** — the page's main action. Every settings page has one; a page whose fields all auto-save still has the action you came there to take (GitHub → Verify, Transcription → Verify, Agent → Test, Companion → Connect). Where a page has both a credential check and a wider end-to-end test, **the credential check is the primary** — Transcription's "Test microphone" has the bigger side effect (it triggers Electron's one-time mic permission prompt) but nothing on the page means anything until the key is known good. Secondary actions are `outline` (white), row icons `ghost`.
 - **`destructive` (red) is for removing something, and nothing else.** Every credential field's Remove uses it. It is not a "careful" style — approving a changed certificate is dangerous and is still not red, because it destroys nothing.
@@ -240,73 +263,10 @@ shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest 
   eleven Selects inherited the overlay; the one author who hit it patched their own
   call site instead of the default, which is why it survived.
 
-**When a setting saves — one rule, no Save buttons.** An audit found six different
-save models across fourteen sections, so these are now fixed:
-
-- **Text / password / number inputs commit on BLUR**, via `useCommitField`
-  (`settings/useCommitField.ts`). Never write per keystroke: each keystroke is a
-  round-trip to the companion, and anything with a side effect re-fires it too.
-  The GitHub PAT hit this first (typing a token did ~90 writes *and* ~90 sync-engine
-  restarts, against 90 half-tokens); the AssemblyAI key hit it a second way, where
-  each write re-armed the "is this key usable?" check and a stale failure landing
-  last left the Test button dead until you left the page. `useCommitField` also
-  **flushes on unmount**, which is what makes having no Save button safe — closing
-  the modal mid-edit can't drop the value.
-- **Credential fields are WRITE-ONLY** (`settings/credentialField.ts`). The
-  renderer never receives a credential value — main strips every one before the
-  settings object crosses IPC and substitutes a presence flag (`hasPat`,
-  `hasApiKey`, `hasProviderKey`), so a field with something stored renders as
-  dots and one with nothing stored reads `Paste your key` — the placeholder is
-  the only thing that can carry that, since the box is always empty on render
-  (`credentialPlaceholder`). There are no Show buttons; they could only ever
-  reveal what you had just typed. Which fields these are is
-  declared once in `agent-core/credentials.js` — see the root `CLAUDE.md`.
-  Two guards against the obvious hazard, because a write-only field means the
-  cache holds no value to re-send: **the renderer never sends an empty
-  credential** (`settingsDiff.js` drops it), and the companion no longer deletes
-  a credential merely absent from a save. Without both, editing an unrelated
-  field — a sync interval — would delete your GitHub token.
-- **Every credential box is a `CredentialRow`** (`settings/CredentialRow.tsx`),
-  and its **actions go BELOW the input, never beside it**. Beside was the old
-  shape and it made the field's width a function of state: the buttons are
-  conditional (Remove only once something is stored, Test only for
-  openai-compatible) and their labels grow mid-action, so the GitHub PAT measured
-  280px empty, 186px with a token stored, and 153px while Verify said
-  "Verifying…" — it moved under the cursor as you used it. Reserving a slot
-  can't fix that either: "Verifying…" + "Removing…" is 216px of the 360px
-  measure. The row takes its width from its container and **never** from a
-  per-call-site class — that's what keeps the six equal. A dialog hosting one
-  sets `className="sm:max-w-[408px]"` (= 360px content + `p-6`) so it matches the
-  settings measure; the Agent Secrets dialogs were 464px before. Never wrap a
-  credential in `InputGroup` — with no addon it's a no-op, and Telegram's had an
-  *empty* inline-end addon that silently ate 8px of text column.
-- **Toggles, dropdowns, comboboxes and sliders commit on change** (sliders on
-  `onValueCommit`). There's no partial state to protect.
-- **Everything goes through the section's `on*Change` prop → `persistSettings`.**
-  Never call `window.api.settings.write` from a section: it skips the Saving/Saved
-  badge and leaves `settingsRef` stale, so a later diffed save computes its patch
-  against a value the server already moved past. (Cron's timezone did exactly this.)
-- **No Save buttons.** A button in Settings means an *action* — Telegram's
-  Connect (registers a webhook), Agent Secrets' Add, Workspaces' Add, Advanced's
-  Rebuild, the Companion cert Trust. Not "write this form down." Companion used to
-  have Save *and* Test, and Test said "Connected." while storing nothing — the
-  button that reported success was the one that persisted nothing.
-- **A validate/verify step must never be the only thing that saves**, and must not
-  be required to save. A Verify/Connect button is fine — it's an action — it just
-  can't be load-bearing for persistence. Companion is the worked example: fields
-  store on blur, **Connect** probes, **Approve** trusts the certificate. Storing
-  is not connecting, and neither Connect nor page-open can grant trust (see
-  "Companion TLS" in `src/main/CLAUDE.md`). Editing either field drops the status
-  row back to "not connected" — this page gates every other page, so it must
-  never show a green line for details that have since changed.
-- **Placeholders are format examples, never lookalikes for a real value.**
-  `github_pat_…`, `123456:ABC-DEF…`, `https://203.0.113.10`. Companion's key hint
-  was `••••••••`, which a masked input is indistinguishable from — so pasting a key
-  looked like it had done nothing.
-- **Concurrent commits need a request guard.** Blur two fields in a row and two
-  checks are in flight; without a monotonic request id the *last response* wins
-  rather than the newest request. Both `CompanionSection` and `useVoiceInput` carry
-  one.
+**When a setting saves — one rule, no Save buttons.** Inputs commit on blur, everything
+else on change, there are no Save buttons, and credential fields are write-only. The full
+policy — and the bugs each rule exists to prevent — is in **`settings/CLAUDE.md`**. Read it
+before adding a field, a verify button, or anything that holds a credential.
 
 **Other rules that still hold:**
 - Labels describe the control, not the section ("Color theme", not "Theme" again).

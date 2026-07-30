@@ -26,6 +26,8 @@ Six services (postgres, api, traefik-config, traefik, updater, autoheal):
 - **api** — built from the **repo root** (`context: ..`, `dockerfile: api/Dockerfile`) so the build can pull in `../agent-core`. Bound to **`127.0.0.1:8080` only** — localhost, never a public surface. Reaches Postgres over the compose net. Shares the `traefik-dynamic` volume (writes a self-signed cert + `tls.yml` there in self-signed mode).
 - **traefik-config** (`alpine`, `restart: no`) — one-shot sidecar; `gen-router.sh` writes the Traefik dynamic router from `$COMPANION_DOMAIN`, then exits.
 - **traefik** (`traefik:v3.3`) — the **only** public surface; `:80`→`:443`, terminates TLS, reverse-proxies to `http://api:8080`. Self-signed by default; real Let's Encrypt when `COMPANION_DOMAIN` is a domain.
+- **updater** (`docker:27-cli` + `updater/watch.sh`) — the remote-upgrade sidecar. Holds the docker socket and has **deliberately zero network surface**: its trigger is a file on the `updater-trigger` volume, not a listener. See "Remote upgrade" above.
+- **autoheal** (`willfarrell/autoheal`) — restarts any container labeled `autoheal=true` (today: `api`) once Docker marks it unhealthy, via the api's Dockerfile `HEALTHCHECK`. Compose's own `restart:` policy only covers a *crashed* process, not a wedged one, and there is no operator on the box to notice a companion that stopped answering.
 
 **Three exposure modes:** (a) localhost dev on `127.0.0.1:8080`; (b) public via Traefik TLS on `:443` — self-signed cert for `COMPANION_HOST` with no domain, Let's Encrypt with `COMPANION_DOMAIN`; (c) **ngrok raw tunnel** straight to `127.0.0.1:8080` (ngrok brings its own trusted cert, so set `COMPANION_DOMAIN` to the ngrok host and Traefik/self-signed is bypassed).
 

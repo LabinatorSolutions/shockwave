@@ -42,7 +42,8 @@ Electron app with a Vite + React 19 renderer. The renderer is a markdown-workspa
 | Area | File(s) | Deep doc |
 |---|---|---|
 | Main-process internals (watcher, IPC, settings, app://, coding agent, voice token, GitHub sync engine) | `src/main/*.ts` | `src/main/CLAUDE.md` |
-| Renderer internals (hooks, editor decorations, chat sidebar, voice, bookmarks, daily notes, quick search, sync UI) | `src/renderer/**` | `src/renderer/CLAUDE.md` |
+| Renderer internals (hooks, editor decorations, file tree, chat sidebar, voice, bookmarks, daily notes, quick search, sync UI) | `src/renderer/**` | `src/renderer/CLAUDE.md` |
+| Settings pages (when a value saves, credential fields, per-section inventory) | `src/renderer/settings/**` | `src/renderer/settings/CLAUDE.md` |
 | Companion server (settings/secrets/chats storage, server-side agent for Telegram + cron, Docker deploy) | `api/**` | `api/CLAUDE.md` |
 | Shared coding-agent runtime (pi wrapper — bundled into BOTH the desktop and the companion) | `agent-core/**` | `agent-core/CLAUDE.md` |
 | GitHub sync (merge-based; in-app conflict resolution) | `src/main/sync.ts`, `src/main/syncEngine.ts`, `src/renderer/settings/WorkspacesSection.tsx`, `src/renderer/settings/AddWorkspaceDialog.tsx`; conflict view in `src/renderer/{App.tsx, SortBar.tsx, FileTree.tsx}` | "GitHub sync" sections in both subdocs |
