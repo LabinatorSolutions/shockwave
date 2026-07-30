@@ -69,6 +69,24 @@ SHOCKWAVE_TAG="$TAG" docker compose --project-directory "$COMPANION_DIR" -f "$ST
   || { echo "apply: image pull failed — aborting, nothing changed"; exit 1; }
 echo "apply: image pulled"
 
+# ── 2.5 Backfill env vars this release requires (migration shim) ────────────
+# COMPANION_HOST (the self-signed TLS identity) is required from v1.0.23 in
+# self-signed mode; boxes installed before then don't have it and would fail
+# boot after the upgrade. Resolve it exactly like install.sh does. Additive
+# and ignored by the old version, so writing it before the file move is safe —
+# and an unresolvable IP aborts with the running stack fully untouched.
+if ! grep -q '^COMPANION_DOMAIN=..*' "$ENV_FILE" && ! grep -q '^COMPANION_HOST=..*' "$ENV_FILE"; then
+  command -v curl >/dev/null 2>&1 || apk add --no-cache --quiet curl
+  IP=$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)
+  case "$IP" in *[0-9].[0-9]*) ;; *) IP="" ;; esac
+  [ -n "$IP" ] || { echo "apply: cannot resolve this server's public IP for COMPANION_HOST — aborting, nothing changed"; exit 1; }
+  grep -v '^COMPANION_HOST=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+  echo "COMPANION_HOST=$IP" >> "$ENV_FILE.tmp"
+  chmod 600 "$ENV_FILE.tmp"
+  mv "$ENV_FILE.tmp" "$ENV_FILE"
+  echo "apply: COMPANION_HOST=$IP backfilled"
+fi
+
 # ── 3. Move files into place ────────────────────────────────────────────────
 for f in $FILES; do
   mkdir -p "$COMPANION_DIR/$(dirname "$f")"
