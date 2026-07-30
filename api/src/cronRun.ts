@@ -9,7 +9,7 @@ import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
-import { prepareCheckout, checkIn, syncAndPush } from './git.js';
+import { prepareCheckout, checkIn, syncAndPush, type GitAuth } from './git.js';
 import { gitFix } from './gitFixer.js';
 
 export interface CronRunResult { chatId: string; checkIn: string; }
@@ -24,6 +24,10 @@ export async function runCronJob(
   if (!w) throw new Error(`Unknown workspace ${workspaceId}`);
   const pat = await store.getSecret(db, key, 'settings', 'sync.pat');
   if (!pat) throw new Error('No sync PAT configured — cannot clone the workspace.');
+  // Carried together so every network git call is pinned to THIS repo — the URL
+  // is set from it on the command line rather than read from a .git/config the
+  // agent can rewrite. See guards() in git.ts.
+  const auth: GitAuth = { pat, owner: w.repoOwner, repo: w.repoName };
 
   // Reuse-or-clone the checkout (reset to origin if it existed). Kept after the
   // run; the TTL sweeper reclaims idle dirs.
@@ -74,7 +78,7 @@ export async function runCronJob(
   }
 
   const stamp = new Date().toISOString();
-  let result = await checkIn(dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, pat);
+  let result = await checkIn(dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, auth);
   // Deterministic path couldn't resolve it → hand to the git-fixer agent. It
   // resolves and commits with no credentials of its own; the push is ours,
   // after it verifies clean (see gitFixer.ts).
@@ -82,7 +86,7 @@ export async function runCronJob(
     const fixed = await gitFix(dir, w.defaultBranch, {
       provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl,
     });
-    result = fixed ? await syncAndPush(dir, w.defaultBranch, pat) : 'conflict';
+    result = fixed ? await syncAndPush(dir, w.defaultBranch, auth) : 'conflict';
   }
 
   // A turn can end badly WITHOUT throwing: pi reports it as the last assistant

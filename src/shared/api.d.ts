@@ -282,8 +282,16 @@ export interface ShockwaveApi {
      *  -> the updater sidecar). `updater-unavailable` = pre-sidecar deployment;
      *  the user must re-run the install script once. */
     apiUpgradeCompanion(): Promise<{ ok: boolean; error?: string }>;
+    /** Remove a stored credential by settings path (`sync.pat`,
+     *  `transcription.apiKey`, `codingAgent.providerKeys.<slug>`).
+     *
+     *  Its own call because the renderer is never given credential VALUES, so an
+     *  empty field can't mean "delete this" — every credential it holds reads as
+     *  empty and is stripped from saves on purpose. Deleting is explicit. */
+    deleteCredential(path: string): Promise<{ ok: boolean; error?: string }>;
     /** Approve a companion certificate the user has been shown. The only path
-     *  that stores one. */
+     *  that stores one. Refuses any fingerprint main didn't itself read off the
+     *  configured server — the value on screen is the only approvable value. */
     approveCert(fingerprint: string): Promise<{ ok: boolean; error?: string }>;
     /** Un-approve the stored companion certificate. */
     forgetCert(): Promise<{ ok: boolean }>;
@@ -335,7 +343,13 @@ export interface ShockwaveApi {
     listProviders(): Promise<Array<{ slug: string; label: string }>>;
     listModels(provider: string): Promise<Array<{ id: string; label: string }>>;
     listThinkingLevels(opts: { provider: string; model: string }): Promise<string[]>;
-    validateConnection(opts: { baseUrl: string; apiKey?: string }): Promise<{ ok: boolean; models?: string[]; error?: string }>;
+    /** Probe an openai-compatible `{baseUrl}/models`.
+     *
+     *  `apiKey` is what's typed in the box, which is normally empty — the renderer
+     *  is never given key values. Pass `provider` so main can fall back to the
+     *  stored key; without it, testing a saved endpoint runs unauthenticated and
+     *  reports a 401 for a setup that works. */
+    validateConnection(opts: { baseUrl: string; apiKey?: string; provider?: string }): Promise<{ ok: boolean; models?: string[]; error?: string }>;
     /** Every event is stamped with the chatId of the chat it belongs to. */
     onEvent(cb: (evt: unknown) => void): Unsubscribe;
     onError(cb: (payload: { chatId?: string; message: string }) => void): Unsubscribe;

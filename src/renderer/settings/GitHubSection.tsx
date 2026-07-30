@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { credentialPlaceholder } from './credentialField';
+import { credentialPlaceholder, removeCredential } from './credentialField';
 import ErrorMessage from '../ErrorMessage.jsx';
 
 // GitHub — the account and the machine, i.e. everything that is NOT per
@@ -82,8 +82,11 @@ export default function GitHubSection({ sync, onSyncChange }) {
   // a green "Signed in as X" beside a token that was never checked.
   const verifyReq = useRef(0);
   const onVerify = async () => {
+    // Empty draft is not "nothing to do" — it's the normal state, because the
+    // renderer is never given the stored token. Main verifies the saved one when
+    // nothing is typed; returning early here is what made Verify dead for anyone
+    // who already had a token.
     const value = patDraft.trim();
-    if (!value) return;
     const req = ++verifyReq.current;
     setVerifyState({ status: 'checking' });
     const res = await window.api.sync.verifyPat(value);
@@ -102,6 +105,21 @@ export default function GitHubSection({ sync, onSyncChange }) {
 
   const commitPat = () => {
     if (patDraft) { updateSync({ pat: patDraft }); setPatDraft(''); }
+  };
+
+  // Removing the token is a separate call from saving one — see removeCredential.
+  // The `hasPat` flag comes back through `settings:changed`, so the field and this
+  // button update themselves once main confirms.
+  const [removing, setRemoving] = useState(false);
+  const onRemovePat = async () => {
+    setRemoving(true);
+    try {
+      const r = await removeCredential('sync.pat');
+      if (!r?.ok) setVerifyState({ status: 'error', error: r?.error || 'Could not remove the token.' });
+      else { setPatDraft(''); setVerifyState({ status: 'idle' }); }
+    } finally {
+      setRemoving(false);
+    }
   };
 
   // Clamped here as well as on the slider: the engine clamps to this same range
@@ -134,9 +152,23 @@ export default function GitHubSection({ sync, onSyncChange }) {
               autoCorrect="off"
               placeholder={credentialPlaceholder(hasPat)}
             />
-            <Button variant="outline" onClick={onVerify} disabled={!patDraft.trim() || verifyState.status === 'checking'}>
+            {/* This page's one primary: checking the token is the action you come
+                here to take. Enabled whenever there is something to check —
+                either typed here or already stored. Gating it on the draft alone
+                disabled it forever, since the draft is empty unless you're
+                mid-edit. */}
+            <Button onClick={onVerify} disabled={(!patDraft.trim() && !hasPat) || verifyState.status === 'checking'}>
               {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
             </Button>
+            {/* Only route that removes a stored token — clearing the box can't, by
+                design. Destructive styling because sync stops until a new one is
+                entered, and because a token you delete here is one you probably
+                need to revoke on GitHub too. */}
+            {hasPat && (
+              <Button variant="destructive" onClick={onRemovePat} disabled={removing}>
+                {removing ? 'Removing…' : 'Remove'}
+              </Button>
+            )}
           </div>
           <FieldDescription className="text-xs">
             Needs <code className="font-mono">Contents: Read and write</code>, plus{' '}

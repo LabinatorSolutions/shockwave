@@ -18,3 +18,18 @@ const DOTS = '•'.repeat(40);
 export function credentialPlaceholder(saved: boolean): string {
   return saved ? DOTS : 'Paste your key';
 }
+
+/**
+ * Remove the stored credential at `path`.
+ *
+ * Typing replaces; this is the only way to remove. Clearing the box can't do it —
+ * the renderer holds no credential values, so every credential it sends reads as
+ * empty and empty ones are stripped from saves deliberately, to stop an unrelated
+ * edit wiping your keys. Without this there was no way to revoke a leaked key from
+ * the app at all.
+ *
+ * `settings:changed` fires from main, so the field's `has*` flag updates itself.
+ */
+export function removeCredential(path: string): Promise<{ ok: boolean; error?: string }> {
+  return window.api.settings.deleteCredential(path);
+}

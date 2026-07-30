@@ -2,10 +2,11 @@ import React, { useEffect, useState } from 'react';
 import Combobox from '../Combobox.jsx';
 import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
 import { useCommitField } from './useCommitField';
-import { credentialPlaceholder } from './credentialField';
+import { credentialPlaceholder, removeCredential } from './credentialField';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -13,12 +14,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from '@/components/ui/input-group';
 
 // Our generic OpenAI-compatible endpoint slug (Ollama, LM Studio, vLLM, gateways).
 const COMPATIBLE_SLUG = 'openai-compatible';
@@ -33,7 +28,7 @@ const THINKING_LABELS: Record<string, string> = {
   xhigh: 'Extra high',
 };
 
-function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextWindow, thinkingLevel, onChange, onKeyChange }) {
+function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextWindow, thinkingLevel, onChange, onKeyChange, onRemoveKey }) {
   const [providers, setProviders] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([]);
@@ -98,9 +93,15 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
       // Drafts, not the stored props: clicking Test blurs the input, which
       // commits, but that write is async — the props are still one edit behind
       // at this point. The drafts are always the freshest values on screen.
+      //
+      // `provider` lets main fall back to the STORED key when nothing is typed.
+      // The key box is write-only, so it's empty unless you're mid-edit — sending
+      // only the draft meant Test ran unauthenticated against a saved endpoint and
+      // reported a 401 for a setup that works.
       const result = await window.api.agent.validateConnection({
         baseUrl: baseUrlField.value,
         apiKey: keyField.value,
+        provider,
       });
       if (result.ok) {
         setValidateState('ok');
@@ -122,11 +123,8 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
     }
   };
 
-  const validateLabel = validateState === 'loading' ? '…'
-    : validateState === 'ok' ? '✓'
-      : validateState === 'error' ? '✗'
-        : 'Test';
-
+  // The ✓/✗ glyphs the old addon-sized button used are gone — the result now
+  // reads in `validateMsg` under the field, which has room for the actual reason.
   return (
     <>
       <Field>
@@ -249,10 +247,15 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
         <FieldLabel htmlFor={`${idPrefix}-key`}>
           API key{isCompatible ? ' (optional for local)' : ''}
         </FieldLabel>
-        <InputGroup>
-          <InputGroupInput
+        {/* Credential row shape, identical in every section: the field grows, its
+            buttons sit to the right of it, outside. Remove used to live INSIDE
+            this one's input group while GitHub's and Transcription's sat outside,
+            so the same control appeared in two different places depending on which
+            page you were on. */}
+        <div className="flex gap-2">
+          <Input
             id={`${idPrefix}-key`}
-            className="font-mono"
+            className="flex-1 font-mono"
             type="password"
             placeholder={credentialPlaceholder(hasKey)}
             value={keyField.value}
@@ -262,22 +265,29 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
             autoComplete="off"
             autoCorrect="off"
           />
-          <InputGroupAddon align="inline-end">
-            {/* Test is openai-compatible only: it probes {baseUrl}/models, which is
-                uniform for OpenAI-style endpoints. Cloud providers have non-uniform
-                /models paths + auth, and pi already supplies their model lists, so
-                their keys just validate on first message. */}
-            {isCompatible && (
-              <InputGroupButton
-                onClick={handleValidate}
-                disabled={validateState === 'loading' || !baseUrlField.value}
-                title="Test connection (GET /models)"
-              >
-                {validateLabel}
-              </InputGroupButton>
-            )}
-          </InputGroupAddon>
-        </InputGroup>
+          {/* Primary because it's the one ACTION on this page — but it only exists
+              for openai-compatible, so on a cloud provider this page has no
+              primary. Cloud keys have nothing to probe here: /models paths and auth
+              differ per provider, and pi already supplies their model lists, so
+              those keys validate on the first message instead. */}
+          {isCompatible && (
+            <Button
+              onClick={handleValidate}
+              disabled={validateState === 'loading' || !baseUrlField.value}
+              title="Test connection (GET /models)"
+            >
+              {validateState === 'loading' ? 'Testing…' : 'Test'}
+            </Button>
+          )}
+          {/* Only route that removes a stored key — clearing the box can't, by
+              design (see removeCredential). Per provider: removing Anthropic's key
+              leaves the others alone. */}
+          {hasKey && (
+            <Button variant="destructive" onClick={() => onRemoveKey?.()}>
+              Remove
+            </Button>
+          )}
+        </div>
         {isCompatible && validateMsg && (
           <p className={validateState === 'error' ? 'text-xs text-destructive' : 'text-xs text-success'}>
             {validateMsg}
@@ -308,6 +318,9 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   // as complete (see reconcileProviderKeys), so other providers' keys are untouched
   // and there is no need to hold — or resend — any of them.
   const updateKey = (value) => { if (value) updateCa({ providerKeys: { [caProvider]: value } }); };
+  // Removing is its own call — an empty value can't carry the intent, because the
+  // renderer never holds key values and empty ones are stripped from saves.
+  const removeKey = () => removeCredential(`codingAgent.providerKeys.${caProvider}`);
 
   return (
     <SettingsSection
@@ -325,6 +338,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
           thinkingLevel={caThinkingLevel}
           onChange={updateCa}
           onKeyChange={updateKey}
+          onRemoveKey={removeKey}
         />
       </SettingsGroup>
     </SettingsSection>

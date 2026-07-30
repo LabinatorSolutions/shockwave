@@ -32,8 +32,14 @@ export function cloneUrlFor(owner, repo) {
   return `https://github.com/${owner}/${repo}.git`;
 }
 
-// Minimal git runner. `sync.ts` has a richer one (PAT via GIT_ASKPASS, timeouts,
-// SIGKILL) but nothing here authenticates — these are local reads only.
+// Minimal git runner. `sync.ts` has a richer one (PAT in the child env, guards,
+// timeouts, SIGKILL) but nothing here authenticates — these are local reads only.
+//
+// Deliberately still spawns by bare name, where sync.ts resolves an absolute path
+// (gitBinary.ts) to keep the agent's shim dir on PATH from substituting its own
+// `git`. That matters there because the child holds GITHUB_PAT; here no credential
+// is ever in the environment, so a substituted binary would learn nothing. Keeping
+// it dependency-free is what lets `node --test` load this module directly.
 function git(cwd, args) {
   return new Promise((resolve) => {
     let stdout = '';

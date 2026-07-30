@@ -100,3 +100,26 @@ export function setPathCopy(obj, path, value) {
 export function isSet(v) {
   return typeof v === 'string' ? v.length > 0 : v != null;
 }
+
+/**
+ * Is `path` a credential the user is allowed to delete?
+ *
+ * Deleting needs its own route. An empty value means DELETE on the companion, but
+ * the renderer holds no credential values any more, so every credential it sends
+ * reads as empty — `dropEmptyCredentials` therefore strips them all, and an empty
+ * box can no longer mean "remove this". Correct, and it left no way to remove one
+ * at all: clearing the field did nothing and the old value stayed on the server,
+ * so a leaked key could not be revoked from the app.
+ *
+ * The allowlist is this same declaration, so a deletable path can't drift from a
+ * credential path, and `settings:deleteCredential` can't be pointed at an
+ * arbitrary settings key.
+ *
+ * Accepts the wildcard leaf too (`codingAgent.providerKeys.anthropic`).
+ */
+export function isDeletableCredential(path) {
+  if (typeof path !== 'string' || !path) return false;
+  return SETTINGS_CREDENTIALS.some((c) => (c.wildcard
+    ? path.startsWith(`${c.path}.`) && path.slice(c.path.length + 1).split('.').length === 1
+    : path === c.path));
+}

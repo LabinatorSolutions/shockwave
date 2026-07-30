@@ -45,7 +45,7 @@ import crypto from 'node:crypto';
 import { readApiConfig, writeApiConfig } from './config.js';
 // The decision itself is pure and unit-tested — see certPolicy.js. This file is
 // only the Electron wiring around it.
-import { decideCert, toDisplayFingerprint, pendingApplies, DECISION } from './certPolicy.js';
+import { decideCert, toDisplayFingerprint, pendingApplies, mayApprove, DECISION } from './certPolicy.js';
 
 // Chromium's verify-proc reply codes.
 const CB_USE_CHROMIUM = -3;
@@ -177,7 +177,13 @@ export function readServerCert(url: string, timeoutMs = 6_000): Promise<SeenCert
       // verdict, not the enforcement. Without it a domain with a perfectly good
       // certificate would be offered for approval, since nothing is pinned for
       // those and any fingerprint would look unapproved.
-      done({ host, offered: (hex.match(/../g) ?? []).join(':'), trusted: socket.authorized });
+      const seen: SeenCert = {
+        host, offered: (hex.match(/../g) ?? []).join(':'), trusted: socket.authorized,
+      };
+      // Record what we read. This — not the renderer's word for it — is what
+      // approveFingerprint will accept later.
+      lastShown = seen;
+      done(seen);
     });
     socket.once('timeout', () => done(null));
     socket.once('error', () => done(null));
@@ -186,10 +192,27 @@ export function readServerCert(url: string, timeoutMs = 6_000): Promise<SeenCert
 
 export function clearPendingCert(): void { pendingApproval = null; }
 
-/** Approve a fingerprint the user has just been shown. The ONLY writer of the pin. */
-export function approveFingerprint(fingerprint: string): void {
+// The last certificate main actually READ off a server and put in front of the
+// user. Approving is only allowed to pin this exact value, for this exact host —
+// see mayApprove in certPolicy.js for why the UI showing it isn't enough.
+let lastShown: SeenCert | null = null;
+
+/** What main last displayed for approval, if anything. */
+export function shownCert(): SeenCert | null { return lastShown; }
+
+/**
+ * Approve a fingerprint the user has just been shown. The ONLY writer of the pin.
+ *
+ * Refuses anything that isn't the fingerprint main last read off the configured
+ * host. Returns false when it refuses, so the caller reports rather than pretending
+ * something was stored.
+ */
+export function approveFingerprint(fingerprint: string): boolean {
+  const host = hostOf(readApiConfig().url);
+  if (!mayApprove(lastShown, host, fingerprint)) return false;
   writeApiConfig({ certFingerprint: fingerprint });
   clearPendingCert();
+  return true;
   // No explicit retire: getCompanionSession() compares the live session against
   // the stored pin and retires on any difference. One mechanism, so a future
   // caller that changes the pin can't forget to invalidate the cached verdict —

@@ -29,12 +29,18 @@ import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeW
 import { installOpenFileBridge } from './openFileExtension.js';
 import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, PROVIDER_PRESETS } from './oauth.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
+// Resolve git's absolute path BEFORE prependPath puts the agent-writable shim dir
+// first on PATH. See the call site below and gitBinary.ts.
+import { resolveGitBinary } from './gitBinary.js';
 // Settings + secrets live in the `setting` table (see settingsStore.ts). The old
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
 // encryption were replaced wholesale; the signatures here are unchanged, so
 // every call site below (and in oauth.ts / cron.ts) is untouched.
 import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
 import { readApiConfig, writeApiConfig } from './api/config.js';
+// The one declaration of which settings paths are credentials — shared with the
+// companion and the renderer. Gates settings:deleteCredential.
+import { isDeletableCredential } from '../../agent-core/credentials.js';
 import {
   approveFingerprint, forgetFingerprint, approvedFingerprint,
   onCertNeedsApproval, readServerCert, getPendingCert, hostOf,
@@ -908,6 +914,23 @@ ipcMain.handle('settings:write', async (_evt, obj) => {
   await writeSettings(obj, { notify: false });
 });
 
+// Remove a stored credential. Its own channel because an empty value can no
+// longer carry the intent: the renderer never receives credential values, so
+// everything it holds reads as empty, and `dropEmptyCredentials` strips them all
+// to stop an unrelated save wiping your keys. That left no way to remove one —
+// clearing the box did nothing and the old value stayed on the companion, so a
+// leaked key couldn't be revoked from the app.
+//
+// Deleting a credential should be an explicit act anyway, which is what this is.
+// The path is checked against the one credential declaration (agent-core), so
+// this can't be pointed at an arbitrary settings key.
+ipcMain.handle('settings:deleteCredential', async (_evt, { path: credPath }) => {
+  if (!isDeletableCredential(credPath)) return { ok: false, error: 'Not a credential.' };
+  // Empty string = delete on the companion (putSecret drops the row).
+  await writeSettings({ [credPath]: '' }, { notify: true });
+  return { ok: true };
+});
+
 // ── API connection config (URL + key) ───────────────────────────────────────
 ipcMain.handle('api:read', () => {
   const c = readApiConfig();
@@ -974,9 +997,16 @@ ipcMain.handle('api:upgradeCompanion', async () => {
 // The ONE place a certificate becomes approved: the user pressed Approve on a
 // fingerprint Settings put in front of them. Deliberately not reachable from
 // api:test — probing a connection must never be able to approve one.
+// It also refuses to pin anything main didn't itself read off the configured
+// server and show. Without that check this stored whatever string arrived, so the
+// link between the fingerprint on screen and the fingerprint saved was UI
+// convention — the same shape of unenforced policy as the certificate check that
+// used to "trust anyway". See mayApprove in certPolicy.js.
 ipcMain.handle('api:approveCert', (_evt, { fingerprint }) => {
   if (typeof fingerprint !== 'string' || !fingerprint) return { ok: false, error: 'No fingerprint provided.' };
-  approveFingerprint(fingerprint);
+  if (!approveFingerprint(fingerprint)) {
+    return { ok: false, error: 'That certificate is no longer the one being offered. Press Connect and review it again.' };
+  }
   return { ok: true };
 });
 
@@ -1206,10 +1236,19 @@ ipcMain.handle('app:restartToUpdate', () => {
 // sync".
 
 ipcMain.handle('sync:verifyPat', async (_evt, pat) => {
-  // The renderer passes the PAT explicitly (the value sitting in its draft
-  // settings form) — we don't read from settings here because the user might
-  // be verifying a token they haven't saved yet.
-  return syncVerifyPat(pat);
+  // A typed value wins — the point of verifying before saving is to check a token
+  // the user hasn't committed yet.
+  if (pat) return syncVerifyPat(pat);
+  // Nothing typed → verify the STORED one. Required now that the renderer is
+  // never given credential values: its draft is empty whenever the user isn't
+  // mid-edit, so gating Verify on the draft left the button permanently disabled
+  // for everyone who already had a token — i.e. exactly the people who'd want to
+  // check whether it still works.
+  const { settings, online, reason } = await readSettingsSafe();
+  if (!online) return { ok: false, error: reason || "Can't reach your companion server." };
+  const stored = settings.sync?.pat || '';
+  if (!stored) return { ok: false, error: 'No token saved yet.' };
+  return syncVerifyPat(stored);
 });
 
 ipcMain.handle('sync:checkGit', async () => {
@@ -1764,12 +1803,21 @@ ipcMain.handle('agent:listThinkingLevels', (_evt, { provider, model }) => {
 // providers have non-uniform /models paths + auth and pi already supplies their
 // model lists. Security: a 5s timeout (no hang), and we never echo upstream
 // response bodies back to the renderer.
-ipcMain.handle('agent:validateConnection', async (_evt, { baseUrl, apiKey }) => {
+ipcMain.handle('agent:validateConnection', async (_evt, { baseUrl, apiKey, provider }) => {
   try {
     if (!baseUrl) return { ok: false, error: 'Base URL is required' };
     const base = String(baseUrl).replace(/\/+$/, '');
+    // A typed key wins (testing before saving); otherwise fall back to the STORED
+    // one. The renderer is never given key values, so its box is empty unless the
+    // user is mid-edit — without this, testing a saved endpoint sent no key at all
+    // and reported a 401 for a configuration that works.
+    let key = apiKey;
+    if (!key && provider) {
+      const { settings } = await readSettingsSafe();
+      key = settings.codingAgent?.providerKeys?.[provider] ?? '';
+    }
     const headers: Record<string, string> = {};
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    if (key) headers['Authorization'] = `Bearer ${key}`;
 
     const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(5000) });
     if (!res.ok) return { ok: false, error: `HTTP ${res.status} ${res.statusText}` };
@@ -2173,6 +2221,12 @@ installOpenFileBridge(async (relPath) => {
   try {
     const binDir = path.join(app.getPath('userData'), 'pi-agent', 'bin');
     const { made } = await ensureCliShims({ cliToolsDir: cliToolsDir(), binDir, execPath: process.execPath });
+    // BEFORE prependPath, and that ordering is the entire point. `binDir` is
+    // writable by the agent (same user), and prependPath puts it FIRST — so from
+    // the next line on, `spawn('git', …)` would run whatever the agent chose to
+    // name `git`, with GITHUB_PAT in its environment. Resolve now, while PATH is
+    // still the system's, and spawn the absolute path forever after. See gitBinary.ts.
+    resolveGitBinary();
     prependPath(binDir);
     // Playwright downloads its browser into a user-writable cache (no root). Point
     // it at app userData so `playwright-cli install-browser` and `open` agree on

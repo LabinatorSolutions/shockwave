@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import {
   SETTINGS_CREDENTIALS, AGENT_SECRET_CREDENTIALS,
   settingsCredentialPatterns, agentSecretFields, oauthOwnedFields,
-  getPath, deletePath, setPathCopy, isSet,
+  getPath, deletePath, setPathCopy, isSet, isDeletableCredential,
 } from '../agent-core/credentials.js';
 
 // ── the list itself ──────────────────────────────────────────────────────────
@@ -116,4 +116,41 @@ test('isSet treats an empty string as not set', () => {
   assert.equal(isSet(undefined), false);
   assert.equal(isSet(null), false);
   assert.equal(isSet(0), true, 'non-strings are set if present');
+});
+
+// ── what may be deleted ──────────────────────────────────────────────────────
+
+test('every declared credential is deletable', () => {
+  // Deleting needs its own route: the renderer holds no credential VALUES, so
+  // everything it sends reads as empty and empty ones are stripped from saves on
+  // purpose. That left no way to remove one at all — clearing the box did nothing
+  // and the old value stayed on the companion, so a leaked key couldn't be revoked
+  // from the app. The allowlist is this same declaration, so the two can't drift.
+  assert.equal(isDeletableCredential('sync.pat'), true);
+  assert.equal(isDeletableCredential('transcription.apiKey'), true);
+  assert.equal(isDeletableCredential('codingAgent.providerKeys.anthropic'), true);
+  assert.equal(isDeletableCredential('codingAgent.providerKeys.openai-compatible'), true);
+});
+
+test('a non-credential settings path is refused', () => {
+  // The handler writes an empty string straight through, so an unchecked path
+  // would let the renderer blank any setting it named.
+  assert.equal(isDeletableCredential('codingAgent.model'), false);
+  assert.equal(isDeletableCredential('sync.pullIntervalSeconds'), false);
+  assert.equal(isDeletableCredential('appearance.themeMode'), false);
+  assert.equal(isDeletableCredential('timezone'), false);
+});
+
+test('the wildcard map itself is not deletable, only its leaves', () => {
+  // 'codingAgent.providerKeys' is reconciled, not a stored leaf — deleting it as
+  // one would write an empty string over the map.
+  assert.equal(isDeletableCredential('codingAgent.providerKeys'), false);
+  assert.equal(isDeletableCredential('codingAgent.providerKeys.a.b'), false, 'one slug deep only');
+});
+
+test('junk paths are refused', () => {
+  assert.equal(isDeletableCredential(''), false);
+  assert.equal(isDeletableCredential(undefined), false);
+  assert.equal(isDeletableCredential(null), false);
+  assert.equal(isDeletableCredential(42), false);
 });

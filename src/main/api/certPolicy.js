@@ -69,6 +69,29 @@ export function toDisplayFingerprint(raw) {
 }
 
 /**
+ * May this fingerprint be pinned?
+ *
+ * Approving is meant to record the value the user just compared against
+ * `shockwave-fingerprint` on their server. Nothing enforced that: `api:approveCert`
+ * pinned whatever string arrived, so the tie between WHAT WAS SHOWN and WHAT GETS
+ * STORED was UI convention rather than a rule. Convention is exactly what "trust
+ * any certificate" was, and it survived for the same reason — nobody checked.
+ *
+ * So the rule: the only approvable fingerprint is the one main last read off the
+ * server (`readServerCert`), for the host currently configured. A stale reading,
+ * a reading from a different host, or no reading at all → refuse.
+ *
+ * @param {{host: string, offered: string}|null} shown  What main last displayed.
+ * @param {string} host         Host in the configured companion URL.
+ * @param {string} fingerprint  What the caller wants pinned.
+ */
+export function mayApprove(shown, host, fingerprint) {
+  if (!shown || !fingerprint || !host) return false;
+  if (shown.host !== host) return false;
+  return shown.offered === fingerprint;
+}
+
+/**
  * Should a parked certificate be offered for approval right now?
  *
  * There is ONE slot for it, written by any companion request including background

@@ -14,6 +14,7 @@ import {
   decideCert,
   toDisplayFingerprint,
   pendingApplies,
+  mayApprove,
   DECISION,
 } from '../src/main/api/certPolicy.js';
 
@@ -122,4 +123,33 @@ test('a stale parked certificate is not offered', () => {
 
 test('nothing parked means nothing to offer', () => {
   assert.equal(pendingApplies(null, 'a.example.com', 1, 15_000), false);
+});
+
+// ── what may be pinned ───────────────────────────────────────────────────────
+
+test('only the fingerprint main actually read may be approved', () => {
+  // The gap this closes: api:approveCert used to pin whatever string it was
+  // handed, so "the value on screen" and "the value stored" were tied together by
+  // UI convention rather than by a check — the same unenforced-policy shape as the
+  // certificate check that used to trust anything.
+  const shown = { host: 'server.example.com', offered: 'AA:BB:CC', trusted: false };
+  assert.equal(mayApprove(shown, 'server.example.com', 'AA:BB:CC'), true);
+  assert.equal(mayApprove(shown, 'server.example.com', '11:22:33'), false, 'a different value');
+});
+
+test('a reading from another host cannot be approved for this one', () => {
+  // The URL can change between the reading and the approval; the old server's
+  // fingerprint must not be pinned for the new one.
+  const shown = { host: 'old.example.com', offered: 'AA:BB:CC', trusted: false };
+  assert.equal(mayApprove(shown, 'new.example.com', 'AA:BB:CC'), false);
+});
+
+test('nothing read means nothing to approve', () => {
+  assert.equal(mayApprove(null, 'server.example.com', 'AA:BB:CC'), false);
+});
+
+test('empty values never approve', () => {
+  const shown = { host: 'server.example.com', offered: '', trusted: false };
+  assert.equal(mayApprove(shown, 'server.example.com', ''), false, 'two empties must not match');
+  assert.equal(mayApprove({ ...shown, offered: 'AA:BB' }, '', 'AA:BB'), false, 'no host configured');
 });

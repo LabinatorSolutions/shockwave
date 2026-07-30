@@ -134,13 +134,24 @@ export async function readSettingsForRenderer(): Promise<{ settings: any; online
 // Overlay the machine-local settings (userData file) onto the DB settings. Each
 // local key takes its file value if present, else its local default. This is the
 // only place defaults are applied, and only for local keys — never DB settings.
-function overlayLocal(merged: any, identities: any[]) {
+function overlayLocal(merged: any, identities: any[], opts: { authoritative?: boolean } = {}) {
   const local = readLocalSettings();
   for (const k of LOCAL_KEYS) {
     (merged as any)[k] = (local as any)[k] !== undefined ? (local as any)[k] : LOCAL_DEFAULTS[k];
   }
   merged.activeWorkspaceId = local.activeWorkspaceId ?? null;
-  pruneWorkspaceLocal(identities.map((w: any) => w.id));
+  // Prune ONLY against a list we actually received. `identities` is [] on the
+  // degraded path (readSettingsSafe, when the companion is unreachable or its
+  // certificate isn't approved) — and pruning against [] deletes every
+  // workspace's checkout path from local-settings.json AND WRITES THE FILE. One
+  // network blip at boot and the paths are gone for good: the workspaces still
+  // exist on the companion, so the app shows them with no path and every one has
+  // to be re-located by hand via "Set up here".
+  //
+  // An empty list from a SUCCESSFUL read is different — that genuinely means no
+  // workspaces, and pruning is right. The two cases are indistinguishable from
+  // the array alone, which is exactly why this is a flag and not a length check.
+  if (opts.authoritative) pruneWorkspaceLocal(identities.map((w: any) => w.id));
   merged.workspaces = identities.map((w: any) => {
     const wl = getWorkspaceLocal(w.id);
     return { id: w.id, name: w.name, path: wl.path, repo: `${w.repoOwner}/${w.repoName}`, syncEnabled: wl.syncEnabled };
@@ -156,7 +167,8 @@ export async function readSettings(): Promise<any> {
   const synced = await api.get('/settings');
   const identities = Array.isArray(synced?.workspaces) ? synced.workspaces : [];
   const rest: any = { ...synced }; delete rest.workspaces;
-  return overlayLocal(rest, identities);
+  // The companion answered, so this list is the truth — safe to prune against.
+  return overlayLocal(rest, identities, { authoritative: true });
 }
 
 // Boot/UI-safe read: never throws. On an unconfigured/offline server there are no
@@ -189,7 +201,11 @@ export async function writeSettings(patch: any, opts: { notify?: boolean } = {})
   if (Object.keys(local).length) patchLocalSettings(local);
   if (workspacesPatch) await api.patch('/workspaces', workspacesPatch);
   if (Object.keys(synced).length) await api.patch('/settings', synced);
-  if (opts.notify !== false) await emitChanged(Object.keys(patch));
+  // Root segments, not the raw keys. A patch may be dotted (`sync.pat`, how a
+  // credential delete addresses one leaf without republishing its siblings) and the
+  // renderer applies changed TOP-LEVEL keys — so emitting the dotted key notifies
+  // nothing and the screen keeps showing a credential that is no longer stored.
+  if (opts.notify !== false) await emitChanged([...new Set(Object.keys(patch).map((k) => k.split('.')[0]))]);
 }
 
 export async function patchAgentSecretOAuth(name: string, patch: Record<string, any>): Promise<void> {

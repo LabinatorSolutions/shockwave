@@ -232,6 +232,11 @@ contextBridge.exposeInMainWorld('api', {
     apiWrite: (patch) => ipcRenderer.invoke('api:write', patch),
     apiTest: (args) => ipcRenderer.invoke('api:test', args),
     // Companion version check + remote upgrade (the updater sidecar).
+    /** Remove a stored credential by its settings path, e.g. 'sync.pat'. Its own
+     *  channel because the renderer never holds credential values, so an empty
+     *  field cannot mean 'delete this' any more.
+     *  @param {string} path @returns {Promise<{ok: boolean, error?: string}>} */
+    deleteCredential: (path) => ipcRenderer.invoke('settings:deleteCredential', { path }),
     apiCheckVersion: () => ipcRenderer.invoke('api:checkVersion'),
     apiUpgradeCompanion: () => ipcRenderer.invoke('api:upgradeCompanion'),
     /** Approve a companion TLS fingerprint the user has just been shown. The only

@@ -1,11 +1,28 @@
-// GitHub sync — REST helpers, git spawn wrapper, GIT_ASKPASS plumbing.
+// GitHub sync — REST helpers and the git spawn wrapper.
 //
-// Auth model: PAT lives only in safeStorage-encrypted settings. For shell git
-// commands we plant the decrypted PAT in the child process env (GITHUB_PAT)
-// and point GIT_ASKPASS at a tiny helper that echoes that env var. The PAT
-// exists in memory only for the lifetime of the git child. Nothing PAT-bearing
-// is ever written to .git/config; remote URLs stay as plain
-// https://github.com/owner/repo.git.
+// Auth model: the PAT lives on the companion. For shell git we put the decrypted
+// PAT in the child process env (GITHUB_PAT) and answer git's credential prompt
+// with a helper passed ON THE COMMAND LINE. The PAT exists in memory only for the
+// lifetime of that one git child, and nothing PAT-bearing is ever written to
+// .git/config — remote URLs stay plain https://github.com/owner/repo.git.
+//
+// ── Why the guards below exist ──────────────────────────────────────────────
+//
+// The git child's environment holds the PAT, and git will happily execute things
+// the WORKSPACE names — a workspace the coding agent has full write access to,
+// since editing it is the agent's job. Every guard closes one of those:
+//
+//   .git/hooks/pre-push   git runs it on every push, with our env
+//   credential.helper     read from repo config, consulted before anything else
+//   core.fsmonitor        a command git runs to check the worktree
+//   ext:: remote URLs     not an address, a command
+//
+// Command-line `-c` beats repository config, which is the point.
+//
+// There is no longer an askpass helper script. It was a file at a fixed path,
+// owned by the same user the agent runs as, that git executed with the PAT in its
+// environment — so the agent could rewrite it once and collect the token on every
+// sync afterwards. Nothing on disk means nothing to tamper with.
 //
 // For REST calls (whoami, repo create, scope probes) we use fetch with a
 // Bearer header. Same lifetime guarantee — PAT in memory only for the request.
@@ -19,6 +36,8 @@ import { ensureWorkspaceFiles } from '../../agent-core/defaults/files.js';
 // no electron import, so `node --test` can exercise them directly. Re-exported
 // here because this module is the public face of everything sync-related.
 import { classifyFolder, cloneUrlFor, repoMismatch } from './workspaceFolder.js';
+// Absolute path, resolved before the agent's shim dir joins PATH. See gitBinary.ts.
+import { gitBinary } from './gitBinary.js';
 
 export { classifyFolder };
 
@@ -142,7 +161,7 @@ export function checkGit() {
     let stderr = '';
     let child;
     try {
-      child = spawn('git', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(gitBinary(), ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err: any) {
       resolve({ ok: false, error: err.message, platform: process.platform });
       return;
@@ -162,69 +181,43 @@ export function checkGit() {
   });
 }
 
-// ─── GIT_ASKPASS helper ────────────────────────────────────────────────────
-//
-// Git resolves credential prompts by running whatever GIT_ASKPASS points at
-// and reading the first line of stdout. Our helper just echoes back the
-// GITHUB_PAT env var (set fresh on every spawn). The username is supplied via
-// the URL embed `https://x-access-token@github.com/...`, so the helper only
-// ever has to answer the password prompt — but we handle both forms anyway
-// so the prompt-shape variations across git versions don't trip us up.
-//
-// macOS/Linux: a posix shell script. Windows: a .cmd batch file. ensureAskpass
-// writes the right one for the host platform.
+// ─── Credential + execution guards ─────────────────────────────────────────
 
-let askpassPathCache: any = null;
+/** Answers git's credential prompt from the env var set on that one spawn.
+ *  Passed as an argument — never written to disk, never into .git/config.
+ *  Git runs `!`-prefixed helpers through a shell; Git for Windows ships its own,
+ *  which is what makes ONE helper work on all three platforms where the old
+ *  .sh/.cmd pair needed two. */
+const CREDENTIAL_HELPER = '!f() { echo username=x-access-token; echo password=$GITHUB_PAT; }; f';
 
-async function askpassDir() {
-  return path.join(app.getPath('userData'), 'sync');
+/** An empty directory. core.hooksPath pointed here means no hook runs, from any
+ *  source, without deleting anything of the user's. */
+function noHooksDir() {
+  return path.join(app.getPath('userData'), 'sync', 'no-hooks');
+}
+let noHooksReady: Promise<string> | null = null;
+function ensureNoHooks(): Promise<string> {
+  noHooksReady ??= (async () => {
+    const dir = noHooksDir();
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  })();
+  return noHooksReady;
 }
 
-async function ensureAskpass() {
-  if (askpassPathCache) return askpassPathCache;
-  const dir = await askpassDir();
-  await fs.mkdir(dir, { recursive: true });
-
-  if (process.platform === 'win32') {
-    // Batch variant for Windows git. Git invokes the helper with one quoted
-    // arg (the prompt, e.g. "Username for 'https://github.com': "); %~1 strips
-    // the surrounding quotes. We answer x-access-token for the Username prompt
-    // and the PAT (from the env var main set on the spawn) for everything else.
-    // `if not errorlevel 1` is the batch idiom for "errorlevel == 0" (matched).
-    // CRLF line endings — cmd.exe is picky about bare LF.
-    const winFile = path.join(dir, 'askpass.cmd');
-    const winBody = [
-      '@echo off',
-      'echo %~1| findstr /B /C:"Username" >nul',
-      'if not errorlevel 1 (',
-      '  echo x-access-token',
-      ') else (',
-      '  echo %GITHUB_PAT%',
-      ')',
-      '',
-    ].join('\r\n');
-    await fs.writeFile(winFile, winBody);
-    askpassPathCache = winFile;
-    return winFile;
-  }
-
-  const file = path.join(dir, 'askpass.sh');
-  const body = '#!/bin/sh\n' +
-    '# GIT_ASKPASS helper. Git invokes this with one arg like\n' +
-    '#   "Username for \\"https://github.com\\":"\n' +
-    '#   "Password for \\"https://x-access-token@github.com\\":"\n' +
-    '# We answer the username as x-access-token and the password as the PAT\n' +
-    '# from the env var that main set on the spawn.\n' +
-    'case "$1" in\n' +
-    '  Username*) echo "x-access-token" ;;\n' +
-    '  *)         echo "$GITHUB_PAT" ;;\n' +
-    'esac\n';
-  await fs.writeFile(file, body, { mode: 0o700 });
-  // Re-chmod in case the file pre-existed without exec bit (Write doesn't
-  // change mode on an existing file in some node versions).
-  await fs.chmod(file, 0o700);
-  askpassPathCache = file;
-  return file;
+/** Config overrides for every PAT-carrying git call. See the header for what each
+ *  one closes. The empty `credential.helper` is first because the setting is a
+ *  LIST — assigning empty resets it, so a helper planted in the workspace's
+ *  .git/config can't run ahead of ours. */
+function guardArgs(noHooks) {
+  return [
+    '-c', 'credential.helper=',
+    '-c', `credential.helper=${CREDENTIAL_HELPER}`,
+    '-c', `core.hooksPath=${noHooks}`,
+    '-c', 'core.fsmonitor=',
+    '-c', 'core.sshCommand=',
+    '-c', 'protocol.ext.allow=never',
+  ];
 }
 
 // ─── git spawn wrapper ─────────────────────────────────────────────────────
@@ -239,12 +232,20 @@ async function ensureAskpass() {
  */
 export async function gitSpawn(cwd, args, { pat = null, timeoutMs = 60000 } = {}) {
   const env = { ...process.env };
+  let argv = args;
   if (pat) {
     env.GITHUB_PAT = pat;
-    env.GIT_ASKPASS = await ensureAskpass();
     // Disable git's own terminal prompting fallback — we never want a TTY
     // prompt from a backgrounded child process.
     env.GIT_TERMINAL_PROMPT = '0';
+    // Belt for the hooksPath guard on the subcommands that run hooks: --no-verify
+    // goes immediately after the subcommand, so two independent things would have
+    // to be wrong for a planted hook to see the PAT.
+    const i = args.findIndex((a) => !String(a).startsWith('-'));
+    const inner = (i >= 0 && ['push', 'commit', 'merge'].includes(String(args[i])))
+      ? [...args.slice(0, i + 1), '--no-verify', ...args.slice(i + 1)]
+      : args;
+    argv = [...guardArgs(await ensureNoHooks()), ...inner];
   }
   return new Promise<any>((resolve) => {
     let stdout = '';
@@ -252,7 +253,7 @@ export async function gitSpawn(cwd, args, { pat = null, timeoutMs = 60000 } = {}
     let timer: any = null;
     let child;
     try {
-      child = spawn('git', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(gitBinary(), argv, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err: any) {
       resolve({ ok: false, code: -1, stdout: '', stderr: err.message });
       return;

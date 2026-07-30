@@ -13,7 +13,7 @@ import type { DB } from '../db.js';
 import { getDb } from '../db.js';
 import * as store from '../store.js';
 import * as feed from '../feed.js';
-import { prepareCheckout, checkIn } from '../git.js';
+import { prepareCheckout, checkIn, type GitAuth } from '../git.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
@@ -219,7 +219,7 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   // and commit. Doing either while it was still working produced a commit of
   // half-edited files and a reply abandoned mid-sentence.
   await sink.done(finalMessages);
-  await checkIn(dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`, pat).catch(() => {});
+  await checkIn(dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`, { pat, owner: ws.repoOwner, repo: ws.repoName }).catch(() => {});
 
   // A turn can end badly WITHOUT throwing: pi reports it as the last assistant
   // message's stopReason ('error' from the provider, 'aborted' from the watchdog
