@@ -11,8 +11,12 @@ const makeTabId = () => `t${nextTabId++}`;
  * Drafts have history: [] / historyIndex: -1; back/forward are disabled.
  *
  * Does NOT load content into the editor — that's done by App via an effect that watches
- * activeFile and writes via the editor's imperative `setContent` API. This keeps the
+ * activeFile and writes via the editor's imperative `loadDocument` API. This keeps the
  * load timing decoupled from React state-update ordering.
+ *
+ * Every place that forgets a path here must forget it in the editor too: the editor
+ * parks one EditorState (and therefore one undo history) per document path. See
+ * "Per-document undo history" in Editor.tsx.
  *
  * Inputs:
  *   editorRef         — ref to the imperative Editor (for capturing current view state on leave)
@@ -56,7 +60,10 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
       viewStateByPath.current.set(newPath, vs);
       viewStateByPath.current.delete(oldPath);
     }
-  }, []);
+    // The editor keys undo history by path too — re-key it so a rename doesn't
+    // silently drop the file's history.
+    editorRef.current?.renameDocument?.(oldPath, newPath);
+  }, [editorRef]);
 
   const openInActiveTab = useCallback(async (filePath) => {
     await writeNow();
@@ -161,7 +168,8 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
       return next;
     });
     viewStateByPath.current.delete(filePath);
-  }, [activeTabId]);
+    editorRef.current?.evictDocument?.(filePath);
+  }, [activeTabId, editorRef]);
 
   // Close every tab whose current path is inside the given folder; purge folder paths from history too.
   const closeTabsUnderPath = useCallback((folderPath) => {
@@ -196,17 +204,22 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
       }
       // Drop view-state entries for all removed paths.
       for (const t of prev) {
-        if (inFolder(t.path)) viewStateByPath.current.delete(t.path);
+        if (inFolder(t.path)) {
+          viewStateByPath.current.delete(t.path);
+          editorRef.current?.evictDocument?.(t.path);
+        }
       }
       return next;
     });
-  }, [activeTabId]);
+  }, [activeTabId, editorRef]);
 
   const resetTabs = useCallback(() => {
     setTabs([]);
     setActiveTabId(null);
     viewStateByPath.current.clear();
-  }, []);
+    // Workspace switch — none of the parked undo histories belong to the new one.
+    editorRef.current?.clearDocuments?.();
+  }, [editorRef]);
 
   const goBack = useCallback(async (tabId) => {
     await writeNow();

@@ -1,5 +1,5 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { Compartment, EditorState } from '@codemirror/state';
+import { Compartment, EditorState, Transaction } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
 import { markdown, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown';
@@ -63,11 +63,40 @@ function computeStats(state) {
  *   dark                           — boolean; when changed, the editor is recreated with the light/dark syntax highlight style
  *
  * Ref API (parent uses it to load content + read state):
- *   setContent(text, viewState?)   — replaces doc; restores cursor/scroll if viewState provided, else resets to top
+ *   loadDocument(key, text, vs?)   — shows a DIFFERENT document (tab switch, back/forward,
+ *                                    workspace load). Swaps in that document's own EditorState,
+ *                                    so undo history is per-document — see "Per-document
+ *                                    undo history" below.
+ *   setContent(text, viewState?)   — replaces the text of the document already on screen,
+ *                                    KEEPING its undo history (external-change reload)
  *   getText()                      — current doc text
  *   getViewState()                 — { cursor, scrollTop } snapshot
  *   clear()                        — empties the doc, resets cursor
+ *   evictDocument(key)             — forget a document's parked state (file closed/deleted)
+ *   renameDocument(oldKey, newKey) — re-key a parked state (file renamed/moved)
+ *   clearDocuments()               — forget all parked states (workspace switch)
+ *
+ * Per-document undo history
+ * -------------------------
+ * There is ONE CodeMirror view for the whole app; tabs swap documents through it.
+ * CodeMirror keeps undo history inside EditorState, so a single shared state means a
+ * single shared undo stack — and pressing undo past the start of your edits in the
+ * current file would walk back through the document swap itself, restoring the PREVIOUS
+ * file's text into the current tab. That is not a stale render: undo is a user edit, so
+ * it marks the tab dirty and the autosave then writes the wrong file's content to disk.
+ *
+ * The fix is CodeMirror's intended multi-document pattern: one EditorState per document,
+ * swapped in with `view.setState()`. `docStatesRef` parks the outgoing document's state
+ * on every switch and restores it on return, so undo history is per-document and can
+ * never reach across files. Keys are DOCUMENT identity (file path; `draft:<tabId>` for
+ * unsaved drafts), not tab identity — one tab navigates between files via back/forward,
+ * and two tabs on the same file share one document (and one undo stack, as in VS Code).
  */
+
+// Parked EditorStates hold their document text plus its full undo history, so the cache
+// is capped rather than left to grow for every file touched in a session. Least-recently
+// used is evicted first; losing a parked state only costs that file's undo history.
+const MAX_DOC_STATES = 24;
 const Editor = forwardRef<any, any>(function Editor(
   { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, isMarkdown, filePath, hideLineNumbers },
   ref,
@@ -89,6 +118,20 @@ const Editor = forwardRef<any, any>(function Editor(
   const statsRafRef = useRef(0);
   const isProgrammaticRef = useRef(false);
   const langGenerationRef = useRef(0);
+  // Builds a fresh EditorState carrying the CURRENT compartment configuration. Rebuilt
+  // whenever the view is (dark toggle); read by loadDocument, which runs outside render.
+  const makeStateRef = useRef<any>(null);
+  // docKey -> parked EditorState (see "Per-document undo history" above).
+  const docStatesRef = useRef<Map<any, any>>(new Map());
+  const currentDocKeyRef = useRef<any>(null);
+  // Compartment inputs read at state-construction time. A new state is built from
+  // scratch, so it must start with what's configured NOW — not what was configured when
+  // the view was created, or toggling to raw mode and switching files would silently
+  // bring live preview back.
+  const viewModeRef = useRef(viewMode);
+  const isMarkdownRef = useRef(isMarkdown);
+  const filePathRef = useRef(filePath);
+  const readOnlyRef = useRef(false);
 
   // Swap the language grammar for the current file. Markdown is synchronous
   // (the extension is prebuilt); code grammars come from
@@ -112,6 +155,33 @@ const Editor = forwardRef<any, any>(function Editor(
     }).catch(() => {});
   };
 
+  // Park a document's state, most-recently-used last, evicting the oldest past the cap.
+  const rememberDocState = (key, state) => {
+    if (key == null) return;
+    const map = docStatesRef.current;
+    map.delete(key);
+    map.set(key, state);
+    while (map.size > MAX_DOC_STATES) {
+      const oldest = map.keys().next().value;
+      map.delete(oldest);
+    }
+  };
+
+  // Restore cursor + scroll after a document swap. The selection dispatch is kept OUT of
+  // the undo history: it isn't an edit, and recording it would make the first undo in a
+  // freshly-opened file do nothing but move the cursor.
+  const applyViewState = (view, viewState) => {
+    const cursor = Math.min(viewState?.cursor ?? 0, view.state.doc.length);
+    view.dispatch({
+      selection: { anchor: cursor },
+      annotations: Transaction.addToHistory.of(false),
+    });
+    const scrollTop = viewState?.scrollTop ?? 0;
+    requestAnimationFrame(() => {
+      if (viewRef.current === view) view.scrollDOM.scrollTop = scrollTop;
+    });
+  };
+
   useEffect(() => { linkClickRef.current = onLinkClick; }, [onLinkClick]);
   useEffect(() => { changeRef.current = onChange; }, [onChange]);
   useEffect(() => { requestUrlRef.current = onRequestUrl; }, [onRequestUrl]);
@@ -125,6 +195,11 @@ const Editor = forwardRef<any, any>(function Editor(
   // Non-markdown files get their language's grammar by filename (or plain
   // text when unrecognized) and never show live preview.
   useEffect(() => {
+    // Set BEFORE the readiness bail-out — a state built later must see these even if the
+    // view wasn't up when the props changed.
+    viewModeRef.current = viewMode;
+    isMarkdownRef.current = isMarkdown;
+    filePathRef.current = filePath;
     const view = viewRef.current;
     const cmp = livePreviewCompartmentRef.current;
     const live = livePreviewExtensionsRef.current;
@@ -262,6 +337,64 @@ const Editor = forwardRef<any, any>(function Editor(
         scrollTop: view.scrollDOM.scrollTop,
       };
     },
+    // Show a different document. Restores that document's own EditorState when we have
+    // one parked, so its undo history comes back with it; builds a fresh state otherwise.
+    loadDocument: (docKey, text, viewState) => {
+      const view = viewRef.current;
+      const makeState = makeStateRef.current;
+      if (!view || !makeState) return;
+      const key = docKey ?? null;
+      const currentKey = currentDocKeyRef.current;
+      // Same document, same text — nothing to swap. Bailing out here is what keeps a
+      // re-render from throwing away the undo history of the file you're typing in.
+      if (key !== null && key === currentKey && view.state.doc.toString() === text) {
+        applyViewState(view, viewState);
+        return;
+      }
+      if (currentKey !== null && currentKey !== key) rememberDocState(currentKey, view.state);
+      let next = key !== null ? docStatesRef.current.get(key) : null;
+      // A parked state is only usable while it still matches what we just read from disk.
+      // If the file changed underneath us (agent, git pull, another machine), its undo
+      // history describes text that no longer exists — start clean instead.
+      if (next && next.doc.toString() !== text) next = null;
+      if (!next) next = makeState(text);
+      isProgrammaticRef.current = true;
+      view.setState(next);
+      isProgrammaticRef.current = false;
+      currentDocKeyRef.current = key;
+      // setState replaces the compartment contents wholesale, so a non-markdown file's
+      // lazily-loaded grammar has to be re-applied against the new state.
+      const langCmp = languageCompartmentRef.current;
+      if (langCmp) applyLanguage(view, langCmp, isMarkdownRef.current, filePathRef.current);
+      applyViewState(view, viewState);
+      statsRef.current?.(computeStats(view.state));
+      historyRef.current?.({
+        canUndo: undoDepth(view.state) > 0,
+        canRedo: redoDepth(view.state) > 0,
+      });
+    },
+    evictDocument: (docKey) => {
+      if (docKey == null) return;
+      docStatesRef.current.delete(docKey);
+      if (currentDocKeyRef.current === docKey) currentDocKeyRef.current = null;
+    },
+    renameDocument: (oldKey, newKey) => {
+      if (oldKey == null || newKey == null || oldKey === newKey) return;
+      const map = docStatesRef.current;
+      const parked = map.get(oldKey);
+      if (parked !== undefined) {
+        map.delete(oldKey);
+        map.set(newKey, parked);
+      }
+      if (currentDocKeyRef.current === oldKey) currentDocKeyRef.current = newKey;
+    },
+    clearDocuments: () => {
+      docStatesRef.current.clear();
+      currentDocKeyRef.current = null;
+    },
+    // Replace the text of the document already on screen, KEEPING its undo history —
+    // this is the external-change reload path, where undo should still be able to take
+    // the user back to what they had before the outside writer touched the file.
     setContent: (text, viewState) => {
       const view = viewRef.current;
       if (!view) return;
@@ -322,6 +455,7 @@ const Editor = forwardRef<any, any>(function Editor(
       flashRangesHelper(view, ranges);
     },
     setReadOnly: (ro) => {
+      readOnlyRef.current = !!ro;
       const view = viewRef.current;
       const cmp = readOnlyCompartmentRef.current;
       if (!view || !cmp) return;
@@ -390,10 +524,13 @@ const Editor = forwardRef<any, any>(function Editor(
     ];
     livePreviewExtensionsRef.current = livePreviewExtensions;
 
-    const initialLive = (viewMode === VIEW_MODES.RAW || !isMarkdown) ? [] : livePreviewExtensions;
-
-    const extensions = [
-      readOnlyCompartment.of(EditorState.readOnly.of(false)),
+    // Every document gets its own EditorState, so the extension set is a factory rather
+    // than a one-off array. Compartment INSTANCES are shared across states (they're just
+    // keys, so later reconfigure dispatches keep working); their initial contents are
+    // read from refs at call time so a new state starts configured the way the app is
+    // configured now.
+    const buildExtensions = () => [
+      readOnlyCompartment.of(EditorState.readOnly.of(readOnlyRef.current)),
       diffFlashExtension,
       lineNumbers(),
       highlightActiveLine(),
@@ -406,9 +543,11 @@ const Editor = forwardRef<any, any>(function Editor(
       // Keeps wrapped lines out at their indent instead of returning to the text
       // column. Outside the live-preview compartment — raw mode wraps too.
       hangingIndent,
-      languageCompartment.of(isMarkdown ? markdownExtension : []),
+      languageCompartment.of(isMarkdownRef.current ? markdownExtension : []),
       syntaxHighlighting(dark ? oneDarkHighlightStyle : defaultHighlightStyle),
-      livePreviewCompartment.of(initialLive),
+      livePreviewCompartment.of(
+        (viewModeRef.current === VIEW_MODES.RAW || !isMarkdownRef.current) ? [] : livePreviewExtensions,
+      ),
       imagePaste({
         getActiveFilePath: () => getActiveFilePathRef?.current ?? null,
         flushDraftToDisk: () => flushDraftToDiskRef?.current?.() ?? null,
@@ -492,10 +631,11 @@ const Editor = forwardRef<any, any>(function Editor(
         },
       }),
     ];
+    makeStateRef.current = (doc) => EditorState.create({ doc, extensions: buildExtensions() });
 
-    const state = EditorState.create({ doc: '', extensions });
-    const view = new EditorView({ state, parent: hostRef.current });
+    const view = new EditorView({ state: makeStateRef.current(''), parent: hostRef.current });
     viewRef.current = view;
+    const docStates = docStatesRef.current;
     // Rebuilds (dark toggle) don't re-run the reconfigure effect above, so a
     // non-markdown file's grammar must be re-applied here.
     if (!isMarkdown) applyLanguage(view, languageCompartment, false, filePath);
@@ -513,6 +653,12 @@ const Editor = forwardRef<any, any>(function Editor(
       livePreviewExtensionsRef.current = null;
       languageCompartmentRef.current = null;
       markdownExtensionRef.current = null;
+      makeStateRef.current = null;
+      // Parked states are bound to the extension instances of the view being torn down
+      // (the highlight style is baked in, not compartmentalised), so they can't be
+      // carried into the rebuilt view. Cost of a dark-mode toggle: undo history resets.
+      docStates.clear();
+      currentDocKeyRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dark]);

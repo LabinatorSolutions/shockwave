@@ -1569,11 +1569,16 @@ export default function App() {
     const editor = editorRef.current;
     if (!editor) return;
     const last = lastLoadRef.current;
+    // Undo history is per DOCUMENT, not per tab — one tab walks between files via
+    // back/forward, and two tabs on the same file share it. Drafts have no path yet,
+    // so they key off the tab that owns them. See "Per-document undo history" in
+    // Editor.tsx.
+    const draftKey = activeTabId ? `draft:${activeTabId}` : null;
     if (activeIsDraft || !activeFile) {
       const pendingTpl = pendingTemplateRef.current;
       if (pendingTpl != null) {
         pendingTemplateRef.current = null;
-        editor.setContent(pendingTpl, null);
+        editor.loadDocument(draftKey, pendingTpl, null);
         // Mark the draft dirty so the debounced writeNow creates the file —
         // same path as typing / image drop into a draft. Done via stable refs
         // (NOT onEditorChange) so this effect's dep array stays stable; adding
@@ -1584,13 +1589,17 @@ export default function App() {
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => writeNowRef.current(), SAVE_DEBOUNCE_MS);
       } else {
-        editor.setContent('', null);
+        editor.loadDocument(draftKey, '', null);
       }
       lastLoadRef.current = { tabId: activeTabId, path: null, isDark };
       return;
     }
     // Promotion: same tab, previously had no path. Buffer is authoritative.
     if (last.tabId === activeTabId && last.path === null && last.isDark === isDark) {
+      // Same document, new identity: the draft just got a file on disk. Re-key its undo
+      // history from the draft key to the path, or switching away and back would look
+      // the history up under a key nothing is stored against and start from empty.
+      editor.renameDocument(draftKey, activeFile);
       lastLoadRef.current = { tabId: activeTabId, path: activeFile, isDark };
       return;
     }
@@ -1606,7 +1615,7 @@ export default function App() {
         const ed = editorRef.current;
         if (!ed) return;
         const vs = tabsApi.viewStateByPath.current.get(activeFile) ?? null;
-        ed.setContent(text, vs);
+        ed.loadDocument(activeFile, text, vs);
         lastLoadRef.current = { tabId: activeTabId, path: activeFile, isDark };
       } catch (err: any) {
         if (!cancelled) showError(err.message ?? String(err));
