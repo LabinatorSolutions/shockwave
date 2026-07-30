@@ -9,15 +9,18 @@ import type { Db } from '../db.js';
 import type { TelegramClient } from './client.js';
 import { askAboutChat } from './btw.js';
 
+// The popup menu is a picker, not documentation — every description is verb-first,
+// never repeats its own command name, and never cross-references another one. The
+// syntax for the two that take an argument lives in /help and in their usage reply.
 export const BOT_COMMANDS = [
-  { command: 'new', description: 'Start a fresh chat in the same workspace' },
+  { command: 'new', description: 'Start a fresh chat' },
+  { command: 'btw', description: 'Ask about this chat' },
+  { command: 'status', description: 'Show workspace, chat, agent' },
+  { command: 'help', description: 'Show what I can do' },
+  { command: 'chat', description: 'Switch chat by number' },
   { command: 'chats', description: 'List recent chats' },
-  { command: 'chat', description: 'Switch chat by its number in /chats: /chat <number>' },
-  { command: 'workspaces', description: 'List workspaces' },
-  { command: 'workspace', description: 'Switch workspace by its number in /workspaces: /workspace <number>' },
-  { command: 'btw', description: 'Ask about this chat without interrupting it' },
-  { command: 'status', description: 'Workspace, chat, and whether the agent is busy' },
-  { command: 'help', description: 'What this bot can do' },
+  { command: 'workspace', description: 'Switch workspace by number' },
+  { command: 'workspaces', description: 'List all workspaces' },
 ];
 
 const LIST_LIMIT = 20;
