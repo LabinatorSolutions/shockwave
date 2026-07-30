@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check } from 'lucide-react';
+import { Check, CloudOff } from 'lucide-react';
 import { GearIcon, ChevronDownIcon } from './Icons.jsx';
 import {
   DropdownMenu,
@@ -10,12 +10,24 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 
+// The companion being unreachable is a STATE, not an event: it lasts until the
+// server comes back, so it gets a persistent indicator here rather than a toast
+// that scrolls away. It sits next to the gear because the only thing a user can
+// do about it lives one click away, on Settings → Companion.
+//
+// Deliberately not an error color, and deliberately not a modal. A dropped
+// request means the server is away — not that the settings on this page are
+// wrong — and telling the user to go fix their configuration invites them to
+// retype a URL or key that was correct all along. Amber matches the sync icon's
+// `offline` state, which is the same "away, retrying" fact about the same server.
 export default function WorkspaceSelector({
   workspaces,
   activeWorkspaceId,
   onSwitch,
   onManage,
   onOpenSettings,
+  companionOnline = true,
+  onOpenCompanion,
 }) {
   const active = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const badgeLetter = (active?.name ?? '?').trim().charAt(0).toUpperCase() || '?';
@@ -66,14 +78,26 @@ export default function WorkspaceSelector({
           <DropdownMenuItem onSelect={onManage}>Manage workspaces…</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <button
-        className="flex size-[26px] items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground"
-        onClick={onOpenSettings}
-        title="Settings"
-        aria-label="Open settings"
-      >
-        <GearIcon size={15} />
-      </button>
+      <div className="flex shrink-0 items-center gap-0.5">
+        {!companionOnline && (
+          <button
+            className="flex size-[26px] items-center justify-center rounded-[7px] text-amber-500 hover:bg-accent"
+            onClick={onOpenCompanion}
+            title="Can't reach your companion server — settings, workspaces, and chats won't update until it's back. Click to review the connection."
+            aria-label="Companion server unreachable. Review the connection"
+          >
+            <CloudOff className="size-[15px]" />
+          </button>
+        )}
+        <button
+          className="flex size-[26px] items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground"
+          onClick={onOpenSettings}
+          title="Settings"
+          aria-label="Open settings"
+        >
+          <GearIcon size={15} />
+        </button>
+      </div>
     </div>
   );
 }

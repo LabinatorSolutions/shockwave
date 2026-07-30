@@ -1582,6 +1582,26 @@ export default function App() {
       unsubscribe = window.api.theme.onSystemChange(({ dark }) => {
         setSystemPrefersDark(!!dark);
       });
+      // Unconfigured install — no server URL, or no API key. Either one missing
+      // and nothing companion-backed works at all: no settings, no workspaces,
+      // no chats. There is no later moment where it stops mattering, so this is
+      // the one case that opens Settings on its own. It runs at boot, once, when
+      // the user isn't mid-task and the interruption is cheapest.
+      //
+      // The condition is CONFIGURATION PRESENCE and nothing else. A request that
+      // failed must never land here: the settings are right, the server is away,
+      // and `companion:state` is edge-triggered — flapping connectivity would pop
+      // this modal over whatever is being typed, repeatedly, pointing at a page
+      // with nothing to fix. That case gets the persistent offline indicator in
+      // the sidebar footer instead (WorkspaceSelector).
+      //
+      // `apiRead` reads what's stored locally and doesn't touch the network, so
+      // this can't be fooled by an outage. If it throws we learned nothing, and
+      // silence beats sending the user to the wrong page.
+      const conn = await window.api.settings.apiRead().catch(() => null);
+      if (!active) return;
+      if (conn && (!conn.url || !conn.hasApiKey)) openSettings(SETTINGS_SECTIONS.COMPANION);
+
       setBootDone(true);
     })();
     return () => {
@@ -1965,6 +1985,8 @@ export default function App() {
           onSwitch={switchWorkspace}
           onManage={() => openSettings(SETTINGS_SECTIONS.WORKSPACES)}
           onOpenSettings={() => openSettings()}
+          companionOnline={companionOnline}
+          onOpenCompanion={() => openSettings(SETTINGS_SECTIONS.COMPANION)}
         />
         <div
           className="absolute inset-y-0 -right-[3px] z-10 w-1.5 cursor-col-resize"
