@@ -258,12 +258,12 @@ export default function App() {
   const {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
-    codingAgentSettings, agentSecrets, transcription, sync, syncRef,
+    codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
-    onSyncChange,
+    onSyncChange, onTimezoneChange,
   } = useSettings({
     activeWorkspacePath: workspacePath,
     // Main owns the workspace list; this is the renderer catching up rather
@@ -1357,6 +1357,33 @@ export default function App() {
     setSettingsOpen(true);
   }, []);
 
+  // The companion answered, but its certificate isn't the approved one, so the
+  // connection was stopped. Deliberately NOT folded into an offline state — the
+  // server is up, and saying otherwise both misreports it and hides the only
+  // screen that can resolve it.
+  //
+  // Main fires this on every stopped connection. The fixed `id` is what makes
+  // that safe AND correct: while the toast is on screen a repeat updates it in
+  // place rather than stacking, and once the user dismisses it the next stopped
+  // connection brings it back. Never auto-dismisses — nothing syncs until it's
+  // dealt with, so it shouldn't quietly disappear on a timer.
+  useEffect(() => {
+    const show = (c: { approved: string | null }) => {
+      toast.error(c.approved ? 'Companion certificate changed' : 'Companion needs approving', {
+        id: 'companion-cert',
+        duration: Infinity,
+        description: c.approved
+          ? "The server is reachable but isn't offering the certificate you approved. Nothing will sync until you review it."
+          : "The server is reachable but hasn't been approved on this machine yet. Nothing will sync until you approve it.",
+        action: { label: 'Review', onClick: () => openSettings(SETTINGS_SECTIONS.COMPANION) },
+      });
+    };
+    // Ask as well as subscribe: the first stopped connection normally happens
+    // before this window exists, and that push has nobody to reach.
+    window.api.settings.pendingCert().then((c) => { if (c) show(c); }).catch(() => {});
+    return window.api.settings.onCertNeedsApproval(show);
+  }, [openSettings]);
+
   // ---- beforeunload save ----
   useEffect(() => {
     const flush = () => { writeNow(); };
@@ -2214,6 +2241,8 @@ export default function App() {
           onTranscriptionChange={onTranscriptionChange}
           sync={sync}
           onSyncChange={onSyncChange}
+          timezone={timezone}
+          onTimezoneChange={onTimezoneChange}
           onRebuildCache={rebuildLinkCache}
           appUpdate={appUpdate}
           saveStatus={saveStatus}

@@ -219,7 +219,7 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   // and commit. Doing either while it was still working produced a commit of
   // half-edited files and a reply abandoned mid-sentence.
   await sink.done(finalMessages);
-  await checkIn(dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`).catch(() => {});
+  await checkIn(dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`, pat).catch(() => {});
 
   // A turn can end badly WITHOUT throwing: pi reports it as the last assistant
   // message's stopReason ('error' from the provider, 'aborted' from the watchdog

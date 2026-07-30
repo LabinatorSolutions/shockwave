@@ -43,7 +43,12 @@ async function buildModel(m: FixModel) {
   return model ? { model, authStorage, modelRegistry } : null;
 }
 
-// Returns true only if, after the loop, the repo is genuinely clean + pushed.
+// Returns true only if, after the loop, the working tree is genuinely clean and
+// carries no leftover conflict markers. Pushing is deliberately NOT this
+// function's job: the fixer drives a model-controlled shell, so handing it the
+// PAT (in the env, or embedded in the remote) would put the credential back
+// inside the one process most exposed to whatever the conflicting content says.
+// The caller pushes afterwards with git.ts's syncAndPush.
 export async function gitFix(dir: string, branch: string, m: FixModel): Promise<boolean> {
   try {
     const built = await buildModel(m);
@@ -65,13 +70,12 @@ export async function gitFix(dir: string, branch: string, m: FixModel): Promise<
     const sessionManager = SessionManager.create(dir, path.join(agentDir, 'sessions'), { id: `gitfix-${stamp}` });
     const system =
       `You are recovering a git repository at your working directory. Your only goal: get the branch "${branch}" ` +
-      `committed and pushed to origin with a clean working tree. origin already has credentials embedded, so ` +
-      `push/fetch need no auth. Use the run_git tool to inspect and act. Strategy: run \`git status\` first; ` +
+      `committed with a clean working tree. You have NO network credentials — do not fetch, pull or push; ` +
+      `those are done for you after you finish, so a command that reaches the network will just fail. ` +
+      `Use the run_git tool to inspect and act. Strategy: run \`git status\` first; ` +
       `resolve merge conflicts by editing files to keep both intents (remove all <<<<<<< ======= >>>>>>> markers) ` +
       `then stage and commit; abort hopelessly broken merges/rebases with \`git merge --abort\`/\`git rebase --abort\` ` +
-      `and try a fresh fetch+merge; if a merge base is missing because the clone is shallow, run \`git fetch --unshallow\` ` +
-      `(or \`--depth=100\`) and retry; finally \`git push origin ${branch}\`, re-fetching and merging if rejected. ` +
-      `Stop as soon as \`git status\` is clean and the push succeeds. Do not run commands unrelated to this goal.`;
+      `and commit what is there. Stop as soon as \`git status\` is clean. Do not run commands unrelated to this goal.`;
     const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir, systemPromptOverride: () => system });
     await resourceLoader.reload();
 
@@ -84,7 +88,7 @@ export async function gitFix(dir: string, branch: string, m: FixModel): Promise<
     const unsub = session.subscribe((e: any) => {
       if (e?.type === 'tool_execution_start') { steps++; if (steps >= MAX_STEPS) { try { session.abort(); } catch { /* */ } } }
     });
-    try { await session.prompt(`Recover branch "${branch}" and push it. Start by inspecting the current state.`); } catch { /* */ }
+    try { await session.prompt(`Recover branch "${branch}": resolve any conflicts and commit, leaving a clean working tree. Do not push. Start by inspecting the current state.`); } catch { /* */ }
     try { unsub(); } catch { /* */ }
     try { session.dispose(); } catch { /* */ }
   } catch { /* fall through to verification */ }
@@ -92,12 +96,12 @@ export async function gitFix(dir: string, branch: string, m: FixModel): Promise<
   return verify(dir, branch);
 }
 
-// Trust nothing the model said — confirm clean, no leftover markers, nothing unpushed.
-async function verify(dir: string, branch: string): Promise<boolean> {
+// Trust nothing the model said — confirm the tree is clean and no conflict
+// markers survived. The "nothing unpushed" check is gone with the push itself:
+// the caller does that step and reports its own result.
+async function verify(dir: string, _branch: string): Promise<boolean> {
   const status = await sh(dir, 'git status --porcelain');
   if (status.stdout.trim().length > 0) return false;
   const markers = await sh(dir, "git grep -lE '^(<<<<<<<|=======|>>>>>>>)' -- . 2>/dev/null | head -1 || true");
-  if (markers.stdout.trim().length > 0) return false;
-  const ahead = await sh(dir, `git rev-list origin/${branch}..HEAD --count 2>/dev/null || echo 1`);
-  return parseInt(ahead.stdout.trim() || '1', 10) === 0;
+  return markers.stdout.trim().length === 0;
 }

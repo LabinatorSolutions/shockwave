@@ -3,7 +3,8 @@ import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
+import { Input } from '@/components/ui/input';
+import { credentialPlaceholder } from './credentialField';
 import ErrorMessage from '../ErrorMessage.jsx';
 
 // GitHub — the account and the machine, i.e. everything that is NOT per
@@ -44,16 +45,15 @@ const INSTALL_INSTRUCTIONS = {
 };
 
 export default function GitHubSection({ sync, onSyncChange }) {
-  const pat = sync?.pat ?? '';
+  const hasPat = !!sync?.hasPat;
   const interval = sync?.pullIntervalSeconds ?? 10;
 
   // The PAT is edited locally and committed on blur. Every change here writes
   // settings (re-encrypting through the keychain) AND restarts the sync engine,
   // so typing a token character by character did ~90 of each, against ~90
   // partial tokens.
-  const [patDraft, setPatDraft] = useState(pat);
-  useEffect(() => { setPatDraft(pat); }, [pat]);
-  const [showPat, setShowPat] = useState(false);
+  // Write-only: main never sends the token down, so this is a draft only.
+  const [patDraft, setPatDraft] = useState('');
   const [verifyState, setVerifyState] = useState<any>({ status: 'idle' });
   const [gitState, setGitState] = useState<any>({ status: 'checking' });
   // Tracks the thumb while dragging; the real write happens on release.
@@ -72,7 +72,8 @@ export default function GitHubSection({ sync, onSyncChange }) {
     return () => { cancelled = true; };
   }, []);
 
-  const updateSync = (patch) => onSyncChange?.({ pat, pullIntervalSeconds: interval, ...patch });
+  // No `pat` here — main strips it, so including it would send '' and delete it.
+  const updateSync = (patch) => onSyncChange?.({ pullIntervalSeconds: interval, ...patch });
 
   // Verifying a token the user hasn't saved yet: pass the current form value
   // (not the persisted one) so they can verify before committing.
@@ -100,7 +101,7 @@ export default function GitHubSection({ sync, onSyncChange }) {
   };
 
   const commitPat = () => {
-    if (patDraft !== pat) updateSync({ pat: patDraft });
+    if (patDraft) { updateSync({ pat: patDraft }); setPatDraft(''); }
   };
 
   // Clamped here as well as on the slider: the engine clamps to this same range
@@ -121,25 +122,18 @@ export default function GitHubSection({ sync, onSyncChange }) {
         <Field>
           <FieldLabel htmlFor="sync-pat">Personal Access Token</FieldLabel>
           <div className="flex gap-2">
-            <InputGroup className="flex-1">
-              <InputGroupInput
-                id="sync-pat"
-                type={showPat ? 'text' : 'password'}
-                className="font-mono text-[13px]"
-                value={patDraft}
-                onChange={onPatChange}
-                onBlur={commitPat}
-                spellCheck={false}
-                autoComplete="off"
-                autoCorrect="off"
-                placeholder="github_pat_…"
-              />
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton onClick={() => setShowPat((v) => !v)}>
-                  {showPat ? 'Hide' : 'Show'}
-                </InputGroupButton>
-              </InputGroupAddon>
-            </InputGroup>
+            <Input
+              id="sync-pat"
+              type="password"
+              className="flex-1 font-mono text-[13px]"
+              value={patDraft}
+              onChange={onPatChange}
+              onBlur={commitPat}
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              placeholder={credentialPlaceholder(hasPat)}
+            />
             <Button variant="outline" onClick={onVerify} disabled={!patDraft.trim() || verifyState.status === 'checking'}>
               {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
             </Button>

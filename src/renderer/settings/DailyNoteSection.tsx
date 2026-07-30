@@ -7,6 +7,7 @@ import {
 } from '../dailyNote.js';
 import FolderCombobox from './FolderCombobox.jsx';
 import { SettingsSection } from './SectionUI';
+import { useCommitField } from './useCommitField';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import {
@@ -34,7 +35,6 @@ export default function DailyNoteSection({
   const templatePath = dailyNote?.templatePath ?? '';
 
   const isPreset = DAILY_NOTE_FORMAT_PRESETS.includes(format);
-  const previewToday = useMemo(() => formatDailyNote(format), [format]);
 
   const onSelectChange = (v) => {
     if (v === CUSTOM_VALUE) {
@@ -47,9 +47,15 @@ export default function DailyNoteSection({
     }
   };
 
-  const onCustomChange = (e) => {
-    onDailyNoteChange({ ...dailyNote, format: e.target.value });
-  };
+  // Commits on blur (see useCommitField). This one is genuinely typed out, so
+  // per-keystroke writes saved every partial format on the way — and each one
+  // is the name new daily notes get, so a half-typed format was briefly live.
+  // The preview below still tracks the draft, so you see the result as you type.
+  const customField = useCommitField(format, (next) => {
+    onDailyNoteChange({ ...dailyNote, format: next });
+  });
+  const previewFormat = isPreset ? format : customField.value;
+  const previewToday = useMemo(() => formatDailyNote(previewFormat), [previewFormat]);
 
   const onFolderChange = (next) => {
     onDailyNoteChange({ ...dailyNote, folder: next });
@@ -94,8 +100,9 @@ export default function DailyNoteSection({
             id="daily-note-custom"
             type="text"
             className="font-mono"
-            value={format}
-            onChange={onCustomChange}
+            value={customField.value}
+            onChange={(e) => customField.onChange(e.target.value)}
+            onBlur={customField.onBlur}
             placeholder="YYYY-MM-DD"
           />
           <FieldDescription className="text-xs">

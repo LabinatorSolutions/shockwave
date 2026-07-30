@@ -36,18 +36,89 @@ const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
   cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
 };
 
+/**
+ * Strip every credential, replacing each with a "is one saved?" flag.
+ *
+ * Applied at the ONLY two places settings cross into the renderer — the
+ * `settings:read` IPC and the `settings:changed` push. Main itself keeps the real
+ * values: it needs them to run the agent, push to GitHub, and mint the voice
+ * token. This is the main→renderer hop, not companion→main.
+ *
+ * The renderer never used the values for anything but painting them into a box, so
+ * nothing loses a capability. What it loses is the ability to send one back — and
+ * that was the actual hazard: it held every key and resent them on unrelated
+ * edits, so any stale copy could overwrite the real thing.
+ *
+ * `has*` flags are what the boxes render dots from. A flag is not a secret.
+ */
+function stripCredentials(settings: any): any {
+  if (!settings || typeof settings !== 'object') return settings;
+  const out: any = { ...settings };
+
+  if (out.codingAgent) {
+    const keys = out.codingAgent.providerKeys ?? {};
+    out.codingAgent = {
+      ...out.codingAgent,
+      providerKeys: undefined,
+      // slug -> true, so the box can show dots for the selected provider without
+      // the value. Only slugs with a non-empty key are listed.
+      hasProviderKey: Object.fromEntries(
+        Object.entries(keys).filter(([, v]) => typeof v === 'string' && v).map(([k]) => [k, true]),
+      ),
+    };
+    delete out.codingAgent.providerKeys;
+  }
+
+  if (out.transcription) {
+    out.transcription = { ...out.transcription, hasApiKey: !!out.transcription.apiKey };
+    delete out.transcription.apiKey;
+  }
+
+  if (out.sync) {
+    out.sync = { ...out.sync, hasPat: !!out.sync.pat };
+    delete out.sync.pat;
+  }
+
+  if (Array.isArray(out.agentSecrets)) {
+    out.agentSecrets = out.agentSecrets.map((s: any) => {
+      const next: any = { ...s, hasToken: !!s.token };
+      delete next.token;
+      if (next.oauth) {
+        next.oauth = { ...next.oauth, hasClientSecret: !!next.oauth.clientSecret };
+        // accessToken/refreshToken were never shown and are written only by the
+        // OAuth flow — the renderer has no business holding them at all.
+        delete next.oauth.clientSecret;
+        delete next.oauth.accessToken;
+        delete next.oauth.refreshToken;
+      }
+      return next;
+    });
+  }
+
+  return out;
+}
+
 // Broadcasts changed top-level keys + a fresh read to the renderer, for
-// main-initiated writes (OAuth refresh, window bounds, cron).
+// main-initiated writes (OAuth refresh, window bounds, cron). Credentials are
+// stripped — this is one of the two doors to the renderer.
 async function emitChanged(keys: string[]) {
   if (!keys.length) return;
   try {
-    const settings = await readSettings();
+    const settings = stripCredentials(await readSettings());
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('settings:changed', { keys, settings });
     }
   } catch (err: any) {
     console.warn('[settings] could not emit change event:', err?.message ?? err);
   }
+}
+
+/** The renderer's copy: real settings, no credentials. The other door is
+ *  `emitChanged` above. Anything else calling `readSettings` is main using them
+ *  for itself and must keep the real values. */
+export async function readSettingsForRenderer(): Promise<{ settings: any; online: boolean; reason?: string }> {
+  const r = await readSettingsSafe();
+  return { ...r, settings: stripCredentials(r.settings) };
 }
 
 // Overlay the machine-local settings (userData file) onto the DB settings. Each
@@ -81,11 +152,15 @@ export async function readSettings(): Promise<any> {
 // Boot/UI-safe read: never throws. On an unconfigured/offline server there are no
 // DB settings to us, so it returns only the machine-local settings (which need no
 // server) and the app boots to a "connect your companion" state.
-export async function readSettingsSafe(): Promise<{ settings: any; online: boolean }> {
+// `reason` carries WHY the read failed, so a caller can report the real cause
+// instead of inventing one. Without it, an unreachable or un-approved companion
+// surfaced as "Connect a GitHub account first" or "Voice transcription not
+// configured" — both false, and both sending the user to fix the wrong thing.
+export async function readSettingsSafe(): Promise<{ settings: any; online: boolean; reason?: string }> {
   try {
     return { settings: await readSettings(), online: true };
-  } catch {
-    return { settings: overlayLocal({}, []), online: false };
+  } catch (err: any) {
+    return { settings: overlayLocal({}, []), online: false, reason: err?.message ?? String(err) };
   }
 }
 

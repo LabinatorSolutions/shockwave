@@ -102,16 +102,20 @@ export function splitAgentSecret(entry) {
     createdAt: entry.createdAt ?? 0,
     updatedAt: entry.updatedAt ?? 0,
   };
-  const secrets = {
-    token: entry.token ?? '',
-    ...(o
-      ? {
-          'oauth.clientSecret': o.clientSecret ?? '',
-          'oauth.accessToken': o.accessToken ?? '',
-          'oauth.refreshToken': o.refreshToken ?? '',
-        }
-      : {}),
-  };
+  // Only credential fields the entry ACTUALLY CARRIED. `token: entry.token ?? ''`
+  // used to be unconditional, and empty means delete (see putSecret) — so an entry
+  // sent without a token silently wiped the stored one. That forced the renderer
+  // to hold every token and resend it on any edit, which is exactly what made it
+  // impossible to stop sending credentials to the screen.
+  //
+  // Absent = leave it alone. Present-and-empty = delete. Two different things.
+  const secrets = {};
+  if ('token' in entry) secrets.token = entry.token ?? '';
+  if (o) {
+    if ('clientSecret' in o) secrets['oauth.clientSecret'] = o.clientSecret ?? '';
+    if ('accessToken' in o) secrets['oauth.accessToken'] = o.accessToken ?? '';
+    if ('refreshToken' in o) secrets['oauth.refreshToken'] = o.refreshToken ?? '';
+  }
   return { row, secrets };
 }
 

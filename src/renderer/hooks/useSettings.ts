@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSyncRef } from './useSyncRef';
-import { buildPatch } from '../settingsDiff.js';
+import { buildPatch, dropEmptyCredentials } from '../settingsDiff.js';
 import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS } from '../constants';
 import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
 
@@ -19,10 +19,10 @@ const DEFAULT_CANONICAL: Settings = {
   workspaces: [],
   activeWorkspaceId: null,
   appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
-  codingAgent: { provider: '', model: '', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium' },
+  codingAgent: { provider: '', model: '', hasProviderKey: {}, baseUrl: '', thinkingLevel: 'medium' },
   agentSecrets: [],
-  transcription: { provider: 'assemblyai', apiKey: '' },
-  sync: { pat: '', pullIntervalSeconds: 10 },
+  transcription: { provider: 'assemblyai', hasApiKey: false },
+  sync: { hasPat: false, pullIntervalSeconds: 10 },
   timezone: 'UTC',
   // Cron is managed in main via window.api.cron.* (main persists the slice); the
   // renderer never writes it through persistSettings. Present here only to satisfy
@@ -69,9 +69,10 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   const [treeSortOrder, setTreeSortOrder] = useState<TreeSortOrder>(TREE_SORT_ORDERS.NAME_ASC);
   const [codingAgentSettings, setCodingAgentSettings] = useState<CodingAgentSettings>(DEFAULT_CANONICAL.codingAgent);
   const [agentSecrets, setAgentSecrets] = useState<AgentSecret[]>([]);
-  const [transcription, setTranscription] = useState<Transcription>({ provider: 'assemblyai', apiKey: '' });
-  const [sync, setSync] = useState<SyncSettings>({ pat: '', pullIntervalSeconds: 10 });
+  const [transcription, setTranscription] = useState<Transcription>({ provider: 'assemblyai', hasApiKey: false });
+  const [sync, setSync] = useState<SyncSettings>({ hasPat: false, pullIntervalSeconds: 10 });
   const syncRef = useSyncRef(sync);
+  const [timezone, setTimezone] = useState('UTC');
 
   // Local cache of everything persisted, for rendering and for building whole
   // sub-objects in per-field setters. NOT the source of truth — the store is.
@@ -94,7 +95,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   const persistSettings = useCallback(async (next: Partial<Settings>) => {
     const prev = settingsRef.current;
     settingsRef.current = { ...prev, ...next };
-    const patch = buildPatch(next, prev);
+    const patch = dropEmptyCredentials(buildPatch(next, prev));
     if (!Object.keys(patch).length) return;
     inFlightSavesRef.current += 1;
     if (savedFadeTimerRef.current) {
@@ -272,6 +273,15 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     await persistSettings({ transcription: next });
   }, [persistSettings]);
 
+  // Goes through persistSettings like every other setting. The Cron page used to
+  // call window.api.settings.write directly, which skipped the Saving/Saved badge
+  // AND left settingsRef holding the old zone — so a later diffed save computed
+  // its patch against a value that was already stale on the server.
+  const onTimezoneChange = useCallback(async (next: string) => {
+    setTimezone(next);
+    await persistSettings({ timezone: next });
+  }, [persistSettings]);
+
   const onSyncChange = useCallback(async (next: SyncSettings) => {
     setSync(next);
     syncRef.current = next;
@@ -285,9 +295,12 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // Seed everything from the on-disk settings object at boot, BEFORE any save can
   // fire (so an unchanged field isn't written as its default and clobbered).
   const hydrateSettings = useCallback((disk: any) => {
-    const tr: Transcription = { provider: disk.transcription?.provider || 'assemblyai', apiKey: disk.transcription?.apiKey || '' };
+    // Carry the presence FLAGS through — main strips the values, so these are the
+    // only thing telling a field whether a credential is stored. Dropping them here
+    // is why every box read as empty.
+    const tr: Transcription = { provider: disk.transcription?.provider || 'assemblyai', hasApiKey: !!disk.transcription?.hasApiKey };
     const sy: SyncSettings = {
-      pat: disk.sync?.pat || '',
+      hasPat: !!disk.sync?.hasPat,
       pullIntervalSeconds: typeof disk.sync?.pullIntervalSeconds === 'number' && disk.sync.pullIntervalSeconds > 0 ? disk.sync.pullIntervalSeconds : 10,
     };
     const tm: ThemeMode = disk.appearance?.themeMode || THEME_MODES.SYSTEM;
@@ -334,16 +347,17 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     if (Array.isArray(disk.agentSecrets)) setAgentSecrets(secrets);
     if (disk.transcription) setTranscription(tr);
     if (disk.sync) { setSync(sy); syncRef.current = sy; }
+    if (typeof disk.timezone === 'string') setTimezone(disk.timezone);
   }, [dailyNoteRef, syncRef]);
 
   return {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
-    codingAgentSettings, agentSecrets, transcription, sync, syncRef,
+    codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
-    onSyncChange,
+    onSyncChange, onTimezoneChange,
   };
 }

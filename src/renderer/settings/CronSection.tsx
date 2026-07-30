@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { CalendarClock, ChevronRight } from 'lucide-react';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
@@ -8,14 +8,16 @@ import Combobox from '../Combobox';
 // entry point to the schedule VIEW (next/last run + manual run) plus the one
 // unified system timezone. Job definitions live in cron.json at each workspace
 // root (git-synced); server-wide knobs (enable/refresh/max-run) are companion env.
-export default function CronSection({ onOpenCronPanel }: { onOpenCronPanel?: () => void }) {
-  const [tz, setTz] = useState('UTC');
-
-  useEffect(() => {
-    let alive = true;
-    window.api.settings.read().then((s: any) => { if (alive) setTz(s.timezone || 'UTC'); }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
+export default function CronSection({
+  timezone,
+  onTimezoneChange,
+  onOpenCronPanel,
+}: {
+  timezone?: string;
+  onTimezoneChange?: (next: string) => void;
+  onOpenCronPanel?: () => void;
+}) {
+  const tz = timezone || 'UTC';
 
   // Every IANA zone Chromium knows, so the value is always one the server can
   // actually resolve — a typo'd zone name would silently fall back to UTC on the
@@ -26,10 +28,11 @@ export default function CronSection({ onOpenCronPanel }: { onOpenCronPanel?: () 
     return ['UTC', ...list.filter((z) => z !== 'UTC')];
   }, []);
 
+  // Combobox commits a whole choice at a time (no partial state to protect), so
+  // this writes on change like every other picker — but through the shared
+  // setter, not a direct settings write.
   const commitTz = (value: string) => {
-    const next = value.trim() || 'UTC';
-    setTz(next);
-    window.api.settings.write({ timezone: next }).catch(() => {});
+    onTimezoneChange?.(value.trim() || 'UTC');
   };
 
   return (

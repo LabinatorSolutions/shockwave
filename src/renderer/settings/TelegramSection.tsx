@@ -18,7 +18,6 @@ export default function TelegramSection({ workspaces }: { workspaces?: any[] }) 
   const [status, setStatus] = useState<any>(null);
   const [botToken, setBotToken] = useState('');
   const [userId, setUserId] = useState('');
-  const [showTok, setShowTok] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -29,7 +28,7 @@ export default function TelegramSection({ workspaces }: { workspaces?: any[] }) 
     setBusy(true); setMsg(null);
     const r = await window.api.settings.telegramConnect({ botToken: botToken.trim(), authorizedTgUserId: Number(userId.trim()) });
     setBusy(false);
-    if (r.ok) { setMsg({ ok: true, text: `Connected as @${r.botUsername}.` }); setBotToken(''); setShowTok(false); refresh(); }
+    if (r.ok) { setMsg({ ok: true, text: `Connected as @${r.botUsername}.` }); setBotToken(''); refresh(); }
     else setMsg({ ok: false, text: r.error || 'Could not connect.' });
   };
 
@@ -77,9 +76,7 @@ export default function TelegramSection({ workspaces }: { workspaces?: any[] }) 
                 <SelectTrigger id="tg-workspace" className="w-full">
                   <SelectValue placeholder={workspaces?.length ? 'Choose a workspace' : 'No workspaces yet'} />
                 </SelectTrigger>
-                {/* popper: item-aligned overlays the trigger, and with no
-                    selection it has no item to align to — looks broken. */}
-                <SelectContent position="popper">
+                <SelectContent>
                   {(workspaces || []).map((w) => (
                     <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
                   ))}
@@ -94,12 +91,11 @@ export default function TelegramSection({ workspaces }: { workspaces?: any[] }) 
               <FieldLabel htmlFor="tg-token">Bot token</FieldLabel>
               <InputGroup>
                 <InputGroupInput
-                  id="tg-token" type={showTok ? 'text' : 'password'} className="font-mono"
+                  id="tg-token" type="password" className="font-mono"
                   placeholder="123456:ABC-DEF…" value={botToken}
                   onChange={(e) => setBotToken(e.target.value)} spellCheck={false} autoComplete="off"
                 />
                 <InputGroupAddon align="inline-end">
-                  <InputGroupButton onClick={() => setShowTok((v) => !v)}>{showTok ? 'Hide' : 'Show'}</InputGroupButton>
                 </InputGroupAddon>
               </InputGroup>
               <FieldDescription>From @BotFather. Stored encrypted on the companion — it never lives on this machine.</FieldDescription>

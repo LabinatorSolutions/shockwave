@@ -6,23 +6,28 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/stephengpope/shockwave/main/api/install.sh | sh
 #
-# Options (append: | sh -s -- --domain=notes.example.com --email=you@x.com --yes):
-#   --domain=HOST   COMPANION_DOMAIN (real domain or ngrok host). Empty (the
-#                   default) = self-signed cert on the box's public IP.
-#   --email=ADDR    ACME_EMAIL for Let's Encrypt (used when --domain is set).
-#   --yes           Non-interactive: no prompts, install docker if missing.
-#   --no-firewall   Skip the ufw setup.
+# Options (append: | sh -s -- --domain=notes.example.com --cert-email=you@x.com --yes):
+#   --domain=HOST      COMPANION_DOMAIN (real domain or ngrok host). Empty (the
+#                      default) = self-signed cert on the box's public IP.
+#                      Works on a RE-RUN too, to add a domain later.
+#   --cert-email=ADDR  Where Let's Encrypt sends expiry warnings (with --domain).
+#   --yes              Non-interactive: no prompts, install docker if missing.
+#   --no-firewall      Skip the ufw setup.
 #
 # What it does:
 #   1. Installs docker (via get.docker.com) if missing.
 #   2. Sets up ufw: deny inbound, allow SSH + 80/443 (skippable, see above).
 #   3. Fetches the compose file + traefik config + init.sql into /opt/shockwave-companion.
-#   4. Generates .env secrets on first run (never overwritten after that).
+#   4. Generates .env secrets on first run (never overwritten after that), and
+#      records this server's public address as COMPANION_HOST.
 #   5. docker compose up -d  — pulls ghcr.io/stephengpope/shockwave-companion.
-#   6. Waits for /health, prints the server URL + API key for the desktop app.
+#   6. Waits for /health, prints the server URL, API key, and — with no domain —
+#      the certificate fingerprint you approve in the desktop app.
+#   7. Installs `shockwave-fingerprint` and `shockwave-rotate-cert` on PATH.
 #
 # Re-running is the update path: refreshes the compose/config files, pulls the
 # newest image, recreates changed containers. Data lives on named volumes.
+# Secrets are never regenerated; only flags you pass are updated.
 # ============================================================================
 
 set -eu
@@ -33,16 +38,21 @@ REF="${SHOCKWAVE_REF:-main}"
 RAW="${SHOCKWAVE_RAW_BASE:-https://raw.githubusercontent.com/$REPO/$REF/api}"
 DIR="${SHOCKWAVE_DIR:-/opt/shockwave-companion}"
 
+# Empty = not passed. A re-run only overwrites what was actually given, so
+# `--domain=` on an update adds a domain to an existing install without touching
+# the generated secrets.
 DOMAIN=""
-EMAIL=""
+DOMAIN_SET=0
+CERT_EMAIL=""
+CERT_EMAIL_SET=0
 ASSUME_YES=0
 NO_FIREWALL=0
 for arg in "$@"; do
   case "$arg" in
-    --domain=*)    DOMAIN="${arg#--domain=}" ;;
-    --email=*)     EMAIL="${arg#--email=}" ;;
-    --yes|-y)      ASSUME_YES=1 ;;
-    --no-firewall) NO_FIREWALL=1 ;;
+    --domain=*)     DOMAIN="${arg#--domain=}"; DOMAIN_SET=1 ;;
+    --cert-email=*) CERT_EMAIL="${arg#--cert-email=}"; CERT_EMAIL_SET=1 ;;
+    --yes|-y)       ASSUME_YES=1 ;;
+    --no-firewall)  NO_FIREWALL=1 ;;
     *) echo "unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -128,21 +138,52 @@ for f in docker-compose.yml init.sql traefik/traefik.yml traefik/gen-router.sh; 
 done
 ok "Files fetched (ref: $REF)"
 
-# ── .env — generated once, never overwritten ────────────────────────────────
+# ── Public address ──────────────────────────────────────────────────────────
+# Resolved HERE, once, and written to .env. The server reads it rather than
+# looking it up itself: the self-signed certificate has to be issued for the
+# exact address printed below, and two independent lookups can disagree — then
+# the certificate is for one address while you connect to another.
+PUBLIC_IP=$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)
+case "$PUBLIC_IP" in
+  *[0-9].[0-9]*) ;;
+  *) PUBLIC_IP="" ;;
+esac
+
+# ── .env — secrets generated once; passed flags update in place ──────────────
 ENV_FILE="$DIR/.env"
+
+# Read one key's value out of .env ('' when absent).
+env_get() { $SUDO sh -c "grep '^$1=' '$ENV_FILE' 2>/dev/null" | head -1 | cut -d= -f2- || true; }
+# Set or replace one key in .env, preserving everything else and the 0600 mode.
+env_set() {
+  $SUDO sh -c "umask 077; grep -v '^$1=' '$ENV_FILE' > '$ENV_FILE.tmp' 2>/dev/null || true; \
+               printf '%s=%s\n' '$1' '$2' >> '$ENV_FILE.tmp'; \
+               mv '$ENV_FILE.tmp' '$ENV_FILE'"
+}
+
 if $SUDO test -f "$ENV_FILE"; then
-  ok ".env exists — keeping it (delete $ENV_FILE to regenerate)"
+  ok ".env exists — secrets kept (delete $ENV_FILE to regenerate)"
   API_KEY_SHOWN="(unchanged — see $ENV_FILE)"
-  DOMAIN=$($SUDO sh -c "grep '^COMPANION_DOMAIN=' '$ENV_FILE'" | cut -d= -f2- || true)
+  # Only overwrite what was actually passed, so an update run doesn't wipe a
+  # domain that's already configured.
+  [ "$DOMAIN_SET" -eq 1 ] && env_set COMPANION_DOMAIN "$DOMAIN"
+  [ "$CERT_EMAIL_SET" -eq 1 ] && env_set COMPANION_CERT_EMAIL "$CERT_EMAIL"
+  DOMAIN=$(env_get COMPANION_DOMAIN)
+  # Refresh the recorded address if it changed (server moved / new IP).
+  if [ -n "$PUBLIC_IP" ] && [ "$(env_get COMPANION_HOST)" != "$PUBLIC_IP" ]; then
+    env_set COMPANION_HOST "$PUBLIC_IP"
+    say "Recorded new public address: $PUBLIC_IP"
+  fi
 else
-  if [ -z "$DOMAIN" ]; then
-    ask "Domain for this server (Enter = none, use self-signed cert on the public IP): "
+  if [ "$DOMAIN_SET" -ne 1 ]; then
+    ask "Domain for this server (Enter = none, use a self-signed certificate on the public IP): "
     DOMAIN="$ANSWER"
   fi
-  if [ -n "$DOMAIN" ] && [ -z "$EMAIL" ]; then
-    ask "Email for Let's Encrypt (Enter = skip): "
-    EMAIL="$ANSWER"
+  if [ -n "$DOMAIN" ] && [ "$CERT_EMAIL_SET" -ne 1 ]; then
+    ask "Email for Let's Encrypt expiry warnings (Enter = skip): "
+    CERT_EMAIL="$ANSWER"
   fi
+  [ -n "$DOMAIN" ] || [ -n "$PUBLIC_IP" ] || fail "could not determine this server's public address, and no --domain was given"
   # hex for the two values that get embedded in URLs / headers; MASTER_KEY must
   # be exactly 32 bytes base64 (the server validates at boot).
   rand_hex() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
@@ -153,11 +194,46 @@ else
 POSTGRES_PASSWORD=$PG_PW
 MASTER_KEY=$MASTER
 API_KEY=$API_KEY_SHOWN
+COMPANION_HOST=$PUBLIC_IP
 COMPANION_DOMAIN=$DOMAIN
-ACME_EMAIL=$EMAIL
+COMPANION_CERT_EMAIL=$CERT_EMAIL
 EOF
   ok ".env created (secrets generated, chmod 600)"
 fi
+
+# ── Helper commands on PATH ─────────────────────────────────────────────────
+# Two things you'll want later and shouldn't have to remember a docker
+# incantation for: read the certificate's fingerprint, and replace it.
+$SUDO sh -c "cat > '$DIR/shockwave-fingerprint'" <<EOF
+#!/bin/sh
+# Print this server's TLS certificate fingerprint. Compare it against the one the
+# desktop app shows before you approve it.
+set -eu
+cd "$DIR"
+exec docker compose exec -T api \\
+  openssl x509 -in /etc/traefik/dynamic/companion.crt -noout -fingerprint -sha256
+EOF
+$SUDO sh -c "cat > '$DIR/shockwave-rotate-cert'" <<EOF
+#!/bin/sh
+# Replace this server's TLS certificate. Deletes the current one and restarts the
+# api, which creates a fresh one at boot — one code path, no second
+# implementation to drift. Traefik's file watcher picks it up on its own.
+#
+# Every desktop will stop connecting until you approve the new fingerprint, which
+# is the point: rotating is how you recover from a stolen private key.
+set -eu
+cd "$DIR"
+docker compose exec -T api rm -f /etc/traefik/dynamic/companion.crt \\
+                                 /etc/traefik/dynamic/companion.key
+docker compose restart api >/dev/null
+printf 'New fingerprint — approve this in the desktop app:\\n'
+sleep 3
+exec "$DIR/shockwave-fingerprint"
+EOF
+$SUDO chmod 755 "$DIR/shockwave-fingerprint" "$DIR/shockwave-rotate-cert"
+$SUDO ln -sf "$DIR/shockwave-fingerprint" /usr/local/bin/shockwave-fingerprint
+$SUDO ln -sf "$DIR/shockwave-rotate-cert" /usr/local/bin/shockwave-rotate-cert
+ok "Installed: shockwave-fingerprint, shockwave-rotate-cert"
 
 # ── Up ──────────────────────────────────────────────────────────────────────
 say "Pulling images + starting containers..."
@@ -179,18 +255,42 @@ VERSION=$(curl -fsS http://127.0.0.1:8080/health | sed 's/.*"version":"\([^"]*\)
 ok "Companion is up (version $VERSION)"
 
 # ── Done ────────────────────────────────────────────────────────────────────
-if [ -n "$DOMAIN" ]; then URL="https://$DOMAIN"; else
-  IP=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo "<this-server's-ip>")
-  URL="https://$IP"
+# Reuse the address recorded in .env rather than looking it up a second time —
+# the certificate was issued for that one, so it's what must be typed.
+if [ -n "$DOMAIN" ]; then
+  URL="https://$DOMAIN"
+else
+  HOST=$(env_get COMPANION_HOST)
+  URL="https://${HOST:-YOUR-SERVER-IP}"
 fi
+
+# With no domain the certificate is self-signed, so the desktop can't check it
+# against anyone — it asks you to approve it, and the fingerprint here is the only
+# thing that makes that approval mean something. Read it off the certificate the
+# server just created.
+FINGERPRINT=""
+if [ -z "$DOMAIN" ]; then
+  FINGERPRINT=$($SUDO docker compose exec -T api \
+    openssl x509 -in /etc/traefik/dynamic/companion.crt -noout -fingerprint -sha256 2>/dev/null \
+    | cut -d= -f2- || true)
+fi
+
 printf '\n\033[0;32m✓ Install complete.\033[0m\n\n'
 printf 'In the desktop app, open Settings → Companion and enter:\n\n'
 printf '  Server URL:  %s\n' "$URL"
 printf '  API key:     %s\n' "$API_KEY_SHOWN"
+if [ -n "$FINGERPRINT" ]; then
+  printf '\nThe app will show you a fingerprint before it connects. Check it matches\n'
+  printf 'this, then approve it:\n\n'
+  printf '  Fingerprint: %s\n' "$FINGERPRINT"
+fi
 printf '\nNotes:\n'
 printf '  - Ports 80 + 443 must be open (cloud firewall / security group).\n'
 if [ -z "$DOMAIN" ]; then
-  printf '  - No domain set: the server uses a self-signed certificate; the desktop will ask you to trust it on first connect.\n'
+  printf '  - Show the fingerprint again any time:  shockwave-fingerprint\n'
+  printf '  - Replace the certificate:              shockwave-rotate-cert\n'
+  printf '  - Add a domain later (real certificate, no fingerprint to approve):\n'
+  printf '      re-run this script with --domain=your-domain --cert-email=you@example.com\n'
 fi
 printf '  - Update later by re-running this script.\n'
 printf '  - Logs: cd %s && %s docker compose logs -f api\n\n' "$DIR" "${SUDO:-}"

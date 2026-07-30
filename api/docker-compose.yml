@@ -41,6 +41,11 @@ services:
       PORT: 8080
       # The Telegram webhook URL is derived from COMPANION_DOMAIN — one public host.
       COMPANION_DOMAIN: ${COMPANION_DOMAIN:-}
+      # This server's public address, recorded by the installer. With no domain
+      # it's the public IP, and the self-signed certificate is issued for it at
+      # boot. Not looked up at runtime: the installer already resolves it to print
+      # your Server URL, and the certificate must match the address you type.
+      COMPANION_HOST: ${COMPANION_HOST:-}
       # pi's per-run scratch (working copies of each chat's session file). On a
       # volume so a rebuild doesn't throw them away — losing them is survivable
       # (they're rebuilt from the stored transcript) but it's a needless refetch.
@@ -85,7 +90,9 @@ services:
       api:
         condition: service_started
     environment:
-      TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL: ${ACME_EMAIL:-}
+      # Traefik's own variable name carries the ACME protocol name; ours doesn't,
+      # because "certificate email" is what it means to whoever is filling it in.
+      TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL: ${COMPANION_CERT_EMAIL:-}
     ports:
       - "80:80"
       - "443:443"

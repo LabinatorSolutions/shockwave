@@ -3,6 +3,7 @@ import { KeyRound, Link2, Pencil, Plus, RefreshCw, Trash2, Unplug } from 'lucide
 import Dialog from '../Dialog.jsx';
 import ConfirmDialog from '../ConfirmDialog.jsx';
 import ErrorMessage from '../ErrorMessage.jsx';
+import { credentialPlaceholder } from './credentialField';
 import { SettingsSection } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -35,15 +36,13 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [token, setToken] = useState('');
-  const [showToken, setShowToken] = useState(false);
   const [error, setError] = useState<any>(null);
 
   useEffect(() => {
     if (!open) return;
     setName(editing?.name ?? '');
     setDescription(editing?.description ?? '');
-    setToken(editing?.token ?? '');
-    setShowToken(false);
+    setToken(''); // main strips tokens; blank means "keep what's stored"
     setError(null);
   }, [open, editing]);
 
@@ -51,13 +50,14 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
   const editingKey = editing ? nameKey(editing.name) : null;
   const duplicateName = !!trimmedName
     && (secrets ?? []).some((s) => nameKey(s.name) === nameKey(trimmedName) && nameKey(s.name) !== editingKey);
-  const canSubmit = trimmedName && token && !duplicateName;
+  // Editing keeps the stored token when the box is left blank; a new secret needs one.
+  const canSubmit = trimmedName && (token || !!editing) && !duplicateName;
 
   const submit = (e) => {
     e.preventDefault();
     setError(null);
     if (!trimmedName) return setError('Name is required.');
-    if (!token) return setError('Token is required.');
+    if (!token && !editing) return setError('Token is required.');
     if (duplicateName) return setError('A secret with this name already exists.');
     onSubmit({ name: trimmedName, description: description.trim(), token });
   };
@@ -114,18 +114,14 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
             <InputGroupInput
               id="secret-token"
               className="font-mono"
-              type={showToken ? 'text' : 'password'}
+              type="password"
+              placeholder={credentialPlaceholder(!!editing?.hasToken)}
               value={token}
               onChange={(e) => setToken(e.target.value)}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
             />
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton onClick={() => setShowToken((v) => !v)}>
-                {showToken ? 'Hide' : 'Show'}
-              </InputGroupButton>
-            </InputGroupAddon>
           </InputGroup>
         </Field>
 
@@ -150,7 +146,6 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
   // Which "popular setup" is selected in the second dropdown. 'custom' = the
   // scopes field is hand-managed. Purely UI — only the scopes field is saved.
   const [setupId, setSetupId] = useState('custom');
-  const [showSecret, setShowSecret] = useState(false);
   const [error, setError] = useState<any>(null);
 
   const preset = (presets ?? []).find((p) => p.id === providerId);
@@ -177,7 +172,7 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
       setName(editing.name ?? '');
       setDescription(editing.description ?? '');
       setClientId(o.clientId ?? '');
-      setClientSecret(o.clientSecret ?? '');
+      setClientSecret(''); // main strips it; blank means "keep what's stored"
       setAuthUrl(o.authUrl ?? '');
       setTokenUrl(o.tokenUrl ?? '');
       setScopes(scopeStr);
@@ -196,7 +191,6 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
       setScopes((firstSetup?.scopes ?? first?.defaultScopes ?? []).join(' '));
       setSetupId(firstSetup?.id ?? 'custom');
     }
-    setShowSecret(false);
     setError(null);
   }, [open, editing, presets]);
 
@@ -230,7 +224,7 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
   const editingKey = editing ? nameKey(editing.name) : null;
   const duplicateName = !!trimmedName
     && (secrets ?? []).some((s) => nameKey(s.name) === nameKey(trimmedName) && nameKey(s.name) !== editingKey);
-  const canSubmit = trimmedName && clientId && clientSecret && !duplicateName
+  const canSubmit = trimmedName && clientId && (clientSecret || !!editing?.oauth?.hasClientSecret) && !duplicateName
     && (!isCustom || (authUrl.trim() && tokenUrl.trim()));
 
   const submit = (e) => {
@@ -238,7 +232,7 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
     setError(null);
     if (!trimmedName) return setError('Name is required.');
     if (!clientId) return setError('Client ID is required.');
-    if (!clientSecret) return setError('Client Secret is required.');
+    if (!clientSecret && !editing?.oauth?.hasClientSecret) return setError('Client Secret is required.');
     if (isCustom && (!authUrl.trim() || !tokenUrl.trim())) return setError('Custom providers need both endpoint URLs.');
     if (duplicateName) return setError('A secret with this name already exists.');
     onSubmit({
@@ -349,18 +343,14 @@ function ConnectionFormDialog({ open, editing, presets, secrets, onSubmit, onClo
             <InputGroupInput
               id="oauth-client-secret"
               className="font-mono"
-              type={showSecret ? 'text' : 'password'}
+              type="password"
+              placeholder={credentialPlaceholder(!!editing?.oauth?.hasClientSecret)}
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
             />
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton onClick={() => setShowSecret((v) => !v)}>
-                {showSecret ? 'Hide' : 'Show'}
-              </InputGroupButton>
-            </InputGroupAddon>
           </InputGroup>
         </Field>
 

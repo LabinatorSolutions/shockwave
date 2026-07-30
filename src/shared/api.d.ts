@@ -250,11 +250,35 @@ export interface ShockwaveApi {
     onChanged(cb: (payload: { keys: string[]; settings: Settings }) => void): () => void;
     /** The API connection config (server URL + whether a key is stored). The key
      *  itself never leaves main. */
-    apiRead(): Promise<{ url: string; hasApiKey: boolean }>;
+    /** `certFingerprint` is the approved companion certificate, shown so the user
+     *  can compare it against `shockwave-fingerprint` on the server. Not a secret
+     *  — it travels in the clear on every TLS handshake. Empty when the server has
+     *  a publicly-trusted certificate, or nothing is approved yet. */
+    apiRead(): Promise<{ url: string; hasApiKey: boolean; certFingerprint: string }>;
     /** Persist URL and/or key. Omit `apiKey` to keep the stored one. */
     apiWrite(patch: { url?: string; apiKey?: string }): Promise<{ ok: boolean; url: string; hasApiKey: boolean }>;
-    /** Health-check a URL + key (falls back to the stored key when omitted). */
-    apiTest(args: { url: string; apiKey?: string }): Promise<{ ok: boolean; error?: string }>;
+    /** Probe a URL + key (falls back to the stored key when omitted). Reports
+     *  only — it can never approve a certificate. `certNeedsApproval` is set when
+     *  the companion answered but the app held the connection because its
+     *  certificate isn't the approved one; `approved: null` means nothing has
+     *  ever been approved for this server. The server is reachable either way,
+     *  so this is distinct from a plain failure. */
+    apiTest(args: { url: string; apiKey?: string }): Promise<{
+      ok: boolean;
+      error?: string;
+      certNeedsApproval?: { host: string; approved: string | null; offered: string };
+    }>;
+    /** Approve a companion certificate the user has been shown. The only path
+     *  that stores one. */
+    approveCert(fingerprint: string): Promise<{ ok: boolean; error?: string }>;
+    /** Un-approve the stored companion certificate. */
+    forgetCert(): Promise<{ ok: boolean }>;
+    /** A certificate awaiting approval right now, or null. */
+    pendingCert(): Promise<{ host: string; approved: string | null; offered: string } | null>;
+    /** Fires once per distinct certificate the app held a connection on. */
+    onCertNeedsApproval(
+      cb: (c: { host: string; approved: string | null; offered: string }) => void,
+    ): () => void;
     /** Telegram connection status (from the companion), including the workspace it runs against. */
     telegramStatus(): Promise<{ ok: boolean; connected?: boolean; botUsername?: string | null; activeChatId?: string | null; workspaceId?: string | null; workspaceName?: string | null; error?: string }>;
     /** Connect a Telegram bot — the companion validates the token + registers the webhook. */

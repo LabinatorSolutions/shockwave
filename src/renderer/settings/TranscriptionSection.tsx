@@ -1,15 +1,12 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useVoiceInput } from '../voice/useVoiceInput.js';
+import { useCommitField } from './useCommitField';
 import { VoiceBars } from '../voice/VoiceBars.jsx';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from '@/components/ui/input-group';
+import { Input } from '@/components/ui/input';
+import { credentialPlaceholder } from './credentialField';
 
 // Settings page for voice transcription. Two jobs:
 //   1. Capture + store the AssemblyAI API key (encrypted in main).
@@ -19,13 +16,32 @@ import {
 //      origin, and the chat composer's mic skips the permission prompt forever
 //      after.
 export default function TranscriptionSection({ transcription, onTranscriptionChange }) {
-  const apiKey = transcription?.apiKey ?? '';
-  const [showKey, setShowKey] = useState(false);
+  const hasApiKey = !!transcription?.hasApiKey;
 
+  // No `apiKey` here — main strips it, so including it would send '' and delete
+  // the stored key on any unrelated change.
   const update = (patch) => onTranscriptionChange?.({
     provider: 'assemblyai',
-    apiKey,
     ...patch,
+  });
+
+  // Declared ahead of the hook that fills it — the commit handler below runs
+  // long after render, so the ref is populated by the time it fires.
+  const recheckRef = useRef<(() => void) | null>(null);
+
+  // Commits on blur (see useCommitField). The key is a paste, and every write
+  // re-triggers the token check below, so per-keystroke writes were both waste
+  // and the source of the racing checks.
+  //
+  // AWAIT the save before re-checking: main resolves the key from the companion,
+  // not from what's on screen, so asking any earlier just re-reads the old key
+  // and leaves the Test button dead.
+  // Write-only: main never sends the key down, so this starts empty and a commit
+  // only fires for something actually typed.
+  const keyField = useCommitField('', async (next) => {
+    if (!next) return;
+    await update({ apiKey: next });
+    recheckRef.current?.();
   });
 
   // Test-mic local state. Independent hook instance from the composer's —
@@ -35,7 +51,7 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
   const [finalText, setFinalText] = useState('');
   const [testError, setTestError] = useState<any>(null);
 
-  const { voiceAvailable, isConnecting, isRecording, startRecording, stopRecording } = useVoiceInput({
+  const { voiceAvailable, isConnecting, isRecording, startRecording, stopRecording, recheck } = useVoiceInput({
     getToken: () => window.api.voice.getToken(),
     onTranscript: (t) => {
       setFinalText((prev) => (prev ? prev + ' ' : '') + t);
@@ -45,6 +61,7 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
     onError: setTestError,
     onVolumeChange: (rms) => { volumeRef.current = rms; },
   });
+  recheckRef.current = recheck;
 
   const onTest = () => {
     setTestError(null);
@@ -81,22 +98,18 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
       <SettingsGroup>
         <Field>
           <FieldLabel htmlFor="transcription-key">AssemblyAI API key</FieldLabel>
-          <InputGroup>
-            <InputGroupInput
-              id="transcription-key"
-              type={showKey ? 'text' : 'password'}
-              value={apiKey}
-              onChange={(e) => update({ apiKey: e.target.value })}
-              spellCheck={false}
-              autoComplete="off"
-              autoCorrect="off"
-            />
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton onClick={() => setShowKey((v) => !v)}>
-                {showKey ? 'Hide' : 'Show'}
-              </InputGroupButton>
-            </InputGroupAddon>
-          </InputGroup>
+          <Input
+            id="transcription-key"
+            type="password"
+            className="font-mono"
+            placeholder={credentialPlaceholder(hasApiKey)}
+            value={keyField.value}
+            onChange={(e) => keyField.onChange(e.target.value)}
+            onBlur={keyField.onBlur}
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+          />
         </Field>
       </SettingsGroup>
 
@@ -114,15 +127,15 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
             size="sm"
             className="w-fit"
             onClick={onTest}
-            disabled={!apiKey || (!voiceAvailable && !isConnecting && !isRecording)}
+            disabled={!hasApiKey || (!voiceAvailable && !isConnecting && !isRecording)}
           >
             {isRecording && <VoiceBars volumeRef={volumeRef} isRecording={isRecording} />}
             <span>{buttonLabel}</span>
           </Button>
-          {!apiKey && (
+          {!hasApiKey && (
             <p className="text-xs text-muted-foreground">Enter your AssemblyAI key first.</p>
           )}
-          {apiKey && !voiceAvailable && !isConnecting && !isRecording && (
+          {hasApiKey && !voiceAvailable && !isConnecting && !isRecording && (
             <p className="text-xs text-muted-foreground">Checking key…</p>
           )}
           {testError && <p className="text-xs text-destructive">{testError}</p>}
