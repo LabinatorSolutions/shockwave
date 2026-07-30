@@ -17,6 +17,12 @@ import { api } from './api/client.js';
 import {
   isLocalKey, readLocalSettings, patchLocalSettings, getWorkspaceLocal, pruneWorkspaceLocal,
 } from './api/localSettings.js';
+// WHICH fields are credentials is declared once, in agent-core — the only code
+// bundled into both this build and the companion's. See agent-core/credentials.js.
+import {
+  SETTINGS_CREDENTIALS, AGENT_SECRET_CREDENTIALS,
+  getPath, deletePath, setPathCopy, isSet,
+} from '../../agent-core/credentials.js';
 
 // The ONLY defaults the desktop holds — for machine-local settings, which live in
 // a userData file and never touch the DB. DB settings have NO desktop defaults:
@@ -53,49 +59,44 @@ const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
  */
 function stripCredentials(settings: any): any {
   if (!settings || typeof settings !== 'object') return settings;
-  const out: any = { ...settings };
+  let out: any = { ...settings };
 
-  if (out.codingAgent) {
-    const keys = out.codingAgent.providerKeys ?? {};
-    out.codingAgent = {
-      ...out.codingAgent,
-      providerKeys: undefined,
-      // slug -> true, so the box can show dots for the selected provider without
-      // the value. Only slugs with a non-empty key are listed.
-      hasProviderKey: Object.fromEntries(
-        Object.entries(keys).filter(([, v]) => typeof v === 'string' && v).map(([k]) => [k, true]),
-      ),
-    };
-    delete out.codingAgent.providerKeys;
-  }
-
-  if (out.transcription) {
-    out.transcription = { ...out.transcription, hasApiKey: !!out.transcription.apiKey };
-    delete out.transcription.apiKey;
-  }
-
-  if (out.sync) {
-    out.sync = { ...out.sync, hasPat: !!out.sync.pat };
-    delete out.sync.pat;
+  for (const c of SETTINGS_CREDENTIALS) {
+    const value = getPath(out, c.path);
+    if (c.wildcard) {
+      // An open-ended map (provider slug -> key). The flag is a map too, so the
+      // box can show dots for whichever provider is selected.
+      const flags = Object.fromEntries(
+        Object.entries((value ?? {}) as Record<string, unknown>)
+          .filter(([, v]) => isSet(v))
+          .map(([k]) => [k, true]),
+      );
+      out = setPathCopy(deletePath(out, c.path), parentOf(c.path, c.flag), flags);
+    } else {
+      out = setPathCopy(deletePath(out, c.path), parentOf(c.path, c.flag), isSet(value));
+    }
   }
 
   if (Array.isArray(out.agentSecrets)) {
-    out.agentSecrets = out.agentSecrets.map((s: any) => {
-      const next: any = { ...s, hasToken: !!s.token };
-      delete next.token;
-      if (next.oauth) {
-        next.oauth = { ...next.oauth, hasClientSecret: !!next.oauth.clientSecret };
-        // accessToken/refreshToken were never shown and are written only by the
-        // OAuth flow — the renderer has no business holding them at all.
-        delete next.oauth.clientSecret;
-        delete next.oauth.accessToken;
-        delete next.oauth.refreshToken;
+    out.agentSecrets = out.agentSecrets.map((entry: any) => {
+      let next: any = { ...entry };
+      for (const c of AGENT_SECRET_CREDENTIALS) {
+        // accessToken/refreshToken get a flag too, though nothing renders them —
+        // the point is that they leave, not that they're reported.
+        next = setPathCopy(deletePath(next, c.path), parentOf(c.path, c.flag), isSet(getPath(next, c.path)));
       }
       return next;
     });
   }
 
   return out;
+}
+
+/** `a.b.c` + flag `hasC` -> `a.b.hasC`. Keeps a flag beside the value it replaces. */
+function parentOf(path: string, flag: string): string {
+  const parts = path.split('.');
+  parts[parts.length - 1] = flag;
+  return parts.join('.');
 }
 
 // Broadcasts changed top-level keys + a fresh read to the renderer, for
@@ -113,9 +114,18 @@ async function emitChanged(keys: string[]) {
   }
 }
 
-/** The renderer's copy: real settings, no credentials. The other door is
- *  `emitChanged` above. Anything else calling `readSettings` is main using them
- *  for itself and must keep the real values. */
+/**
+ * The renderer's copy: real settings, no credentials. The other door is
+ * `emitChanged` above.
+ *
+ * THIS IS THE ONLY READ AN IPC HANDLER MAY RETURN. `readSettings` and
+ * `readSettingsSafe` carry live credentials — they exist for main's own use (the
+ * agent, git, the voice token) and returning either from a handler leaks every key
+ * you have to the screen. That distinction lived in a comment, which is the same
+ * shape of mistake as the certificate check that "trusted anyway": a policy nobody
+ * enforces. `tests/rendererSettingsDoor.test.js` now asserts it by scanning
+ * main.ts, so a new handler that reaches for the wrong one fails the suite.
+ */
 export async function readSettingsForRenderer(): Promise<{ settings: any; online: boolean; reason?: string }> {
   const r = await readSettingsSafe();
   return { ...r, settings: stripCredentials(r.settings) };

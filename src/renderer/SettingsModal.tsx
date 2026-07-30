@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import CompanionSection from './settings/CompanionSection.jsx';
 import TelegramSection from './settings/TelegramSection.jsx';
 import { SETTINGS_SECTIONS } from './constants.js';
@@ -115,6 +115,16 @@ export default function SettingsModal({
   const effectiveActive = gated && active !== SETTINGS_SECTIONS.COMPANION
     ? SETTINGS_SECTIONS.COMPANION
     : active;
+
+  // Move `active` to where we're actually showing. Overriding only the DERIVED
+  // value left `active` pointing at the default section, so the instant the gate
+  // released — pressing Approve, which connects — the page jumped away from
+  // Companion to Appearance, mid-task, with the confirmation you were reading
+  // still on screen for a fraction of a second. Keep the two in step so releasing
+  // the gate has nothing to snap back to.
+  useEffect(() => {
+    if (gated && active !== SETTINGS_SECTIONS.COMPANION) setActive(SETTINGS_SECTIONS.COMPANION);
+  }, [gated, active]);
 
   const activeWs = (workspaces || []).find((w) => w.id === activeWorkspaceId);
   const workspaceLabel = activeWs ? `Workspace · ${activeWs.name}` : 'Workspace';

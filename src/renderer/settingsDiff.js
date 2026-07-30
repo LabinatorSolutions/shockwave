@@ -1,3 +1,11 @@
+// WHICH fields are credentials is declared once, in agent-core — see
+// agent-core/credentials.js. Duplicating it here is how a mismatch leaks a key to
+// the screen or deletes one on save.
+import {
+  SETTINGS_CREDENTIALS, AGENT_SECRET_CREDENTIALS,
+  getPath, deletePath, setPathCopy, isSet,
+} from '../../agent-core/credentials.js';
+
 // PURE patch-diffing for settings saves. Plain `.js` (no React, no window) so
 // `node --test` can exercise it directly — same split as linkResolver.js.
 //
@@ -48,48 +56,45 @@ export const MAP_KEYS = ['codingAgent.providerKeys'];
  */
 export function dropEmptyCredentials(patch) {
   if (!patch || typeof patch !== 'object') return patch;
-  const out = { ...patch };
+  let out = { ...patch };
 
-  if (out.sync && typeof out.sync === 'object' && !out.sync.pat) {
-    out.sync = { ...out.sync };
-    delete out.sync.pat;
-  }
-  if (out.transcription && typeof out.transcription === 'object' && !out.transcription.apiKey) {
-    out.transcription = { ...out.transcription };
-    delete out.transcription.apiKey;
-  }
-  if (out.codingAgent && typeof out.codingAgent === 'object') {
-    const keys = out.codingAgent.providerKeys;
-    if (keys && typeof keys === 'object') {
-      const kept = Object.fromEntries(Object.entries(keys).filter(([, v]) => typeof v === 'string' && v));
-      out.codingAgent = { ...out.codingAgent };
-      if (Object.keys(kept).length) out.codingAgent.providerKeys = kept;
-      else delete out.codingAgent.providerKeys;
+  for (const c of SETTINGS_CREDENTIALS) {
+    // buildPatch emits a credential either nested (`{sync:{pat}}`) or as a dotted
+    // key (`{'codingAgent.providerKeys':…}` — MAP_KEYS travel dotted). Treat the
+    // dotted key as just another path so there's one code path, not two.
+    const dotted = Object.prototype.hasOwnProperty.call(out, c.path);
+    const read = () => (dotted ? out[c.path] : getPath(out, c.path));
+    const drop = () => {
+      if (!dotted) return deletePath(out, c.path);
+      const o = { ...out }; delete o[c.path]; return o;
+    };
+    const keep = (v) => (dotted ? { ...out, [c.path]: v } : setPathCopy(out, c.path, v));
+
+    const value = read();
+    if (value === undefined) continue;
+
+    if (c.wildcard) {
+      // Send only slugs that carry a key; drop the map entirely if none do.
+      const kept = Object.fromEntries(Object.entries(value ?? {}).filter(([, v]) => isSet(v)));
+      out = Object.keys(kept).length ? keep(kept) : drop();
+    } else if (!isSet(value)) {
+      out = drop();
     }
   }
+
   if (Array.isArray(out.agentSecrets)) {
-    out.agentSecrets = out.agentSecrets.map((s) => {
-      const next = { ...s };
-      if (!next.token) delete next.token;
-      if (next.oauth && typeof next.oauth === 'object') {
-        const o = { ...next.oauth };
-        if (!o.clientSecret) delete o.clientSecret;
-        delete o.accessToken;   // written only by the OAuth flow
-        delete o.refreshToken;
-        next.oauth = o;
+    out.agentSecrets = out.agentSecrets.map((entry) => {
+      let next = { ...entry };
+      for (const c of AGENT_SECRET_CREDENTIALS) {
+        // Absent means "leave what's stored", so only something actually typed is
+        // sent and an unrelated edit can't blank a credential. The OAuth-owned
+        // pair is never sent from here at all — the OAuth flow owns those.
+        if (c.ownedByOAuthFlow || !isSet(getPath(next, c.path))) next = deletePath(next, c.path);
       }
       return next;
     });
   }
-  // `codingAgent.providerKeys` is a MAP_KEY, so buildPatch may also have emitted
-  // it as a dotted leaf. Same rule.
-  if (out['codingAgent.providerKeys'] && typeof out['codingAgent.providerKeys'] === 'object') {
-    const kept = Object.fromEntries(
-      Object.entries(out['codingAgent.providerKeys']).filter(([, v]) => typeof v === 'string' && v),
-    );
-    if (Object.keys(kept).length) out['codingAgent.providerKeys'] = kept;
-    else delete out['codingAgent.providerKeys'];
-  }
+
   return out;
 }
 

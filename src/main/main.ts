@@ -37,7 +37,7 @@ import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings,
 import { readApiConfig, writeApiConfig } from './api/config.js';
 import {
   approveFingerprint, forgetFingerprint, approvedFingerprint,
-  onCertNeedsApproval, readServerCert, getPendingCert,
+  onCertNeedsApproval, readServerCert, getPendingCert, hostOf,
 } from './api/net.js';
 import os from 'node:os';
 import { api } from './api/client.js';
@@ -994,7 +994,13 @@ ipcMain.handle('api:forgetCert', () => {
 // connection usually happens before the window exists, and a message sent to a
 // window that isn't listening yet is simply lost — there is no replay. So the
 // renderer pulls once at startup as well as subscribing.
-ipcMain.handle('api:pendingCert', () => getPendingCert(undefined, 5 * 60_000) ?? null);
+ipcMain.handle('api:pendingCert', () => {
+  // Filtered by the CONFIGURED host, same as every other read. Unfiltered, the
+  // startup warning could name a server that isn't yours — the slot is written by
+  // any companion request, including retries against a previous URL.
+  const host = hostOf(readApiConfig().url);
+  return getPendingCert(host) ?? null;
+});
 
 // Telegram — the desktop UI triggers these; the actions (setWebhook, token
 // storage) happen on the companion, which owns the bot.

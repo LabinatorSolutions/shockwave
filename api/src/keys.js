@@ -9,14 +9,19 @@
 // value routed there cannot be stored in the clear; the lists below decide only
 // WHERE a value goes, not whether it happens to get encrypted.
 
+// WHICH fields are credentials is declared ONCE, in agent-core/credentials.js —
+// the only code bundled into both this build and the desktop's. It used to be
+// written out here, again in main's strip-before-the-renderer, and again in the
+// renderer's don't-send-it-back guard: three copies of one fact, where a mismatch
+// leaks a key to the screen or deletes it on save.
+import {
+  settingsCredentialPatterns, agentSecretFields, oauthOwnedFields,
+} from '../../agent-core/credentials.js';
+
 // Standalone credentials, owned by 'settings' in secret_value. The settings key
 // IS the field. Anything matching these is stripped out of the settings tree on
 // write and spliced back in on read.
-export const SETTINGS_SECRET_PATTERNS = [
-  /^codingAgent\.providerKeys\.[^.]+$/,
-  /^transcription\.apiKey$/,
-  /^sync\.pat$/,
-];
+export const SETTINGS_SECRET_PATTERNS = settingsCredentialPatterns();
 
 export const SETTINGS_SECRET_OWNER = 'settings';
 
@@ -25,12 +30,7 @@ export function isSettingsSecretKey(key) {
 }
 
 // Credential fields on an agent secret, owned by that secret's name.
-export const AGENT_SECRET_FIELDS = [
-  'token',
-  'oauth.clientSecret',
-  'oauth.accessToken',
-  'oauth.refreshToken',
-];
+export const AGENT_SECRET_FIELDS = agentSecretFields();
 
 export function isAgentSecretField(field) {
   return AGENT_SECRET_FIELDS.includes(field);
@@ -43,7 +43,7 @@ export function isAgentSecretField(field) {
 //
 // clientId/clientSecret are deliberately absent: the user types those into
 // Settings, so a bulk write MUST still be able to author them.
-export const OAUTH_OWNED_FIELDS = ['oauth.accessToken', 'oauth.refreshToken'];
+export const OAUTH_OWNED_FIELDS = oauthOwnedFields();
 export const OAUTH_OWNED_COLUMNS = ['oauthExpiresAt', 'oauthStatus', 'oauthAccountEmail'];
 
 export function isOAuthOwnedField(field) {

@@ -52,7 +52,11 @@ const CB_USE_CHROMIUM = -3;
 const CB_ACCEPT = 0;
 const CB_DO_NOT_CONNECT = -2;
 
-const PENDING_TTL_MS = 15_000;
+// How long a parked certificate stays offerable. Generous on purpose: the
+// renderer PULLS this at startup (the push can fire before the window exists), and
+// a boot slow enough to miss a 15s window would have shown nothing at all. One
+// value — there used to be a second, longer one passed in at the pull site.
+const PENDING_TTL_MS = 5 * 60_000;
 
 /** A certificate the app stopped on, waiting for the user to approve it. */
 export interface PendingCert {
@@ -73,7 +77,7 @@ let pendingApproval: PendingCert | null = null;
 // before approval there's no fresh certificate to show, and after approval the
 // stored verdict is still "don't connect", so approving appeared to do nothing.
 //
-// There is no API to drop just that cache, so approving retires the whole session
+// There is no API to drop just that cache, so a change retires the whole session
 // and the next request builds a new one. Safe because this session is in-memory
 // and holds nothing worth keeping — no cookies, no storage. The live feed's stream
 // dies with it and reconnects on its own.
@@ -82,6 +86,19 @@ function retireSession(): void {
   epoch += 1;
   ses = null;
 }
+
+// The fingerprint the live session was built against. Checked on every use, so
+// ANY change to the stored pin invalidates the cached verdict — not just the two
+// paths that call retireSession() explicitly.
+//
+// This is a security bug fixed, not tidying. Changing the companion URL clears the
+// pin (see config.ts) but went through neither approve nor forget, so the session —
+// and Chromium's cached "accept" — survived. The result: the app connected happily
+// with NOTHING approved, and the panel showed Connected with no fingerprint to
+// show. Pinning was effectively off until the process restarted. Deciding here,
+// from the stored value, means a future caller that clears the pin some other way
+// can't reopen the same hole by forgetting to retire.
+let sessionFingerprint: string | null = null;
 
 // Announced on EVERY held connection — no dedupe here. The renderer's toast
 // carries a fixed id, so while it's on screen a repeat updates it in place
@@ -173,7 +190,11 @@ export function clearPendingCert(): void { pendingApproval = null; }
 export function approveFingerprint(fingerprint: string): void {
   writeApiConfig({ certFingerprint: fingerprint });
   clearPendingCert();
-  retireSession(); // or the cached "don't connect" verdict outlives the approval
+  // No explicit retire: getCompanionSession() compares the live session against
+  // the stored pin and retires on any difference. One mechanism, so a future
+  // caller that changes the pin can't forget to invalidate the cached verdict —
+  // which is precisely how clearing the pin via a URL change let the app connect
+  // with nothing approved.
 }
 
 /** The fingerprint currently approved for this machine, for display. Empty when
@@ -188,11 +209,17 @@ export function approvedFingerprint(): string {
 export function forgetFingerprint(): void {
   writeApiConfig({ certFingerprint: '' });
   clearPendingCert();
-  retireSession(); // the cached "accept" verdict would outlive the un-approval
 }
 
 function getCompanionSession(): Electron.Session {
+  // Retire on ANY change to the stored pin, whoever made it. Clearing it via a
+  // URL change calls neither approve nor forget, so without this the cached
+  // "accept" verdict outlived the approval and the app connected with nothing
+  // approved at all.
+  const pinned = readApiConfig().certFingerprint;
+  if (ses && sessionFingerprint !== pinned) retireSession();
   if (ses) return ses;
+  sessionFingerprint = pinned;
   // In-memory partition (no 'persist:' prefix) — isolated from the windows'
   // default session, so this policy never touches renderer traffic. The epoch
   // suffix is what makes retireSession() effective: a new partition name is a new
