@@ -127,17 +127,55 @@ Job status (next run, last run, manual run-now) is in **Settings → Cron** in t
 
 ---
 
-## Development
+## What it does
 
-```bash
-npm install
-npm run dev     # electron + vite, hot reload
-npm run dist    # build installers into dist/
-npm test        # run the test suite
-```
+### 🧠 Notes that link to each other
 
-Companion server (in `api/`): `cd api && docker compose up -d --build` — see [`api/CLAUDE.md`](api/CLAUDE.md).
+- **Plain `.md` in a folder** — copy the folder, you have everything.
+- **Link files with `[[brackets]]`** — one click to the related file, no folder digging.
+- **Rename anything, links follow** — you never fix a broken link.
+- **Every file lists what points at it** — you find the thread you forgot you started.
+- **Same name in two folders** — `acme/Meeting` and `globex/Meeting` both work.
+- **A graph of the workspace** — spot the files nothing links to.
 
-> **Note:** prebuilt companion images are published to [`ghcr.io/stephengpope/shockwave-companion`](https://github.com/stephengpope/shockwave/pkgs/container/shockwave-companion) (multi-arch, tagged per release + `latest`).
+### 🤖 An agent that edits them
 
-See [`CLAUDE.md`](CLAUDE.md) for architecture notes.
+- **Sits beside the editor** — ask, and the file changes. Nothing to paste anywhere.
+- **Searches your old chats** — "what did we decide about pricing" finds the answer.
+- **Fetches the page, not a guess** — web search and a real browser, both bundled.
+- **Works in your Gmail and Drive** — connect the account once, it does the rest.
+- **Draws diagrams you can drag** — real Excalidraw files, editable after.
+- **Talk instead of type** — the mic writes the prompt.
+- **Your process as a skill folder** — teach it once, it does it your way after.
+
+### ⏰ Work that happens without you
+
+- **A `cron.json` in the repo** — "every morning, read yesterday, update TODO."
+- **Runs on your server** — the lid stays closed.
+- **Committed and pushed when done** — the work is there when you open the app.
+- **One-time jobs erase themselves** — "remind me Thursday" leaves nothing behind.
+- **Run one now, see the last one** — no wondering whether it fired.
+
+### 📱 It answers your texts
+
+- **Message the bot from anywhere** — the work starts before you sit down.
+- **Send a voice note** — talk it through on the walk.
+- **Watch the reply build** — the work, not a spinner.
+- **Ask `/btw` mid-job** — check on it without interrupting it.
+- **Results land in your repo** — finished by the time you're back.
+
+### 🖥 One server behind all of it
+
+- **One line on a cheap VPS** — Docker, database, TLS, done.
+- **A second machine sees everything** — chats, settings, workspaces, nothing to export.
+- **You host it, so you hold it** — no company sits between you and your notes.
+- **Upgrade from inside the app** — one button, no SSH.
+- **Restarts itself when it wedges** — you don't get paged.
+
+### 🔄 Sync through your own repo
+
+- **Your GitHub repo, no subscription** — sync is free because the repo is yours.
+- **Syncs on a timer in the background** — two machines agree without you thinking about it.
+- **Conflicts settled in the app** — keep yours, take theirs, click. No terminal.
+- **Every sync is a commit** — go back to any day.
+- **New laptop, pick a folder** — everything's there in a minute.
