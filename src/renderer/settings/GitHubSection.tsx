@@ -198,17 +198,19 @@ export default function GitHubSection({ sync, onSyncChange }) {
       <SettingsGroup title="Sync">
         <Field>
           <FieldLabel htmlFor="sync-interval">Sync Interval Seconds</FieldLabel>
-          <Input
-            id="sync-interval"
-            className={NUMBER_FIELD}
-            type="number"
-            min={MIN_INTERVAL}
-            max={MAX_INTERVAL}
-            placeholder="10"
-            value={intervalField.value}
-            onChange={(e) => intervalField.onChange(e.target.value)}
-            onBlur={intervalField.onBlur}
-          />
+          <div>
+            <Input
+              id="sync-interval"
+              className={NUMBER_FIELD}
+              type="number"
+              min={MIN_INTERVAL}
+              max={MAX_INTERVAL}
+              placeholder="10"
+              value={intervalField.value}
+              onChange={(e) => intervalField.onChange(e.target.value)}
+              onBlur={intervalField.onBlur}
+            />
+          </div>
           <FieldDescription className="text-xs">
             How often the open workspace pulls and pushes. {MIN_INTERVAL}&ndash;{MAX_INTERVAL}s.
           </FieldDescription>

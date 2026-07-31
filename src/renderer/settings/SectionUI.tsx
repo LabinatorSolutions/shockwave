@@ -49,4 +49,17 @@ export function SettingsDivider() {
 // 64px with the padding cut to 8px leaves ~30px of text column after Chromium's
 // ~15px stepper — enough for the largest value any of these holds (600, the sync
 // interval ceiling) without the box being wider than its contents.
+//
+// **Wrap the input in a plain <div>.** `Field`'s vertical variant carries
+// `[&>*]:w-full` (field.tsx), which compiles to `.field > * { width: 100% }` — a
+// child selector, so it outranks `.w-16` on specificity and tailwind-merge never
+// gets a say. Measured in the renderer: Field > Input is 360px, Field > div >
+// Input is 64px. The wrapper takes the full width and the input inside is free.
+//
+// **The input must be wrapped in a plain `<div>`.** `Field`'s vertical variant
+// carries `[&>*]:w-full` (`components/ui/field.tsx`), which compiles to
+// `.field > * { width: 100% }` — a child selector, so it outranks `.w-16` on
+// specificity and tailwind-merge never gets a say. Measured in the renderer:
+// Field > Input is 360px, Field > div > Input is 64px. The wrapper takes the full
+// width the Field insists on, and the input inside is free to be its own size.
 export const NUMBER_FIELD = 'w-16 px-2';

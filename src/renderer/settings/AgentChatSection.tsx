@@ -361,46 +361,52 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
       <SettingsGroup>
         <Field>
           <FieldLabel htmlFor="agent-max-run">Agent Run Max Minutes</FieldLabel>
-          <Input
-            id="agent-max-run"
-            className={NUMBER_FIELD}
-            type="number"
-            min={1}
-            placeholder="30"
-            value={maxRunField.value}
-            onChange={(e) => maxRunField.onChange(e.target.value)}
-            onBlur={maxRunField.onBlur}
-          />
+          <div>
+            <Input
+              id="agent-max-run"
+              className={NUMBER_FIELD}
+              type="number"
+              min={1}
+              placeholder="30"
+              value={maxRunField.value}
+              onChange={(e) => maxRunField.onChange(e.target.value)}
+              onBlur={maxRunField.onBlur}
+            />
+          </div>
           <FieldDescription>Aborts a Telegram or scheduled run that overruns.</FieldDescription>
         </Field>
 
         <Field>
           <FieldLabel htmlFor="agent-fix-attempts">Git Fixer Max Attempts</FieldLabel>
-          <Input
-            id="agent-fix-attempts"
-            className={NUMBER_FIELD}
-            type="number"
-            min={1}
-            placeholder="3"
-            value={fixAttemptsField.value}
-            onChange={(e) => fixAttemptsField.onChange(e.target.value)}
-            onBlur={fixAttemptsField.onBlur}
-          />
+          <div>
+            <Input
+              id="agent-fix-attempts"
+              className={NUMBER_FIELD}
+              type="number"
+              min={1}
+              placeholder="3"
+              value={fixAttemptsField.value}
+              onChange={(e) => fixAttemptsField.onChange(e.target.value)}
+              onBlur={fixAttemptsField.onBlur}
+            />
+          </div>
           <FieldDescription>How many times the git-fixer retries a merge it can&apos;t resolve.</FieldDescription>
         </Field>
 
         <Field>
           <FieldLabel htmlFor="agent-scratch-ttl">Scratch Pad Max Days</FieldLabel>
-          <Input
-            id="agent-scratch-ttl"
-            className={NUMBER_FIELD}
-            type="number"
-            min={1}
-            placeholder="1"
-            value={ttlField.value}
-            onChange={(e) => ttlField.onChange(e.target.value)}
-            onBlur={ttlField.onBlur}
-          />
+          <div>
+            <Input
+              id="agent-scratch-ttl"
+              className={NUMBER_FIELD}
+              type="number"
+              min={1}
+              placeholder="1"
+              value={ttlField.value}
+              onChange={(e) => ttlField.onChange(e.target.value)}
+              onBlur={ttlField.onBlur}
+            />
+          </div>
           <FieldDescription>How long files in the agent&apos;s scratch pad are kept.</FieldDescription>
         </Field>
       </SettingsGroup>
