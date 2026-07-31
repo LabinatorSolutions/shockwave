@@ -175,7 +175,9 @@ The engine lives in main (see `src/main/CLAUDE.md`); the renderer just bridges t
 
 **Engine start on workspace switch.** `loadWorkspace` calls `window.api.sync.engineStart({ workspacePath, intervalSeconds })` after `watchStart`. The engine looks the workspace row up by path and reads repo + branch from it; a missing PAT or an unknown path emits `unconfigured`, so the renderer doesn't gate on those locally. The mount-effect cleanup calls `engineStop` so a full reload doesn't leave a tick running against a torn-down window.
 
-**Status icon.** `EditorStatusBar.tsx`'s `SyncStatusIcon` maps the 6 statuses to one icon each (`paused` is handled unconditionally — gating it on a non-empty conflict list let a stopped engine render a green "Synced"): `unconfigured` → **hidden**; `idle` + `lastSyncAt===null` → gray `Cloud` ("not synced yet"); `idle` + set → `CloudCheck`; `syncing` → spinning `Refresh`; `offline` → `CloudAlert` (amber, "retrying"); `paused` → yellow `AlertTriangle` (click → conflict view via `onOpenConflicts`); `disabled` → `Stop` (click → a small popover with the reason + an **Enable** button → `onEnableSync` → `setWorkspaceDisabled(false)`). Idle/syncing/offline still click through to the repo URL when known.
+**Status icon.** `EditorStatusBar.tsx`'s `SyncStatusIcon` maps the 6 statuses to one icon each (`paused` is handled unconditionally — gating it on a non-empty conflict list let a stopped engine render a green "Synced"): `unconfigured` → **hidden**; `idle` + `lastSyncAt===null` → gray `Cloud` ("not synced yet"); `idle` + set → `CloudCheck`; `syncing` → spinning `Refresh`; `offline` → `CloudAlert` (amber, "retrying"); `paused` → yellow `AlertTriangle` (click → conflict view via `onOpenConflicts`); `disabled` → **two looks off `syncStatus.disabledByUser`** — you turned sync off → gray `Stop`, an error stopped it → red `AlertCircle`. Both click through to the same popover (reason + **Enable** → `onEnableSync` → `setWorkspaceDisabled(false)`). Idle/syncing/offline still click through to the repo URL when known.
+
+Painting both disabled cases gray meant a sync that had **died** looked exactly like one you had parked — the icon that should raise an alarm was the one you'd taught yourself to ignore. The error case is `AlertCircle`, deliberately **not** the triangle: that shape already means merge conflicts, and amber-triangle-vs-red-triangle in a 20px slot is a distinction nobody reads.
 
 ### Conflict-resolution view
 
@@ -229,6 +231,21 @@ Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD
 - **`QuickSearch`** (`QuickSearch.tsx`): modal launched from the sort bar. Empty query → top 10 files by the active sort order. With a query → `fuzzysort` ranks every file by workspace-relative path so typing `j/2026` finds `Journal/2026-05-24.md`. Matches are highlighted via `segmentsFromIndexes`. Arrow keys + Enter; Esc closes.
 
 ## Settings
+
+### "Needs setup" badge — one rule, three readers
+
+`setupStatus.js` (pure, plain `.js`, `tests/setupStatus.test.js`) answers one question per required item: **is it filled in?** `hooks/useSetupStatus.ts` gathers the two inputs that aren't in the settings object (the companion URL/key via `api:read`, git via `sync:checkGit`) and hands the flags to the **three** places that render them — the gear in `WorkspaceSelector`, the nav rows in `SettingsModal` (`BADGE_KEY_FOR_SECTION`), and the pages themselves. One definition is what stops them disagreeing.
+
+Load-bearing decisions, each of which was a live option:
+
+- **Filled-in only.** Whether a stored key still *works* needs the network, goes stale, and would mean polling GitHub + the model provider + the companion on a timer to keep one dot honest. A key that gets refused surfaces as a toast where it's refused; sync — the one failure that lasts days rather than seconds — holds its state in the status-bar icon instead.
+- **Reachability is never a badge.** The companion goes away with the wifi and comes back; a dot that blinks teaches people to ignore dots. That's the amber `CloudOff` in the sidebar footer.
+- **Unknown reads as fine.** `gitInstalled` defaults `true` because it's answered by spawning a process — a badge for the first 200ms of every launch is noise, not signal. Same for a probe that throws: keep the previous answer rather than claim git vanished.
+- **Required only.** Companion, GitHub Sync (token **and** git — git isn't a field on that page but it's the other thing without which nothing on it works), Agent Chat. Telegram, Transcription and the per-workspace pages get no dot however empty they are; that's what keeps red meaningful.
+- **One dot shape.** Empty vs rejected is explained in a sentence *on the page*, not by a second icon in a 216px rail.
+- The agent rule mirrors `agent-core/agent.ts`'s runtime check exactly (provider, model, key unless `openai-compatible`). Two definitions of "configured" is how a page shows green while the turn it describes refuses to start.
+
+`useSetupStatus` exposes `refresh`, called from the settings modal's `onClose` — Settings is the only place the companion config or git can change, so that's the whole refresh story, not a poll.
 
 `SettingsModal.tsx` is the host; every section lives in `settings/`. **Deep doc: `settings/CLAUDE.md`** — when a value saves, credential handling, verify buttons, and the per-section inventory. Read it before touching any `settings/*.tsx`.
 

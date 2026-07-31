@@ -240,6 +240,19 @@ export function AlertTriangleIcon({ size = 14 }) {
   );
 }
 
+// Sync stopped because it BROKE. Deliberately not the triangle: that one is
+// already spoken for by merge conflicts, and two amber-vs-red triangles in the
+// same 20px slot is a distinction nobody reads.
+export function AlertCircleIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
+      <circle cx="12" cy="12" r="9.5" />
+      <line x1="12" y1="7.5" x2="12" y2="13" />
+      <circle cx="12" cy="16.3" r="0.6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function PlayIcon({ size = 14 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">

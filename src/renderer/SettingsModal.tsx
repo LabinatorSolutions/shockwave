@@ -54,6 +54,17 @@ function buildNav(workspaceLabel) {
 
 const DEFAULT_SECTION = SETTINGS_SECTIONS.GENERAL;
 
+// Which nav row each `setupStatus` flag badges. Only REQUIRED things are in
+// here: a red dot has to mean "the app can't do its job until you deal with
+// this", so Telegram, Transcription and the per-workspace pages are absent no
+// matter how empty they are. Add a row here and you are claiming the app is
+// broken without it.
+const BADGE_KEY_FOR_SECTION: Record<string, string> = Object.freeze({
+  [SETTINGS_SECTIONS.COMPANION]: 'companion',
+  [SETTINGS_SECTIONS.GITHUB]: 'github',
+  [SETTINGS_SECTIONS.AGENT_LLM]: 'agent',
+});
+
 // Per-workspace sections need an active workspace. Shown when none is open.
 function NoWorkspaceNote() {
   return (
@@ -101,6 +112,7 @@ export default function SettingsModal({
   onRebuildCache,
   appUpdate,
   saveStatus,
+  setupStatus,
 }) {
   // null = still checking on open; every non-Server page is disabled until the
   // server connection is confirmed reachable.
@@ -182,20 +194,32 @@ export default function SettingsModal({
               );
             }
             const disabled = gated && row.id !== SETTINGS_SECTIONS.COMPANION;
+            const badgeKey = BADGE_KEY_FOR_SECTION[row.id ?? ''];
+            const needsSetup = !!(badgeKey && setupStatus?.[badgeKey]);
             return (
               <button
                 key={row.id}
                 disabled={disabled}
                 title={disabled ? 'Connect to your server first' : undefined}
                 className={cn(
-                  'rounded-lg px-3 py-[7px] text-left text-[13px] text-foreground/75 hover:bg-accent',
+                  'flex items-center gap-2 rounded-lg px-3 py-[7px] text-left text-[13px] text-foreground/75 hover:bg-accent',
                   effectiveActive === row.id && 'bg-selected font-medium text-selected-foreground hover:bg-selected',
                   disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent',
                 )}
                 onClick={() => { if (!disabled) setActive(row.id); }}
                 aria-current={effectiveActive === row.id ? 'page' : undefined}
               >
-                {row.label}
+                <span className="truncate">{row.label}</span>
+                {needsSetup && (
+                  <>
+                    {/* The dot says WHERE, the page says what. Two badge shapes
+                        (empty vs rejected) would be a vocabulary in a 216px rail
+                        that nobody learns; there's room for a sentence on the
+                        page and none here. */}
+                    <span className="ml-auto size-[7px] shrink-0 rounded-full bg-destructive" aria-hidden="true" />
+                    <span className="sr-only">needs setup</span>
+                  </>
+                )}
               </button>
             );
           })}

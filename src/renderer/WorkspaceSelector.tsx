@@ -28,6 +28,7 @@ export default function WorkspaceSelector({
   onOpenSettings,
   companionOnline = true,
   onOpenCompanion,
+  needsSetup = false,
 }) {
   const active = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const badgeLetter = (active?.name ?? '?').trim().charAt(0).toUpperCase() || '?';
@@ -89,13 +90,22 @@ export default function WorkspaceSelector({
             <CloudOff className="size-[15px]" />
           </button>
         )}
+        {/* The gear carries the dot as well as the pages inside it. Without
+            this, "something still needs setting up" is only discoverable by
+            opening Settings and looking — which is exactly the state a new
+            install is in. */}
         <button
-          className="flex size-[26px] items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="relative flex size-[26px] items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground"
           onClick={onOpenSettings}
-          title="Settings"
-          aria-label="Open settings"
+          title={needsSetup ? 'Settings — something still needs setting up' : 'Settings'}
+          aria-label={needsSetup ? 'Open settings. Something still needs setting up' : 'Open settings'}
         >
           <GearIcon size={15} />
+          {needsSetup && (
+            // Ringed in the sidebar's own background so the dot reads as a badge
+            // on the gear rather than a smudge on one of its teeth.
+            <span className="absolute right-[3px] top-[3px] size-[6px] rounded-full bg-destructive ring-2 ring-sidebar" aria-hidden="true" />
+          )}
         </button>
       </div>
     </div>

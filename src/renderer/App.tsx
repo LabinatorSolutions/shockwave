@@ -42,6 +42,7 @@ import { useSendToAgent } from './hooks/useSendToAgent';
 import { useFsWatcher } from './hooks/useFsWatcher';
 import { useSettings } from './hooks/useSettings';
 import { useAppUpdate } from './hooks/useAppUpdate';
+import { useSetupStatus } from './hooks/useSetupStatus';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { Button } from '@/components/ui/button';
@@ -308,6 +309,11 @@ export default function App() {
 
   // App-update status: feeds the editor-pane "Update available" pill + Settings → Updates.
   const appUpdate = useAppUpdate();
+
+  // Which required settings are still empty → the red dot on the gear and on
+  // the settings nav rows. Filled-in only; a value that's present but refused
+  // surfaces where it's refused (toast, or the sync icon), never here.
+  const setup = useSetupStatus({ sync, codingAgent: codingAgentSettings });
 
   // Companion reachability. Asked once (the push can fire before this window is
   // listening), then kept current by main's edge-triggered `companion:state`.
@@ -2051,6 +2057,7 @@ export default function App() {
           onOpenSettings={() => openSettings()}
           companionOnline={companionOnline}
           onOpenCompanion={() => openSettings(SETTINGS_SECTIONS.COMPANION)}
+          needsSetup={setup.any}
         />
         <div
           className="absolute inset-y-0 -right-[3px] z-10 w-1.5 cursor-col-resize"
@@ -2394,7 +2401,11 @@ export default function App() {
       {settingsOpen && (
         <SettingsModal
           initialSection={settingsInitialSection}
-          onClose={() => setSettingsOpen(false)}
+          setupStatus={setup}
+          // The companion URL/key and git are the two inputs that don't ride the
+          // settings object, and Settings is the only place either can change —
+          // so re-asking on close is the whole refresh story, not a poll.
+          onClose={() => { setSettingsOpen(false); void setup.refresh(); }}
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
           onWorkspaceAdded={adoptWorkspace}

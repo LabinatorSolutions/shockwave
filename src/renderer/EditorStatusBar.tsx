@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link as LinkIcon } from 'lucide-react';
-import { PencilIcon, CodeIcon, CheckCircleIcon, DotCircleIcon, RotateCcwIcon, RotateCwIcon, CloudCheckIcon, CloudIcon, RefreshIcon, CloudAlertIcon, AlertTriangleIcon, StopIcon } from './Icons.jsx';
+import { PencilIcon, CodeIcon, CheckCircleIcon, DotCircleIcon, RotateCcwIcon, RotateCwIcon, CloudCheckIcon, CloudIcon, RefreshIcon, CloudAlertIcon, AlertTriangleIcon, AlertCircleIcon, StopIcon } from './Icons.jsx';
 import { VIEW_MODES, SAVE_STATES } from './constants.js';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -26,22 +26,30 @@ function SyncStatusIcon({ syncStatus, onOpenConflicts, onEnableSync }) {
   const { status, detail, lastSyncAt, repoUrl } = syncStatus;
   const conflictCount = syncStatus.conflicts?.length ?? 0;
 
-  // Disabled (turned off, or a terminal error stopped it) → stop icon + popover.
+  // Disabled → popover with the reason + Enable. TWO looks, because there are
+  // two ways to arrive here and they are not the same news: you switched sync
+  // off (quiet gray stop — nothing is wrong, you know why it's off), or sync hit
+  // an error it can't recover from and shut itself down (red !). Painting both
+  // gray meant a sync that had died looked exactly like one you'd parked.
   if (status === 'disabled') {
+    const byUser = !!syncStatus.disabledByUser;
+    const label = byUser ? 'Sync is turned off — click' : 'Sync stopped — click for the reason';
     return (
       <Popover>
         <PopoverTrigger asChild>
           <button
             type="button"
-            className={cn(statusBtn, 'text-muted-2')}
-            title="Sync disabled — click"
-            aria-label="Sync disabled"
+            className={cn(statusBtn, byUser ? 'text-muted-2' : 'text-destructive hover:text-destructive')}
+            title={label}
+            aria-label={label}
           >
-            <StopIcon size={13} />
+            {byUser ? <StopIcon size={13} /> : <AlertCircleIcon size={13} />}
           </button>
         </PopoverTrigger>
         <PopoverContent side="top" align="end" className="w-60 p-3">
-          <div className="mb-2 text-xs text-muted-foreground">{detail || 'Sync is off'}</div>
+          <div className="mb-2 text-xs text-muted-foreground">
+            {detail || (byUser ? 'Sync is off' : 'Sync stopped')}
+          </div>
           <Button size="xs" onClick={() => onEnableSync?.()}>Enable</Button>
         </PopoverContent>
       </Popover>

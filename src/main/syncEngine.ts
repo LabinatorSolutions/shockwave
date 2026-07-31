@@ -62,7 +62,9 @@ let state: any = {
 //   syncing      → spinner
 //   paused       → yellow triangle (merge conflicts; carries conflicts[])
 //   offline      → cloud-alert (can't reach GitHub; retrying with backoff)
-//   disabled     → stop (turned off, or a TERMINAL error stopped it); click → Enable
+//   disabled     → stop (YOU turned it off) / red ! (a TERMINAL error stopped it);
+//                  click → reason + Enable. `disabledByUser` is what tells them
+//                  apart — see emitStatus.
 const STATUS = Object.freeze({
   UNCONFIGURED: 'unconfigured',
   IDLE: 'idle',
@@ -94,12 +96,15 @@ function isTerminalGitError(stderr) {
 //   '403'              — any SHA or byte count containing those digits
 //   'permission denied' — a local file-mode problem, which retrying can fix
 
-let currentStatus = { status: STATUS.UNCONFIGURED, detail: '', lastSyncAt: null, repoUrl: null, conflicts: [] };
+let currentStatus = { status: STATUS.UNCONFIGURED, detail: '', lastSyncAt: null, repoUrl: null, conflicts: [], disabledByUser: false };
 
 function emitStatus(patch) {
-  // Reset `conflicts` every emit unless the patch sets it — only the paused
-  // status carries a list, so any other status implicitly clears it.
-  currentStatus = { ...currentStatus, conflicts: [], ...patch };
+  // Reset `conflicts` AND `disabledByUser` every emit unless the patch sets
+  // them. Both belong to one status only (paused / disabled-by-choice), so any
+  // other status implicitly clears them. Sticky is the failure mode that
+  // matters here: a `disabledByUser` left over from a switch-off would paint the
+  // quiet stop icon over a sync that later died of a real error.
+  currentStatus = { ...currentStatus, conflicts: [], disabledByUser: false, ...patch };
   const win = state.windowId ? BrowserWindow.fromId(state.windowId) : null;
   if (win && !win.isDestroyed()) {
     win.webContents.send('sync:status', currentStatus);
@@ -583,7 +588,10 @@ export async function stop() {
 }
 
 /** User turned sync off for this workspace. Like stop(), but the icon STAYS
- *  (DISABLED → stop icon) so they can re-enable it right from the status bar. */
+ *  (DISABLED → stop icon) so they can re-enable it right from the status bar.
+ *  `disabledByUser` marks it as a choice rather than a failure — the only
+ *  difference between this and `disableOnError`, and the whole reason the two
+ *  don't render the same. */
 export async function userDisable(windowId: number | null = null) {
   await stop();
   // `stop()` doesn't clear windowId, but a caller reaching us right after a
@@ -591,7 +599,7 @@ export async function userDisable(windowId: number | null = null) {
   // stop icon is emitted at a destroyed window and never appears, leaving no
   // way to turn sync back on.
   if (windowId != null) state.windowId = windowId;
-  emitStatus({ status: STATUS.DISABLED, detail: 'Sync is turned off', lastSyncAt: currentStatus.lastSyncAt, repoUrl: null });
+  emitStatus({ status: STATUS.DISABLED, detail: 'Sync is turned off', lastSyncAt: currentStatus.lastSyncAt, repoUrl: null, disabledByUser: true });
 }
 
 /** Called from `before-quit` to drain any in-flight tick before app exits. */

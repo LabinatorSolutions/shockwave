@@ -292,7 +292,7 @@ While paused, the renderer surfaces the conflict list and lets the user resolve.
 - `syncing` — a tick is in progress; `detail` describes the current step.
 - `paused` — **merge conflicts** (carries `conflicts[]`). The engine is stateless — once unmerged files are gone, the next tick completes the merge and resumes (see the per-file / whole-tree resolution above).
 - `offline` — **a transient/network error. Sync is NOT off — it backs off (10s → 30s → 1m) and keeps retrying forever.** `state.retryAt` gates ticks during backoff; a confirmed fetch clears it.
-- `disabled` — **stopped**: the user turned it off (`userDisable`), or a *terminal* error stopped it (`disableOnError` — clears the interval). The renderer shows the **stop** icon; clicking it → reason + **Enable** (→ `setWorkspaceDisabled(false)` → `engineStart`).
+- `disabled` — **stopped**: the user turned it off (`userDisable`), or a *terminal* error stopped it (`disableOnError` — clears the interval). Both carry a reason + **Enable** (→ `setWorkspaceDisabled(false)` → `engineStart`), but they are **not the same news**, so `userDisable` also sets **`disabledByUser: true`** and the renderer paints them differently: a choice is the quiet gray **stop** icon, a failure is a red **!**. `emitStatus` resets `disabledByUser` on every emit for the same reason it resets `conflicts` — sticky is the failure mode, and a leftover `true` would paint a sync that died of a real error as one you had parked.
 
 **Network NEVER disables sync.** Only `isTerminalGitError` (an allowlist: big file `GH001`, secret `GH013`, protected branch, auth/perms, repo-not-found) routes a failure to `disabled`. Anything unrecognized → `offline` + retry. Bias is intentional: when unsure, keep trying, don't turn off.
 
