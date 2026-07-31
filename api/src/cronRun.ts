@@ -9,8 +9,8 @@ import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
-import { prepareCheckout, checkIn, syncAndPush, type GitAuth } from './git.js';
-import { gitFix } from './gitFixer.js';
+import { prepareCheckout, type GitAuth } from './git.js';
+import { checkInWithFixer } from './gitFixer.js';
 
 export interface CronRunResult { chatId: string; checkIn: string; }
 
@@ -105,16 +105,12 @@ export async function runCronJob(
   if (job.once) await dropJob(dir, jobName);
 
   const stamp = new Date().toISOString();
-  let result = await checkIn(dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, auth);
-  // Deterministic path couldn't resolve it → hand to the git-fixer agent. It
-  // resolves and commits with no credentials of its own; the push is ours,
-  // after it verifies clean (see gitFixer.ts).
-  if (result === 'conflict') {
-    const fixed = await gitFix(dir, w.defaultBranch, {
-      provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl,
-    });
-    result = fixed ? await syncAndPush(dir, w.defaultBranch, auth) : 'conflict';
-  }
+  // Shared with the Telegram path — deterministic check-in, git-fixer on a
+  // conflict, push. See checkInWithFixer in gitFixer.ts.
+  const result = await checkInWithFixer(
+    dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, auth,
+    { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
+  );
 
   if (turnError) throw turnError;
 

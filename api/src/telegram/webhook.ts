@@ -13,7 +13,8 @@ import type { DB } from '../db.js';
 import { getDb } from '../db.js';
 import * as store from '../store.js';
 import * as feed from '../feed.js';
-import { prepareCheckout, checkIn, type GitAuth } from '../git.js';
+import { prepareCheckout, type GitAuth } from '../git.js';
+import { checkInWithFixer } from '../gitFixer.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
@@ -190,11 +191,16 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
 
   const pat = await store.getSecret(db, key, 'settings', 'sync.pat');
   if (!pat) { await client.sendMessage(dm, '⚠️ No GitHub token is configured on the server.'); return; }
+  // Carried together so every network git call is pinned to THIS repo — the URL
+  // is set from it on the command line rather than read from a .git/config the
+  // agent can rewrite. See guards() in git.ts.
+  const auth: GitAuth = { pat, owner: ws.repoOwner, repo: ws.repoName };
   const dir = await prepareCheckout(chatId, ws.repoOwner, ws.repoName, ws.defaultBranch, pat);
 
   const settings = await store.readSettings(db, key);
   process.env.TZ = settings.timezone || 'UTC';   // optional setting → fallback at point of use
   const ca = settings.codingAgent ?? {};
+  const apiKey = (ca.providerKeys ?? {})[ca.provider] ?? '';
   let wsBuiltinSkills: Record<string, any> = {};
   try { wsBuiltinSkills = JSON.parse(await fs.readFile(path.join(dir, '.shockwave', 'workspace.json'), 'utf8'))?.builtinSkills ?? {}; } catch { /* defaults */ }
 
@@ -214,7 +220,7 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   try {
     await runtime.agentSend({
       chatId, text, workspaceId: ws.id, workspacePath: dir,
-      provider: ca.provider, model: ca.model, apiKey: (ca.providerKeys ?? {})[ca.provider] ?? '',
+      provider: ca.provider, model: ca.model, apiKey,
       baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
     }, emit);
@@ -224,7 +230,17 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   // and commit. Doing either while it was still working produced a commit of
   // half-edited files and a reply abandoned mid-sentence.
   await sink.done(finalMessages);
-  await checkIn(dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`, { pat, owner: ws.repoOwner, repo: ws.repoName }).catch(() => {});
+  // Identical to the cron path — same function, not a copy. See gitFixer.ts.
+  const checkedIn = await checkInWithFixer(
+    dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`, auth,
+    { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
+  ).catch(() => 'error' as const);
+  // Say so in chat. This used to be `.catch(() => {})` with the result thrown
+  // away, so work that never reached GitHub looked exactly like work that did —
+  // and the next message's prepareCheckout reset --hard'd it out of existence.
+  if (checkedIn === 'conflict' || checkedIn === 'error') {
+    await client.sendMessage(dm, `⚠️ I finished, but couldn't save the changes to GitHub (${checkedIn}). The work is still in this run's checkout — say so before sending me anything else, or the next message will discard it.`).catch(() => {});
+  }
 
   // A turn can end badly WITHOUT throwing: pi reports it as the last assistant
   // message's stopReason ('error' from the provider, 'aborted' from the watchdog

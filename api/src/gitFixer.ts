@@ -11,11 +11,33 @@ import os from 'node:os';
 import path from 'node:path';
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import { resolveModel } from '../../agent-core/agent.js';
+import { checkIn, syncAndPush, type CheckInResult, type GitAuth } from './git.js';
 
 const exec = promisify(execFile);
 const MAX_STEPS = 12; // seatbelt: give up if it can't finish in this many tool calls
 
 export interface FixModel { provider: string; model: string; apiKey: string; baseUrl?: string }
+
+// The ONE way a companion agent run checks its work in. Every server-side agent
+// path calls THIS, never git.ts's checkIn directly — cron and Telegram are the
+// same operation with different triggers, and work that fails to land is the
+// same loss whoever asked for it.
+//
+// Telegram used to call checkIn alone and discard the result. So a conflict left
+// the turn's work committed-but-unpushed in the run's checkout, said nothing,
+// and the NEXT message's prepareCheckout reset --hard'd it away — the failure
+// and the evidence disappearing together. Two call sites, one of them missing
+// half the policy, is exactly the shape that hides for months.
+export async function checkInWithFixer(
+  dir: string, branch: string, message: string, auth: GitAuth, m: FixModel,
+): Promise<CheckInResult> {
+  const result = await checkIn(dir, branch, message, auth);
+  if (result !== 'conflict') return result;
+  // The deterministic merge left markers → hand to the fixer, which resolves and
+  // commits with NO credentials of its own. The push is ours, after it verifies.
+  const fixed = await gitFix(dir, branch, m);
+  return fixed ? await syncAndPush(dir, branch, auth) : 'conflict';
+}
 
 async function sh(dir: string, cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
