@@ -15,7 +15,8 @@ import { app } from 'electron';
 // matches these is written here; everything else goes to the API.
 export const LOCAL_KEYS = [
   'windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen',
-  'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'activeWorkspaceId', 'cron',
+  'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'showHiddenFiles',
+  'activeWorkspaceId', 'cron',
 ];
 
 export function isLocalKey(key: string): boolean {
@@ -30,6 +31,7 @@ export interface LocalSettings {
   viewMode?: string;
   treeSortOrder?: string;
   bookmarkFilterActive?: boolean;
+  showHiddenFiles?: boolean;
   activeWorkspaceId?: string | null;
   cron?: any;
   // workspaceId -> { path, syncEnabled }

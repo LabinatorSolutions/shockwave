@@ -20,7 +20,7 @@ import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
 } from './api/workspaces.js';
-import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
+import { isMdFile, uniquePath, walkMarkdownPaths, isWatchIgnored, isTreeHidden } from './pathResolver.js';
 import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../../agent-core/defaults/files.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
 import { getProviders } from '@earendil-works/pi-ai/compat';
@@ -308,18 +308,24 @@ ipcMain.handle('dialog:openFolder', async () => {
 // creation, so a new workspace has them from the start — not only when a repo
 // is created via GitHub sync. Idempotent: writes only files that don't exist,
 // best-effort (never throws).
-async function buildTree(dirPath) {
+// `includeHidden` is the "Show hidden files" toggle above the tree. It changes
+// what the SIDEBAR shows and nothing else — the watcher, the link index, and
+// wiki-link resolution all keep their own rule (isWatchIgnored) whatever this
+// says. When on, everything on disk is returned: dotfiles, .git, node_modules.
+// That costs a walk of whatever's there (a large node_modules is ~1s), which is
+// why it's off by default and not simply always-on.
+async function buildTree(dirPath, includeHidden = false) {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const children = await Promise.all(
     entries
-      .filter((e) => !isIgnoredSegment(e.name))
+      .filter((e) => includeHidden || !isTreeHidden(e.name))
       .map(async (e) => {
         const fullPath = path.join(dirPath, e.name);
         if (e.isDirectory()) {
           return {
             id: fullPath,
             name: e.name,
-            children: await buildTree(fullPath),
+            children: await buildTree(fullPath, includeHidden),
           };
         }
         // Stat each file so the renderer can sort by modified/created time.
@@ -348,8 +354,8 @@ async function buildTree(dirPath) {
   return children;
 }
 
-ipcMain.handle('fs:readTree', async (_evt, dirPath) => {
-  return buildTree(dirPath);
+ipcMain.handle('fs:readTree', async (_evt, dirPath, opts) => {
+  return buildTree(dirPath, !!opts?.includeHidden);
 });
 
 // --- Persisted parse cache (Obsidian-style metadata cache) -----------------
@@ -2132,15 +2138,19 @@ function setupCorrelator() {
 // fine: drawings carry no backlinks to rewrite.
 function isDrawingFile(p) { return /\.excalidraw$/i.test(p); }
 
-// Skip any event under a dotfile segment (mirrors buildTree's rule; excludes
-// .git / .obsidian / .shockwave). @parcel/watcher's `ignore` globs are a perf
-// hint that keeps the native watcher from reporting these at all; this
-// predicate is the authoritative filter in case a backend reports them anyway.
+// Skip any event under a dotfile segment (excludes .git / .obsidian /
+// .shockwave). @parcel/watcher's `ignore` globs are a perf hint that keeps the
+// native watcher from reporting these at all; this predicate is the
+// authoritative filter in case a backend reports them anyway.
+//
+// Independent of the tree's "Show hidden files" toggle by design — that's a
+// display setting. A visible .gitignore is still not something we watch, index,
+// or reload the editor for.
 function isIgnoredWatchPath(p) {
   if (!watcherRootDir) return true;
   const rel = path.relative(watcherRootDir, p);
   if (!rel || rel.startsWith('..')) return false;
-  return rel.split(path.sep).some((seg) => isIgnoredSegment(seg));
+  return rel.split(path.sep).some((seg) => isWatchIgnored(seg));
 }
 
 // @parcel/watcher hands the callback a batch of events. The mapping from that
@@ -2282,11 +2292,18 @@ initDesktopAgent({
 // the workspace (the agent's cwd); only display-able types open. The extension
 // (cwd) ext list must stay in sync with the renderer's isOpenable (MediaView).
 const OPENABLE_RE = /\.(md|markdown|mdx|txt|text|log|org|rst|tex|bib|csv|tsv|json|jsonc|json5|ya?ml|toml|ini|cfg|conf|env|properties|xml|html?|css|scss|sass|less|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|kts|c|h|cpp|hpp|cc|hh|cs|php|swift|m|mm|sh|bash|zsh|fish|ps1|bat|sql|graphql|gql|lua|pl|pm|r|dart|vue|svelte|astro|clj|cljs|ex|exs|erl|hs|ml|scala|groovy|gradle|proto|diff|patch|png|jpe?g|gif|webp|bmp|ico|avif|mp4|webm|mov|m4v|ogv|ogg|excalidraw)$/i;
+// Text files whose whole name is the type (.gitignore, .npmrc, …) — no
+// extension for OPENABLE_RE to match. Mirror of the renderer's DOTFILE_TEXT_RE
+// in MediaView; the agent's open_file must accept exactly what the tree opens.
+const DOTFILE_TEXT_RE = /(^|[/\\])\.(gitignore|gitattributes|gitmodules|gitkeep|ignore|dockerignore|npmignore|editorconfig|npmrc|nvmrc|prettierrc|eslintrc|babelrc|env)$/i;
+function isOpenablePath(p: string) { return OPENABLE_RE.test(p) || DOTFILE_TEXT_RE.test(p); }
 // Openable files that are NOT reloadable-as-text: the .md family (link-index /
 // correlator path), images, video, and .excalidraw drawings. Everything else in
 // OPENABLE_RE is a text/code file the editor reloads on external change (mirrors
 // the renderer's isTextFile in MediaView).
 const NON_TEXT_OPENABLE_RE = /\.(md|markdown|mdx|png|jpe?g|gif|webp|bmp|ico|avif|mp4|webm|mov|m4v|ogv|ogg|excalidraw)$/i;
+// Deliberately OPENABLE_RE only, not isOpenablePath: reload-on-external-change
+// is the watcher's business, and the watcher never reports a dotfile path.
 function isReloadableText(p: string) { return OPENABLE_RE.test(p) && !NON_TEXT_OPENABLE_RE.test(p); }
 installOpenFileBridge(async (relPath) => {
   if (!watcherRootDir) return { ok: false, error: 'No workspace is open.' };
@@ -2297,7 +2314,7 @@ installOpenFileBridge(async (relPath) => {
   if (abs !== watcherRootDir && !abs.startsWith(watcherRootDir + path.sep)) {
     return { ok: false, error: 'Path is outside the workspace.' };
   }
-  if (!OPENABLE_RE.test(abs)) {
+  if (!isOpenablePath(abs)) {
     return { ok: false, error: 'Only text, image, video, or .excalidraw files can be opened.' };
   }
   try {

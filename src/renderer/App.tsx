@@ -270,12 +270,14 @@ export default function App() {
   }, []);
 
   const {
-    themeMode, hideLineNumbers, treePanel, bookmarkFilterActive,
+    themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
+    settingsRef,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
-    onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
+    onBookmarkFilterActiveChange, onShowHiddenFilesChange,
+    onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onTimezoneChange,
   } = useSettings({
@@ -506,6 +508,11 @@ export default function App() {
     const daily: any[] = [];
     for (const n of flattenAll(tree)) {
       if (n.children) continue;
+      // Recent files is deliberately type-agnostic — anything you edited belongs
+      // there, hidden or not. `.git` is the one exception: git rewrites its own
+      // index and refs on every sync commit, so those would be the newest files
+      // in the workspace and would own this list whenever hidden files are shown.
+      if (n.id.includes('/.git/')) continue;
       const isDaily = isDailyNote(n);
       if (isDaily && wantDaily) daily.push(n);
       if (wantRecent && !(isDaily && treePanel.content === 'both')) recent.push(n);
@@ -729,12 +736,29 @@ export default function App() {
   }, [activeTab, writeNow]);
 
   // ---- refresh tree ----
+  // The hidden-files flag is read from settingsRef, NOT from React state, at
+  // both tree reads (here and in loadWorkspace). Boot hydrates settings and
+  // loads the workspace in the same tick, before React has re-rendered — a
+  // state read would still be `false` there and the tree would come back
+  // filtered until something else refreshed it. Reading the ref also keeps this
+  // callback's identity pinned to workspacePath, so toggling doesn't churn a
+  // function useFileOps holds; the toggle calls refreshTree() itself.
   const refreshTree = useCallback(async () => {
     if (!workspacePath) return [];
-    const data = await window.api.readTree(workspacePath);
+    const data = await window.api.readTree(workspacePath, {
+      includeHidden: !!settingsRef.current.showHiddenFiles,
+    });
     setTree(data);
     return data;
-  }, [workspacePath]);
+  }, [workspacePath, settingsRef]);
+
+  // Show/hide hidden entries in the tree. The tree comes from disk, so the flag
+  // has to be persisted BEFORE the re-read — refreshTree reads it back out of
+  // settingsRef, which persistSettings updates synchronously.
+  const onToggleHiddenFiles = useCallback(async () => {
+    onShowHiddenFilesChange(!settingsRef.current.showHiddenFiles);
+    await refreshTree();
+  }, [onShowHiddenFilesChange, refreshTree, settingsRef]);
 
   // ---- file operations ----
   const fileOps = useFileOps({
@@ -839,7 +863,8 @@ export default function App() {
     setSyncStatus({ status: 'unconfigured', detail: '', lastSyncAt: null, conflicts: [] });
 
     const [treeData, files, wsData] = await Promise.all([
-      window.api.readTree(workspace.path),
+      // settingsRef, not state — boot hydrates and loads in one tick. See refreshTree.
+      window.api.readTree(workspace.path, { includeHidden: !!settingsRef.current.showHiddenFiles }),
       window.api.readAllMarkdown(workspace.path),
       window.api.workspaceSettings.read(workspace.path),
     ]);
@@ -859,7 +884,7 @@ export default function App() {
       workspacePath: workspace.path,
       intervalSeconds: syncRef.current?.pullIntervalSeconds,
     }).catch(() => {});
-  }, [writeNow, resetTabs, linkIndex, loadWorkspaceData]);
+  }, [writeNow, resetTabs, linkIndex, loadWorkspaceData, settingsRef]);
   loadWorkspaceRef.current = loadWorkspace;
 
   // Settings → Advanced → "Rebuild link cache". Discards the persisted parse
@@ -1909,6 +1934,8 @@ export default function App() {
             if (graphMode) setGraphMode(false);
             await openInActiveTab(path);
           }}
+          showHiddenFiles={showHiddenFiles}
+          onToggleHiddenFiles={onToggleHiddenFiles}
           hasConflicts={hasConflicts}
           conflictCount={conflictPaths.length}
           conflictFilterActive={conflictFilterActive}

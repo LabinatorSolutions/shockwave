@@ -92,7 +92,7 @@ contextBridge.exposeInMainWorld('api', {
   // ---- Filesystem reads ---------------------------------------------------
 
   /** @param {string} dirPath @returns {Promise<TreeNode[]>} Top-level tree under dirPath (folders A→Z then files). */
-  readTree: (dirPath) => ipcRenderer.invoke('fs:readTree', dirPath),
+  readTree: (dirPath, opts) => ipcRenderer.invoke('fs:readTree', dirPath, opts),
   /** @param {string} dirPath @returns {Promise<ParsedFile[]>} Every .md under dirPath with parsed links + mtime. */
   readAllMarkdown: (dirPath) => ipcRenderer.invoke('fs:readAllMarkdown', dirPath),
   /** Discard the persisted parse cache so the next readAllMarkdown re-parses every file from scratch.

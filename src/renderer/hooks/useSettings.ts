@@ -30,6 +30,7 @@ const DEFAULT_CANONICAL: Settings = {
   viewMode: VIEW_MODES.LIVE,
   treeSortOrder: TREE_SORT_ORDERS.NAME_ASC,
   bookmarkFilterActive: false,
+  showHiddenFiles: false,
   windowBounds: null,
 };
 
@@ -56,6 +57,9 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // Live + persisted bookmark-filter mode (single source of truth; useBookmarks
   // no longer owns this so the view can survive restarts / workspace switches).
   const [bookmarkFilterActive, setBookmarkFilterActiveState] = useState(false);
+  // "Show hidden files" — the eye button above the tree. Display only; the tree
+  // is re-read from disk when it flips (App owns that call).
+  const [showHiddenFiles, setShowHiddenFilesState] = useState(false);
   const [dailyNote, setDailyNote] = useState<DailyNote>({ format: 'YYYY-MM-DD', folder: '', templatePath: '' });
   const dailyNoteRef = useSyncRef(dailyNote);
   const [templates, setTemplates] = useState<Templates>({ folder: '' });
@@ -147,6 +151,16 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   const onBookmarkFilterActiveChange = useCallback((next: boolean) => {
     setBookmarkFilterActiveState(next);
     persistSettings({ bookmarkFilterActive: next });
+  }, [persistSettings]);
+
+  // Same shape as the bookmark filter: state first so the UI reacts, write is
+  // fire-and-forget. settingsRef is updated by persistSettings, and App reads
+  // the flag from THERE (not from this state) when it reads the tree — boot
+  // calls loadWorkspace in the same tick as hydrate, before React has
+  // re-rendered, so a state read would be false and hide everything.
+  const onShowHiddenFilesChange = useCallback((next: boolean) => {
+    setShowHiddenFilesState(next);
+    persistSettings({ showHiddenFiles: next });
   }, [persistSettings]);
 
   // Daily-note + templates are per-workspace now: they live in the active
@@ -314,6 +328,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       count: typeof rawTp?.count === 'number' && rawTp.count >= 1 ? Math.min(50, Math.round(rawTp.count)) : 10,
     };
     const bfa = !!disk.bookmarkFilterActive;
+    const shf = !!disk.showHiddenFiles;
     const tso: TreeSortOrder = typeof disk.treeSortOrder === 'string' ? disk.treeSortOrder : TREE_SORT_ORDERS.NAME_ASC;
     const ca: CodingAgentSettings = disk.codingAgent ?? settingsRef.current.codingAgent;
     const secrets: AgentSecret[] = Array.isArray(disk.agentSecrets) ? disk.agentSecrets : [];
@@ -333,12 +348,14 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       viewMode: disk.viewMode === VIEW_MODES.RAW || disk.viewMode === VIEW_MODES.LIVE ? disk.viewMode : VIEW_MODES.LIVE,
       treeSortOrder: tso,
       bookmarkFilterActive: bfa,
+      showHiddenFiles: shf,
       windowBounds: disk.windowBounds ?? null,
     };
     setThemeMode(tm);
     setHideLineNumbers(hln);
     setTreePanel(tp);
     setBookmarkFilterActiveState(bfa);
+    setShowHiddenFilesState(shf);
     setTreeSortOrder(tso);
     if (disk.codingAgent) setCodingAgentSettings(ca);
     if (Array.isArray(disk.agentSecrets)) setAgentSecrets(secrets);
@@ -348,12 +365,13 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   }, [dailyNoteRef, syncRef]);
 
   return {
-    themeMode, hideLineNumbers, treePanel, bookmarkFilterActive,
+    themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
-    onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
+    onBookmarkFilterActiveChange, onShowHiddenFilesChange,
+    onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onTimezoneChange,
   };

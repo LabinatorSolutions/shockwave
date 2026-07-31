@@ -11,6 +11,18 @@ const DRAWING_RE = /\.excalidraw$/i;
 // on purpose; binaries (pdf/zip/…) stay inert. Mirror in main's `OPENABLE_RE`.
 const TEXT_RE = /\.(md|markdown|mdx|txt|text|log|org|rst|tex|bib|csv|tsv|json|jsonc|json5|ya?ml|toml|ini|cfg|conf|env|properties|xml|html?|css|scss|sass|less|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|kts|c|h|cpp|hpp|cc|hh|cs|php|swift|m|mm|sh|bash|zsh|fish|ps1|bat|sql|graphql|gql|lua|pl|pm|r|dart|vue|svelte|astro|clj|cljs|ex|exs|erl|hs|ml|scala|groovy|gradle|proto|diff|patch)$/i;
 
+// Text files whose whole NAME is the type — no extension for TEXT_RE to match.
+// They only became reachable when the tree learned to show hidden files, and
+// without this the two you'd most want to look at (.gitignore, .ignore) are
+// rows that do nothing when clicked. An allowlist, not "any extensionless
+// dotfile": .DS_Store fits that shape and is binary. Mirror in main's
+// `DOTFILE_TEXT_RE`.
+const DOTFILE_TEXT_RE = /(^|\/)\.(gitignore|gitattributes|gitmodules|gitkeep|ignore|dockerignore|npmignore|editorconfig|npmrc|nvmrc|prettierrc|eslintrc|babelrc|env)$/i;
+
+function isTextPath(path: string): boolean {
+  return TEXT_RE.test(path) || DOTFILE_TEXT_RE.test(path);
+}
+
 /** 'image' | 'video' | null — null means open it in the text editor. */
 export function mediaKind(path: string | null): 'image' | 'video' | null {
   if (!path) return null;
@@ -30,13 +42,13 @@ export function isDrawing(path: string | null): boolean {
 // Conflict view bypasses this so any conflicted file can still be opened.
 export function isOpenable(path: string | null): boolean {
   if (!path) return false;
-  return TEXT_RE.test(path) || mediaKind(path) !== null || isDrawing(path);
+  return isTextPath(path) || mediaKind(path) !== null || isDrawing(path);
 }
 
 // True for a text/code file that opens in the editor (not media, not a drawing).
 // Drives the editor-vs-MediaView decision and "does this join the link index".
 export function isTextFile(path: string | null): boolean {
-  return !!path && TEXT_RE.test(path) && mediaKind(path) === null && !isDrawing(path);
+  return !!path && isTextPath(path) && mediaKind(path) === null && !isDrawing(path);
 }
 
 // The markdown family. Live-preview decorations (heading styles, hidden syntax

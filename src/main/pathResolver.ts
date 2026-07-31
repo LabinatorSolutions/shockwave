@@ -15,15 +15,29 @@ export function isMdFile(name) {
   return typeof name === 'string' && name.toLowerCase().endsWith('.md');
 }
 
-// Directory names we never descend into, display, or watch — the heavy
-// non-dotfile dirs. Dotfiles (.git/.obsidian/.shockwave/…) are skipped
-// separately by the leading-dot rule; these are the extras.
+// Directory names we never descend into — the heavy non-dotfile dirs. Dotfiles
+// (.git/.obsidian/.shockwave/…) are covered separately by the leading-dot rule;
+// these are the extras.
 export const IGNORED_DIR_NAMES = new Set(['node_modules']);
 
-// True for any path segment the tree builder and watcher skip: a dotfile
-// segment, or a name in IGNORED_DIR_NAMES. Single source of truth so buildTree,
-// the walks below, and isIgnoredWatchPath stay consistent.
-export function isIgnoredSegment(name) {
+// TWO predicates, same rule text, DIFFERENT owners — deliberately not one
+// function. Conflating them is what made "show hidden files in the tree" read
+// as a change to what the app watches and indexes:
+//
+//   isWatchIgnored — the watcher and the .md walks (link index, correlator
+//     seeding). Machinery, not display. NEVER user-controlled: turning it off
+//     would mean watching .git and indexing every dotfile, which is not what
+//     anyone asking to see a file in the sidebar is asking for.
+//   isTreeHidden — the sidebar's tree, and only that. A display decision, so it
+//     takes a flag (Show hidden files, persisted per machine).
+//
+// They agree today. If they ever diverge, that's fine — they answer different
+// questions.
+export function isWatchIgnored(name) {
+  return typeof name === 'string' && (name.startsWith('.') || IGNORED_DIR_NAMES.has(name));
+}
+
+export function isTreeHidden(name) {
   return typeof name === 'string' && (name.startsWith('.') || IGNORED_DIR_NAMES.has(name));
 }
 
@@ -59,7 +73,7 @@ export async function collectMarkdownBasenamesLower(root, excludePaths = new Set
       return;
     }
     for (const e of entries) {
-      if (isIgnoredSegment(e.name)) continue;
+      if (isWatchIgnored(e.name)) continue;
       if (e.isSymbolicLink()) continue;
       const full = path.join(dir, e.name);
       if (excludePaths.has(full)) continue;
@@ -119,7 +133,7 @@ export async function walkMarkdownPaths(root, { skipSymlinks = true } = {}) {
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (isIgnoredSegment(e.name)) continue;
+      if (isWatchIgnored(e.name)) continue;
       if (skipSymlinks && e.isSymbolicLink()) continue;
       const full = path.join(dir, e.name);
       if (e.isDirectory()) await walk(full);

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { TREE_SORT_ORDERS, TREE_SORT_LABELS } from './constants.js';
 import { SearchIcon, SortIcon, CollapseAllIcon, BookmarkIcon, CloudAlertIcon } from './Icons.jsx';
 import {
@@ -47,6 +48,8 @@ export default function SortBar({
   onToggleBookmarkFilter,
   bookmarkItems,
   onPickBookmark,
+  showHiddenFiles,
+  onToggleHiddenFiles,
   hasConflicts,
   conflictCount,
   conflictFilterActive,
@@ -153,6 +156,23 @@ export default function SortBar({
           aria-label="Collapse all folders"
         >
           <CollapseAllIcon size={15} />
+        </button>
+      )}
+      {/* Hidden files. Display only — dotfiles, .git and node_modules appear in
+          the tree; nothing about what the app watches or indexes changes. Last
+          in the left cluster because it's the least-reached-for of them, and
+          hidden in bookmark mode (that list is already a filtered view). */}
+      {!bookmarkFilterActive && (
+        <button
+          type="button"
+          className={cn(barBtn, showHiddenFiles && barBtnActive)}
+          onClick={onToggleHiddenFiles}
+          disabled={disabled}
+          title={showHiddenFiles ? 'Hide hidden files' : 'Show hidden files'}
+          aria-label="Toggle hidden files"
+          aria-pressed={!!showHiddenFiles}
+        >
+          {showHiddenFiles ? <Eye size={15} /> : <EyeOff size={15} />}
         </button>
       )}
       {/* Conflict view toggle — pinned to the far right (rarely used). */}

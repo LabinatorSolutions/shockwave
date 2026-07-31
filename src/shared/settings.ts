@@ -188,5 +188,9 @@ export interface Settings {
   // Whether the file-tree is filtered to bookmarks only. Persisted globally so
   // the view survives restarts and workspace switches.
   bookmarkFilterActive: boolean;
+  // Whether the file tree shows hidden entries (dotfiles, .git, node_modules).
+  // DISPLAY ONLY — the watcher and the link index keep their own rule, so this
+  // never changes what the app indexes, resolves wiki-links against, or reloads.
+  showHiddenFiles: boolean;
   windowBounds: WindowBounds | null;
 }

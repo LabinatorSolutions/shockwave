@@ -187,7 +187,7 @@ export interface ShockwaveApi {
   openFolder(): Promise<string | null>;
 
   // Filesystem reads
-  readTree(dirPath: string): Promise<TreeNode[]>;
+  readTree(dirPath: string, opts?: { includeHidden?: boolean }): Promise<TreeNode[]>;
   readAllMarkdown(dirPath: string): Promise<ParsedFile[]>;
   /** Discard the persisted parse cache; the next readAllMarkdown re-parses every file. */
   rebuildLinkCache(dirPath: string): Promise<{ ok: boolean }>;
