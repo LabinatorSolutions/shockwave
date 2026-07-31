@@ -41,7 +41,16 @@ function transportError(err: any, url: string): ApiError {
   return new ApiError('unreachable', `Can't reach the Shockwave server: ${err?.message ?? err}`);
 }
 
-const TIMEOUT_MS = 8000;
+// A hard deadline belongs on ONE call: the reachability probe, which exists to
+// answer yes-or-no in bounded time and is the thing the Connect flow waits on.
+//
+// It used to sit on every request, and that is the wrong shape — it's total
+// wall-clock, not idle, so it fired 8 seconds in whether or not bytes were
+// moving. A perfectly healthy upload got aborted for being large; the transcript
+// (pi's whole JSONL, re-sent every turn) and a message carrying an image are both
+// big enough to hit it. Nothing else here gets a deadline: `fetch` has no idle
+// timeout to reach for, and a bound on total time is not a substitute for one.
+const HEALTH_TIMEOUT_MS = 20_000;
 
 function base(): { url: string; apiKey: string } {
   const c = readApiConfig();
@@ -52,8 +61,6 @@ function base(): { url: string; apiKey: string } {
 async function request(method: string, pathname: string, body?: any): Promise<any> {
   const { url, apiKey } = base();
   const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   let res: Response;
   try {
     res = await companionFetch(target, {
@@ -63,12 +70,9 @@ async function request(method: string, pathname: string, body?: any): Promise<an
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: ctrl.signal,
     });
   } catch (err: any) {
     throw transportError(err, target);
-  } finally {
-    clearTimeout(timer);
   }
   // Got a response, so the certificate was accepted — drop any parked one so a
   // stale entry can't be offered for approval later.
@@ -80,8 +84,27 @@ async function request(method: string, pathname: string, body?: any): Promise<an
   return json.result ?? json;
 }
 
+// A GET whose body is BYTES, not JSON — the raw `Response` is handed back so the
+// caller can stream it. `request` above would try to parse it and unwrap
+// `.result`, which is meaningless for an image. Used by the `app://attachment/`
+// protocol handler, which is why the API key stays in main.
+async function requestRaw(pathname: string): Promise<Response> {
+  const { url, apiKey } = base();
+  const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
+  try {
+    const res = await companionFetch(target, { headers: { Authorization: `Bearer ${apiKey}` } });
+    clearPendingCert();
+    if (res.status === 401) throw new ApiError('unauthorized', 'The server rejected the API key.');
+    return res;
+  } catch (err: any) {
+    if (err instanceof ApiError) throw err;
+    throw transportError(err, target);
+  }
+}
+
 export const api = {
   get: (p: string) => request('GET', p),
+  getRaw: (p: string) => requestRaw(p),
   patch: (p: string, body: any) => request('PATCH', p, body),
   post: (p: string, body?: any) => request('POST', p, body ?? {}),
   del: (p: string) => request('DELETE', p),
@@ -96,10 +119,12 @@ export const api = {
   // NEVER approves anything — it only reports.
   async health(url: string, apiKey: string): Promise<{ ok: boolean; version?: string; cert?: PendingCert }> {
     const t = new URL('health', url.endsWith('/') ? url : `${url}/`).href;
-    // Same timeout discipline as request() — an un-bounded health fetch once
-    // hung forever on a connection the restarting companion half-closed.
+    // The one deadline in this file. An un-bounded health fetch once hung
+    // forever on a connection the restarting companion half-closed — no RST, so
+    // the socket just sits there and the Connect flow waits on it with nothing
+    // to show. Bounded, because "is it there?" must always answer.
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
     try {
       const r = await companionFetch(t, { headers: { Authorization: `Bearer ${apiKey}` }, signal: ctrl.signal });
       clearPendingCert(); // answered ⇒ certificate accepted
@@ -117,21 +142,18 @@ export const api = {
   async triggerUpdate(tag: string): Promise<{ ok: boolean; error?: string }> {
     const { url, apiKey } = base();
     const target = new URL('update', url.endsWith('/') ? url : `${url}/`).href;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
     try {
       const res = await companionFetch(target, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tag }),
-        signal: ctrl.signal,
       });
       if (res.ok) return { ok: true };
       const j = await res.json().catch(() => ({}));
       return { ok: false, error: typeof j.error === 'string' ? j.error : `HTTP ${res.status}` };
     } catch (err: any) {
       return { ok: false, error: err?.message ?? String(err) };
-    } finally { clearTimeout(timer); }
+    }
   },
   // Open a long-lived Server-Sent Events stream. `onEvent` fires per `data:`
   // frame (parsed JSON); `onOpen` fires once when the stream's HTTP response

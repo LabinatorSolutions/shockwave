@@ -467,6 +467,20 @@ export function formatToolResult(result: any): string {
 // each result into the tool row created from the matching call (by tool_call_id).
 // Order within an assistant turn: thinking → text → tool calls. (isError isn't
 // persisted, so hydrated tool rows render as non-error; images degrade to text.)
+// A stored message's images, in the shape `AttachmentChip` renders. `url` (not
+// `dataUrl`) is what separates these from the composer's freshly-picked files,
+// which still carry their bytes in memory until the send round-trips.
+function attachmentsOf(row: any) {
+  if (!Array.isArray(row?.attachments) || !row.attachments.length) return undefined;
+  return row.attachments.map((a: any, i: number) => ({
+    id: a.id,
+    kind: 'image',
+    name: `image ${i + 1}`,
+    mimeType: a.mimeType,
+    url: `app://attachment/${encodeURIComponent(a.id)}`,
+  }));
+}
+
 function hydrateMessages(rows: any[]) {
   const results = new Map();
   for (const r of rows) {
@@ -475,7 +489,10 @@ function hydrateMessages(rows: any[]) {
   const out: any[] = [];
   for (const r of rows) {
     if (r.role === 'user') {
-      out.push({ id: `h${r.seq}`, kind: 'user', text: r.content ?? '' });
+      // Stored images come back as ids, not bytes — the chip resolves each one
+      // through `app://attachment/<id>`, so a chat open costs nothing extra and
+      // only the pictures actually on screen are fetched.
+      out.push({ id: `h${r.seq}`, kind: 'user', text: r.content ?? '', attachments: attachmentsOf(r) });
     } else if (r.role === 'assistant') {
       if (r.reasoning) out.push({ id: `h${r.seq}-k`, kind: 'thinking', text: r.reasoning, done: true });
       if (r.content) out.push({ id: `h${r.seq}-t`, kind: 'assistant', text: r.content });

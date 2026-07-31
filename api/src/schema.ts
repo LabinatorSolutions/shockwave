@@ -136,3 +136,25 @@ export const message = pgTable('message', {
   toolName: text('tool_name'),
   createdAt: epochMs('created_at').notNull(),
 }, (t) => [primaryKey({ columns: [t.chatId, t.seq] })]);
+
+// Images the USER sent with a message — what the chat UI draws. Written from the
+// same append that stores the message, so both clients are covered by one path:
+// desktop and Telegram alike hand images to pi, and `entryToRow` in agent-core
+// keeps them on the row instead of dropping them.
+//
+// Keyed by `entryId`, not `seq`: entry id is the message's identity (seq is
+// assigned server-side, later), and it's the only handle the writer has at the
+// moment the row is built.
+//
+// The bytes also exist inside `chat.transcript` — that's pi's own session file,
+// an opaque third-party format we store whole and never parse. This table is our
+// copy, in a shape we can serve one image at a time.
+export const attachment = pgTable('attachment', {
+  id: text('id').primaryKey(),
+  chatId: text('chat_id').notNull().references(() => chatTable.chatId, { onDelete: 'cascade' }),
+  entryId: text('entry_id').notNull(),   // the message's pi SessionEntry.id
+  idx: integer('idx').notNull(),         // ordinal within that message
+  mimeType: text('mime_type').notNull(),
+  bytes: bytea('bytes').notNull(),
+  createdAt: epochMs('created_at').notNull(),
+}, (t) => [index('idx_attachment_msg').on(t.chatId, t.entryId)]);

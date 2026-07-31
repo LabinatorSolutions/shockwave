@@ -224,3 +224,24 @@ ALTER TABLE message ADD COLUMN IF NOT EXISTS search_text tsvector
          ELSE NULL END
   ) STORED;
 CREATE INDEX IF NOT EXISTS idx_message_search ON message USING gin (search_text);
+
+-- Images the user sent with a message — what the chat UI draws.
+--
+-- Keyed by entry_id, NOT seq: entry_id is the message's identity, and seq is
+-- assigned by the server after the fact, so it isn't known to whoever builds the
+-- row. Inserted in the same transaction as the message, and only when that
+-- message actually inserted, so a re-sent turn can't duplicate its images.
+--
+-- These bytes also sit inside chat.transcript — pi's own session file, which we
+-- store whole and never parse. This table is our copy, in a shape that can be
+-- served one image at a time instead of by downloading a whole conversation.
+CREATE TABLE IF NOT EXISTS attachment (
+  id         text PRIMARY KEY,
+  chat_id    text NOT NULL REFERENCES chat(id) ON DELETE CASCADE,
+  entry_id   text NOT NULL,      -- the message's pi SessionEntry.id
+  idx        integer NOT NULL,   -- ordinal within that message
+  mime_type  text NOT NULL,
+  bytes      bytea NOT NULL,
+  created_at bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attachment_msg ON attachment (chat_id, entry_id);

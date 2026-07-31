@@ -90,7 +90,16 @@ function authed(req: express.Request, res: express.Response, next: express.NextF
   res.status(401).json({ error: 'unauthorized' });
 }
 const limiter = rateLimit({ windowMs: 60_000, limit: 600, standardHeaders: true, legacyHeaders: false });
-app.use(authed, limiter, express.json({ limit: '1mb' }));
+// 1mb was too small for two payloads that legitimately carry media, and both
+// failed as a 413 the user never saw:
+//   - PATCH /chat/:id/transcript — pi's whole session JSONL, re-sent every turn.
+//     Any chat with an image, or simply enough tool output, exceeds a megabyte.
+//   - POST /chat/:id/messages — a message's images ride the row, base64 (+33%).
+// Telegram already refuses anything over 20MB (`MAX_INBOUND_BYTES`), so that is
+// the largest single file that can arrive; the ceiling is set well above it for
+// the transcript, which accumulates. The surface this widens is one bearer-authed,
+// rate-limited server with a single user.
+app.use(authed, limiter, express.json({ limit: '64mb' }));
 
 // helper: run a store call, 500 with no leak on failure
 const handle = (fn: (req: express.Request) => Promise<any>) =>
@@ -130,6 +139,23 @@ app.delete('/chat/:id', handle((req) => store.deleteChat(db, req.params.id)));
 // Transcript JSONL (whole). Sent as { content }.
 app.get('/chat/:id/transcript', handle((req) => store.getTranscript(db, req.params.id)));
 app.patch('/chat/:id/transcript', handle((req) => store.putTranscript(db, req.params.id, String(req.body?.content ?? ''))));
+
+// One image the user sent, by id. NOT wrapped in `handle` — that answers
+// `{result}` JSON, and this streams raw bytes. Immutable once written (the id is
+// a fresh uuid per image), so it caches forever; without that the desktop
+// re-fetches every picture on every chat open.
+app.get('/attachment/:id', async (req, res) => {
+  try {
+    const row = await store.getAttachment(db, req.params.id);
+    if (!row) { res.sendStatus(404); return; }
+    res.setHeader('Content-Type', row.mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(row.bytes);
+  } catch (err: any) {
+    log.error({ err: err?.message }, 'attachment read failed');
+    res.status(500).json({ error: 'request failed' });
+  }
+});
 
 // Cross-client running flag. Body { machine: string } sets running; { machine:
 // null } clears it. The executing client clears only after uploading the turn.

@@ -2373,6 +2373,29 @@ app.whenReady().then(async () => {
   protocol.handle('app', async (req) => {
     try {
       const url = new URL(req.url);
+      // Chat images, served from the companion. The renderer can't fetch them
+      // itself — the API key lives here — so it writes an <img src> and this
+      // proxies. Immutable ids, so the response is cacheable and a re-opened
+      // chat doesn't re-download every picture.
+      if (url.host === 'attachment') {
+        const id = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+        if (!id) return new Response('not found', { status: 404 });
+        try {
+          const upstream = await api.getRaw(`/attachment/${encodeURIComponent(id)}`);
+          if (!upstream.ok) return new Response('not found', { status: upstream.status });
+          return new Response(upstream.body, {
+            status: 200,
+            headers: {
+              'Content-Type': upstream.headers.get('Content-Type') ?? 'application/octet-stream',
+              'Cache-Control': 'public, max-age=31536000, immutable',
+            },
+          });
+        } catch {
+          // Companion away — the image is simply absent for now, not an error
+          // worth breaking the chat over.
+          return new Response('unavailable', { status: 503 });
+        }
+      }
       if (url.host !== 'media') return new Response('not found', { status: 404 });
       if (!watcherRootDir) return new Response('no vault', { status: 404 });
       const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '');

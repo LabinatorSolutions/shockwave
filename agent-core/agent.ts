@@ -22,6 +22,7 @@ import { activeToolNames } from './defaults/tools.js';
 import { makeAgentTokenTools } from './agentTokens.js';
 import { makeTranscribeTool } from './transcribe.js';
 import { makeChatSearchTool, type ChatSearchHost } from './chatSearch.js';
+import { imagesOf } from './messageImages.js';
 
 export type Emit = (event: any) => void;
 
@@ -38,6 +39,14 @@ export interface ChatRow {
   entryId: string; parentId: string | null;
   role: string; content: string | null; reasoning: string | null;
   toolCalls: string | null; toolCallId: string | null; toolName: string | null; createdAt: number;
+  /**
+   * Images the user sent with this message, base64. Kept on the row so the ONE
+   * append that stores a message also stores its pictures — both hosts hand
+   * images to pi the same way, so desktop and Telegram are covered by this alone.
+   * `content` is text-only by design (it feeds the search tsvector), so without
+   * this the image had nowhere to go and was dropped.
+   */
+  images?: { mimeType: string; data: string }[];
 }
 
 // Everything host-specific. All I/O; no logic.
@@ -150,7 +159,7 @@ function entryToRow(entry: any): ChatRow | null {
   };
   if (m.role === 'assistant') return { ...base, role: 'assistant', content: textOf(m.content) || null, reasoning: thinkingOf(m.content), toolCalls: toolCallsOf(m.content), toolCallId: null, toolName: null };
   if (m.role === 'toolResult') return { ...base, role: 'tool', content: textOf(m.content) || null, reasoning: null, toolCalls: null, toolCallId: m.toolCallId ?? null, toolName: m.toolName ?? null };
-  return { ...base, role: 'user', content: textOf(m.content) || null, reasoning: null, toolCalls: null, toolCallId: null, toolName: null };
+  return { ...base, role: 'user', content: textOf(m.content) || null, reasoning: null, toolCalls: null, toolCallId: null, toolName: null, images: imagesOf(m.content) };
 }
 
 // Locate pi's session file for a chat. pi writes `<timestamp>_<id>.jsonl` when it

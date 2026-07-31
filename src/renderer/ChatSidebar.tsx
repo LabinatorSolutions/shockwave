@@ -166,10 +166,12 @@ function formatTokens(n) {
 }
 
 function AttachmentChip({ att, onRemove }: any) {
+  // Two sources, one chip. A file you just picked carries its bytes inline
+  // (`dataUrl`); one loaded from a stored chat carries an `app://attachment/`
+  // URL that main proxies to the companion. Neither knows about the other.
+  const src = att.dataUrl || att.url;
   const handleClick = () => {
-    if (att.kind === 'image' && att.dataUrl) {
-      window.api.openExternal(att.dataUrl);
-    }
+    if (att.kind === 'image' && src) window.api.openExternal(src);
   };
   return (
     <div className="group relative">
@@ -179,7 +181,7 @@ function AttachmentChip({ att, onRemove }: any) {
           className="block size-12 rounded-lg border border-border bg-cover bg-center"
           onClick={handleClick}
           title={att.name}
-          style={{ backgroundImage: `url("${att.dataUrl}")` }}
+          style={{ backgroundImage: `url("${src}")` }}
           aria-label={att.name}
         />
       ) : (

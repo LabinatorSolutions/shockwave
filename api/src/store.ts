@@ -2,6 +2,7 @@
 // `Db` + (for secret ops) the master key. Secrets are sealed/unsealed here;
 // clients never see ciphertext.
 
+import crypto from 'node:crypto';
 import type { Db } from './db.js';
 import { seal, unseal } from './crypto.js';
 import {
@@ -11,6 +12,7 @@ import {
 } from './keys.js';
 import {
   workspace, setting, agentSecret, secretValue, chatTable, message, cronState, telegramAccount,
+  attachment,
 } from './schema.js';
 import { and, eq, lt, gt, desc, asc, ilike, like, sql, inArray } from 'drizzle-orm';
 
@@ -288,11 +290,38 @@ export async function getChat(db: Db, chatId: string) {
 export async function getMessages(db: Db, chatId: string, after?: number) {
   const conds = [eq(message.chatId, chatId)];
   if (typeof after === 'number') conds.push(gt(message.seq, after));
-  return db.select({
+  const rows = await db.select({
     chatId: message.chatId, seq: message.seq, entryId: message.entryId, role: message.role,
     content: message.content, reasoning: message.reasoning, toolCalls: message.toolCalls,
     toolCallId: message.toolCallId, toolName: message.toolName, createdAt: message.createdAt,
   }).from(message).where(and(...conds)).orderBy(asc(message.seq));
+
+  // Attachment METADATA only — never the bytes. A chat read must not carry every
+  // image in the conversation; the client fetches each one from
+  // `GET /attachment/:id` when it actually draws it.
+  const entryIds = rows.map((r) => r.entryId).filter((id): id is string => !!id);
+  if (!entryIds.length) return rows.map((r) => ({ ...r, attachments: [] }));
+
+  const atts = await db.select({
+    id: attachment.id, entryId: attachment.entryId, idx: attachment.idx, mimeType: attachment.mimeType,
+  }).from(attachment)
+    .where(and(eq(attachment.chatId, chatId), inArray(attachment.entryId, entryIds)))
+    .orderBy(asc(attachment.idx));
+
+  const byEntry = new Map<string, { id: string; mimeType: string }[]>();
+  for (const a of atts) {
+    const list = byEntry.get(a.entryId) ?? [];
+    list.push({ id: a.id, mimeType: a.mimeType });
+    byEntry.set(a.entryId, list);
+  }
+  return rows.map((r) => ({ ...r, attachments: (r.entryId && byEntry.get(r.entryId)) || [] }));
+}
+
+// One image, by id. Returns the raw bytes + type for the HTTP route to stream.
+export async function getAttachment(db: Db, id: string) {
+  const rows = await db.select({ mimeType: attachment.mimeType, bytes: attachment.bytes })
+    .from(attachment).where(eq(attachment.id, id));
+  return rows[0] ?? null;
 }
 
 export async function upsertChat(db: Db, row: {
@@ -356,6 +385,21 @@ export async function appendMessages(db: Db, chatId: string, rows: any[]): Promi
       const n = res.rowCount ?? 0;
       inserted += n;
       next += n; // a skipped duplicate must not burn a seq
+
+      // Images ride the message row (agent-core keeps them on it). Insert ONLY
+      // when the message itself inserted: a retry or a re-sent turn hits the
+      // conflict above and must not add a second copy of the same pictures.
+      if (n && Array.isArray(m.images) && m.images.length && m.entryId) {
+        await c.insert(attachment).values(m.images.map((img: any, i: number) => ({
+          id: crypto.randomUUID(),
+          chatId,
+          entryId: m.entryId,
+          idx: i,
+          mimeType: String(img?.mimeType || 'application/octet-stream'),
+          bytes: Buffer.from(String(img?.data ?? ''), 'base64'),
+          createdAt: m.createdAt ?? now(),
+        })));
+      }
     }
     if (inserted) await c.update(chatTable).set({ updatedAt: now() }).where(eq(chatTable.chatId, chatId));
   });

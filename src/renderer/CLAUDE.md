@@ -153,6 +153,10 @@ The chat sidebar is mounted with `key={workspacePath ?? 'no-workspace'}` in `App
 
 The composer accepts images (PNG/JPEG/GIF/WebP) and a long list of text/code file extensions, via the paperclip button, paste, or drag-drop onto the sidebar. Images are sent as pi's `ImageContent[]` shape; text files are inlined into the prompt as `<file name="…">…</file>` blocks before the user's typed message. Rejected files (unsupported format or read error) surface a dismissible inline error.
 
+**A sent image survives the send — `AttachmentChip` renders from two sources.** A file you just picked carries its bytes inline (`dataUrl`), which is what paints it the instant you hit send. A message loaded from a stored chat carries `url` instead — `app://attachment/<id>`, which main proxies to the companion's `GET /attachment/:id` (the API key lives in main, so the renderer can only ask for a URL). The chip takes whichever it has and knows nothing about the other.
+
+That split is the whole fix for images not rendering. The optimistic row in `sendToChat` was the *only* thing drawing a picture, so it died on any re-read — `openChat` always replaces messages, and `hydrateMessages` had no attachments to rebuild from. A Telegram image never got that row at all (it arrives from the server, not your hands) and so never rendered even once. Both now come back from `attachment` rows the companion stored when the message was appended. **Metadata only on a chat read** — ids and mime types, never bytes — so opening a chat costs nothing extra and `loading="lazy"` means only the pictures actually on screen are fetched.
+
 ### Voice input (composer mic button)
 
 The composer's microphone button uses `voice/useVoiceInput.js`, which streams 16kHz PCM via the Web Audio API + an inline `AudioWorklet` to AssemblyAI's real-time WebSocket. The flow:
