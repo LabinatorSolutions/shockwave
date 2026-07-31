@@ -1825,8 +1825,19 @@ function startLiveFeed() {
       feedBackoff = 1000;
       if (!e?.chatId) return;
       // Our own runs already reach the renderer over IPC; the copy coming back
-      // down the feed (we POST every event up) would double-render.
-      if (agentRunningChats().includes(e.chatId)) return;
+      // down the feed (we POST every one of them up) would double-render.
+      //
+      // Keyed on the event's ORIGIN MACHINE — `agent-core` stamps every event it
+      // emits — not on whether the chat is running here right now. The running
+      // test is a race it loses: `entry.running` flips false the instant
+      // `session.prompt` resolves, while the echo of that same turn is still in
+      // flight over HTTP. Everything that came back late sailed through and the
+      // renderer drew the assistant's reply a second time (its `message_end`
+      // opens a fresh bubble when no cursor is live). On a short turn the whole
+      // exchange round-tripped after the flag cleared, so the entire reply
+      // doubled. It looked like a stored duplicate and wasn't: re-opening the
+      // chat re-read the rows and the copy vanished.
+      if (e.machine && e.machine === os.hostname()) return;
       for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed()) w.webContents.send('agent:event', e);
       }

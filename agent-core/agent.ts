@@ -522,7 +522,10 @@ export function createAgentRuntime(host: AgentHost) {
         const prev = msgs[msgs.length - 2];
         if (last?.role === 'assistant' && last?.stopReason === 'error' && prev?.role === 'user') msgs.splice(msgs.length - 2, 2);
       }
-      entry.emit({ type: 'agent_send_failed', errorMessage, chatId });
+      // `machine` like every other emit — a client filters the feed by origin to
+      // drop the echo of its own run, and an unstamped event isn't recognizable
+      // as its own.
+      entry.emit({ type: 'agent_send_failed', errorMessage, chatId, machine: host.machine });
       host.setRunning(chatId, null).catch(() => { /* nothing new to upload */ });
       return;
     }
