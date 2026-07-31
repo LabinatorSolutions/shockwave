@@ -159,6 +159,16 @@ Do **not** add a defaults object or seed default rows. The desktop learned this 
 
 `scheduler.ts` (gated by `CRON_ENABLED`): one croner per enabled `cron.json` entry (`protect:true`, workspace timezone), plus a refresh croner that `reconcileAll`s — fetches each workspace's `cron.json` via `fetchCronJson` (ETag/304) and updates registrations **non-destructively** (unchanged jobs keep running; changed schedules are replaced; vanished jobs dropped). `fireJob` mints a chatId, runs `runCronJob`, records history to `cron_state`. `cronRun.ts` is shared by the scheduler and the manual `POST …/cron/:job/run`: checkout → read the job prompt from the checkout's `cron.json` → agent turn streamed to the feed (watchdog) → deterministic `checkIn`, handing a `'conflict'` to `gitFix`. Checkout dirs are keyed by chatId (re-runs reuse) and reclaimed by `sweeper.ts`.
 
+### One-time jobs (`"once": true`)
+
+A `cron.json` entry with `"once": true` and an **ISO datetime** `schedule` (`"2026-03-14T18:50:00"`, interpreted in the workspace timezone — croner takes a date as a pattern natively) runs once and **deletes its own entry**. There is no separate one-shot store, no new endpoint, and no bookkeeping: `cronRun.ts` calls `dropJob()` to remove the entry from the checkout's `cron.json`, the run's existing `checkIn` commits + pushes that, and the next reconcile sees the job gone and drops the registration. The prompt's agent-facing docs are in `agent-core/defaults/helper.ts` (`SCHEDULED_RUNS`).
+
+`scheduler.ts` needs **no** one-shot handling: croner accepts a date as a pattern, fires it once, and reports `nextRun() === null` afterwards. Disposal also happens when the turn **fails** — the turn is wrapped in `try/catch` into `turnError` so `dropJob` + `checkIn` still run, then it rethrows. Once means once, and a failed job that kept its entry would leave a permanently dead line in the file.
+
+**A missed moment is missed**, exactly like any cron: if the companion is down at the fire time, nothing runs, and the (now unfireable) entry sits in `cron.json` until someone removes it. Deliberately not caught up — a reminder arriving hours late is worse than none, and the catch-up machinery cost more than the case is worth.
+
+**Registration latency is ~70s** — a desktop-authored edit needs a sync tick (10s) to reach GitHub plus a reconcile cycle (≤60s). One-time jobs less than ~2 minutes out don't reliably register; the helper prompt tells the agent to act immediately instead.
+
 ## Agent execution (`agentHost.ts`)
 
 `makeCompanionRuntime(pool, key)` builds an `AgentHost` and calls `agent-core`'s `createAgentRuntime` — the same runtime the desktop implements, but wired to direct I/O instead of IPC: persistence → the drizzle store, events → `feed`, a per-run scratch `dataDir` keyed by chatId (isolates concurrent runs' pi `settings.json`), `extraTools = [send_message]` (built from `agent-core/sendMessage.ts` with `sendTelegramMessage` injected — the desktop offers the same tool, backed by `POST /telegram/send`), `getAgentSecrets` from `readSettings`, `getToken` → `mintToken`. Both cron and Telegram drive it via `runtime.agentSend(payload, emit)` / `runtime.agentAbort(chatId)`. The git-fixer (`gitFixer.ts`) runs a **separate** pi session from the turn.

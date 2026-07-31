@@ -14,6 +14,22 @@ import { gitFix } from './gitFixer.js';
 
 export interface CronRunResult { chatId: string; checkIn: string; }
 
+// Remove a job from the checkout's cron.json. Nothing else is needed to retire a
+// one-time job: the run's own check-in commits and pushes this, and the next
+// scheduler reconcile sees the entry gone and drops the registration. Re-read
+// from disk rather than reusing the parse above — the turn may have edited the
+// file itself.
+async function dropJob(dir: string, jobName: string): Promise<void> {
+  const file = path.join(dir, 'cron.json');
+  try {
+    const jobs = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (!Array.isArray(jobs)) return;
+    const kept = jobs.filter((j: any) => j?.name !== jobName);
+    if (kept.length === jobs.length) return;
+    await fs.writeFile(file, `${JSON.stringify(kept, null, 2)}\n`);
+  } catch { /* unreadable/unwritable → the entry stays; harmless, it can't fire again */ }
+}
+
 export async function runCronJob(
   pool: DB, key: Buffer, runtime: any,
   workspaceId: string, jobName: string, chatId: string,
@@ -59,6 +75,7 @@ export async function runCronJob(
   const maxRunMs = (Number(process.env.CRON_MAX_RUN_MINUTES) || 30) * 60_000;
   const watchdog = setTimeout(() => { runtime.agentAbort(chatId).catch(() => {}); }, maxRunMs);
   let finalMessages: any[] | undefined;
+  let turnError: any = null;
   try {
     await runtime.agentSend(
       {
@@ -73,9 +90,19 @@ export async function runCronJob(
         feed.publish(event);
       },
     );
+  } catch (e) {
+    // Caught rather than propagated so the disposal + check-in below still run;
+    // rethrown after them.
+    turnError = e;
   } finally {
     clearTimeout(watchdog);
   }
+
+  // A one-time job disposes of itself — success or failure. It can't fire again
+  // either way (croner is done with a date pattern once it passes), so skipping
+  // this on failure wouldn't re-run anything; it would just leave a dead line in
+  // cron.json for the user to clean up.
+  if (job.once) await dropJob(dir, jobName);
 
   const stamp = new Date().toISOString();
   let result = await checkIn(dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, auth);
@@ -88,6 +115,8 @@ export async function runCronJob(
     });
     result = fixed ? await syncAndPush(dir, w.defaultBranch, auth) : 'conflict';
   }
+
+  if (turnError) throw turnError;
 
   // A turn can end badly WITHOUT throwing: pi reports it as the last assistant
   // message's stopReason ('error' from the provider, 'aborted' from the watchdog

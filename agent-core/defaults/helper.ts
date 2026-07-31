@@ -39,11 +39,34 @@ You can schedule yourself to run unattended. Schedules live in \`cron.json\` at 
     { "name": "nightly-triage", "schedule": "0 2 * * *", "prompt": "…", "enabled": true }
 
 - \`name\` — unique within the file, stable. Each run opens as its own chat titled after the job; renaming a job orphans its run history.
-- \`schedule\` — a standard 5-field cron expression, evaluated in the machine's **local time**.
+- \`schedule\` — either a standard 5-field cron expression for something recurring, **or** an ISO datetime (\`"2026-03-14T18:50:00"\`) for a one-time run. Both are evaluated in the user's timezone.
 - \`prompt\` — sent to a fresh chat each run; make it self-contained (it won't see earlier runs).
 - \`enabled\` — set \`false\` to pause a job without deleting it.
+- \`once\` — set \`true\` for a one-time job. It runs once and then **deletes its own entry** from \`cron.json\`. Omit it (the default) for anything recurring.
 
-Cron runs only when the user has turned scheduled tasks on, and only for the workspace that's active. A run starts a brand-new chat, so it sees the current workspace and your latest SOUL. Missed runs (app closed, or a different workspace active) collapse into a single catch-up run, bounded by a configurable window.`;
+## One-time jobs
+
+Anything the user frames as a single future moment — "remind me tonight at 6:50", "check on this tomorrow morning", "ping me in an hour" — is a one-time job: an ISO datetime schedule plus \`"once": true\`. Write the datetime as an absolute wall-clock time in the user's timezone; work out what "tonight" or "tomorrow" means from the current date rather than storing a relative phrase.
+
+    { "name": "remind-call-dentist", "schedule": "2026-03-14T18:50:00", "once": true,
+      "prompt": "Send the user a message reminding them to call the dentist." }
+
+Two things to get right:
+
+- **Registration takes about a minute** (the file has to reach GitHub, and the scheduler re-reads it on a cycle). Don't schedule a one-time job less than ~2 minutes out — do it immediately instead, or pick a later time and say so.
+- **A run has no user in it.** If the point of the job is to tell the user something, the prompt must say so explicitly — see "Reaching the user" below. Otherwise the run just quietly writes a chat nobody is looking at.
+
+A run starts a brand-new chat, so it sees the current workspace and your latest SOUL. Runs execute on the companion server, not this machine — the app doesn't have to be open. Like any cron, a moment that passes while the server is down is simply missed.`;
+
+const REACHING_THE_USER = `# Reaching the user
+
+\`send_message\` delivers a message to the user directly (Telegram). It is the only way to reach them outside the chat you're in.
+
+**"Send me", "notify me", "let me know", "ping me", "remind me", "tell me when" — all mean \`send_message\`.** Take them literally: the user is asking to be reached, not asking you to write it down or say it in a chat they may not be looking at. If a request ends in one of those phrases, the last thing you do is call \`send_message\`.
+
+This matters most on scheduled and unattended runs, where nobody sees your reply at all — there, a message that isn't sent is a message that didn't happen. When you write a \`cron.json\` prompt whose purpose is to inform the user, say "send the user a message …" in the prompt itself so the future run knows to reach out.
+
+If sending fails (Telegram isn't connected), say so in your reply rather than treating the task as done.`;
 
 const TOOLS = (tools: ToolDescriptor[]) => `# Available tools
 
@@ -203,6 +226,9 @@ export function buildShockwaveHelper(
     ...(unattended ? [UNATTENDED] : []),
     TOOLS(tools),
     GUIDELINES,
+    // Only when the tool is actually in this run's set — the section tells the
+    // agent to reach for it by name, which is worse than useless if it's absent.
+    ...(tools.some((t) => t.name === 'send_message') ? [REACHING_THE_USER] : []),
     WORKSPACE,
     WIKILINKS,
     ASSOCIATION,

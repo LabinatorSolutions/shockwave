@@ -33,7 +33,7 @@ The `emit` sink is passed **per `agentSend` call**, not stored on the host — s
 - `defaults/index.ts` — `assembleSystemPrompt` / `rebuildSystemPrompt` + re-exports.
 - `defaults/tools.ts` — `TOOL_CATALOG` (the single source for the prompt list AND the pi allowlist), `only` scoping, `toolsForSource` / `activeToolNames`.
 - `defaults/soul.ts` — `DEFAULT_SOUL`, `AGENTS_STUB`, `readSoul`.
-- `defaults/helper.ts` — `buildShockwaveHelper` (the app operating-manual section of the prompt; `UNATTENDED` override) + `HELPER_MARK`, the seam `rebuildSystemPrompt` cuts on.
+- `defaults/helper.ts` — `buildShockwaveHelper` (the app operating-manual section of the prompt; `UNATTENDED` override) + `HELPER_MARK`, the seam `rebuildSystemPrompt` cuts on. Two sections carry policy rather than description: `SCHEDULED_RUNS` documents `cron.json` including one-time jobs (`"once": true` + an ISO datetime — see `api/CLAUDE.md`), and `REACHING_THE_USER` maps "send me / notify me / remind me / let me know / ping me" onto `send_message`, because on an unattended run a reply nobody reads is not a delivery. That section is included **only when `send_message` survives the tool filter** — telling the agent to call a tool it doesn't have is worse than saying nothing.
 - `defaults/files.ts` — `DEFAULT_FILES` + `ensureWorkspaceFiles`/`missingWorkspaceFiles` (on-disk workspace scaffolding).
 
 ## Session lifecycle (`agent.ts`)
