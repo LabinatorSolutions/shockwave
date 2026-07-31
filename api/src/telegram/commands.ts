@@ -17,10 +17,10 @@ export const BOT_COMMANDS = [
   { command: 'btw', description: 'Ask about this chat' },
   { command: 'status', description: 'Show workspace, chat, agent' },
   { command: 'help', description: 'Show what I can do' },
-  { command: 'chat', description: 'Switch chat by number' },
   { command: 'chats', description: 'List recent chats' },
-  { command: 'workspace', description: 'Switch workspace by number' },
+  { command: 'chat', description: 'Switch chat by number' },
   { command: 'workspaces', description: 'List all workspaces' },
+  { command: 'workspace', description: 'Switch workspace by number' },
 ];
 
 const LIST_LIMIT = 20;
