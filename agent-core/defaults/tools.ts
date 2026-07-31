@@ -61,6 +61,9 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   // Every source: a desktop chat can DM the user too (it routes through the
   // companion, which holds the bot token).
   { name: 'send_message', origin: 'custom', desc: 'Send the user a message on Telegram. Use to reach them proactively — a finished job, or something that needs their attention.' },
+  // Speech to text. Every source: a recording in the workspace is as likely to
+  // need reading on the desktop as one sent over Telegram.
+  { name: 'transcribe', origin: 'custom', desc: 'Transcribe an audio or video file into text with timestamps and speaker labels. Writes a transcript file and returns its path. Use whenever you need to know what was said in a recording.' },
   // The agent's memory of earlier conversations in this workspace.
   { name: 'search_chats', origin: 'custom', desc: 'Search earlier chats in this workspace — what the user told you before, what was decided, what you already tried. Pass `query` to search, `chatId` + `around` to read more of one, or nothing to list recent chats. Results carry dates; prefer recent ones when they disagree.' },
 ];

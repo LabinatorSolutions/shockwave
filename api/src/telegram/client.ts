@@ -2,6 +2,27 @@
 // knack). One 429 retry honoring retry_after. Plus splitMessage for the 4096
 // limit, which carries open code fences across chunks.
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+/**
+ * Telegram's ceiling for anything a bot uploads. Checked before we read a file,
+ * so an oversize send is reported as itself rather than surfacing as a generic
+ * API failure the user can't interpret.
+ */
+export const MAX_OUTBOUND_BYTES = 50 * 1024 * 1024;
+
+/** Which Telegram method a file should go out through. */
+export type SendKind = 'photo' | 'video' | 'voice' | 'audio' | 'document';
+
+const KIND_METHOD: Record<SendKind, { method: string; field: string }> = {
+  photo: { method: 'sendPhoto', field: 'photo' },
+  video: { method: 'sendVideo', field: 'video' },
+  voice: { method: 'sendVoice', field: 'voice' },
+  audio: { method: 'sendAudio', field: 'audio' },
+  document: { method: 'sendDocument', field: 'document' },
+};
+
 export class TelegramClient {
   constructor(private token: string) {}
 
@@ -62,6 +83,45 @@ export class TelegramClient {
     const res = await fetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
     if (!res.ok) throw new Error(`downloading the file failed (HTTP ${res.status}).`);
     return Buffer.from(await res.arrayBuffer());
+  }
+
+  // Upload a local file. Multipart rather than the JSON `call()` above, because
+  // that is the only way to hand Telegram bytes it doesn't already host.
+  private async upload(kind: SendKind, chatId: number, filePath: string, caption?: string): Promise<any> {
+    const { method, field } = KIND_METHOD[kind];
+    const stat = await fs.stat(filePath);
+    if (stat.size > MAX_OUTBOUND_BYTES) {
+      throw new Error(`the file is ${Math.round(stat.size / 1024 / 1024)} MB, over Telegram's 50 MB limit for bots.`);
+    }
+    const name = path.basename(filePath);
+    const form = new FormData();
+    form.set('chat_id', String(chatId));
+    form.set(field, new Blob([await fs.readFile(filePath)]), name);
+    // Telegram truncates captions at 1024; sending a longer one is an API error,
+    // and the reply text has already been delivered separately anyway.
+    if (caption) form.set('caption', caption.slice(0, 1024));
+    if (kind === 'document') form.set('filename', name);
+
+    const res = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
+    const json = await res.json().catch(() => ({}));
+    if (!(res.ok && json.ok)) throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
+    return json.result;
+  }
+
+  /**
+   * Send a file the way its type deserves.
+   *
+   * Photos fall back to a plain document send: Telegram rejects images outside its
+   * dimension limits (tall screenshots, extreme aspect ratios) even though the file
+   * is perfectly valid, and arriving as a file beats not arriving.
+   */
+  async sendFile(kind: SendKind, chatId: number, filePath: string, caption?: string): Promise<any> {
+    if (kind !== 'photo') return this.upload(kind, chatId, filePath, caption);
+    try {
+      return await this.upload('photo', chatId, filePath, caption);
+    } catch {
+      return this.upload('document', chatId, filePath, caption);
+    }
   }
 }
 

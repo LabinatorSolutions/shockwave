@@ -161,8 +161,11 @@ state. `cron_state` is just run history for the UI, keyed by `(workspaceId, jobN
 ```
 CRON_ENABLED           → true          # server-wide master: register + fire, or don't
 CRON_REFRESH_SCHEDULE  → "* * * * *"   # croner expression for the refresh job
-CRON_MAX_RUN_MINUTES   → 30            # per-run watchdog; abort a hung turn
 ```
+
+The per-run watchdog is no longer env: it's `codingAgent.maxRunMinutes` (Settings →
+Agent Chat, unset ⇒ 30). It moved because it bounds Telegram turns as well as cron
+ones, and the desktop is where a user would go to change it.
 
 (`CRON_MAX_CONCURRENT` intentionally absent — no global cap until we add the queue.)
 

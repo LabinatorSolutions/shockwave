@@ -9,10 +9,25 @@ import path from 'node:path';
 import { Cron } from 'croner';
 import pino from 'pino';
 import { WORK_BASE } from './git.js';
-import { RUNS_BASE } from './agentHost.js';
+import { RUNS_BASE, FILES_BASE } from './dataDirs.js';
+import type { DB } from './db.js';
+import { getDb } from './db.js';
+import * as store from './store.js';
 
 const log = pino({ base: undefined });
-const TTL_MS = (Number(process.env.RUN_DIR_TTL_DAYS) || 1) * 24 * 60 * 60 * 1000;
+// How long an idle working dir survives. A synced setting rather than env, so the
+// desktop's own scratch cleanup uses the same number and there is one place to
+// change it. Unset ⇒ 1 day, read at the point of use — the companion stores no
+// defaults, so an unset row must never look configured.
+const DEFAULT_TTL_DAYS = 1;
+
+async function ttlMs(pool: DB, key: Buffer): Promise<number> {
+  let days = DEFAULT_TTL_DAYS;
+  try {
+    days = Number((await store.readSettings(getDb(pool), key))?.codingAgent?.scratchTtlDays) || DEFAULT_TTL_DAYS;
+  } catch { /* unreadable settings must not stop the sweep */ }
+  return days * 24 * 60 * 60 * 1000;
+}
 
 async function sweepBase(base: string, cutoff: number): Promise<number> {
   let removed = 0;
@@ -30,13 +45,20 @@ async function sweepBase(base: string, cutoff: number): Promise<number> {
   return removed;
 }
 
-export async function sweepOnce(): Promise<void> {
-  const cutoff = Date.now() - TTL_MS;
-  const [a, b] = await Promise.all([sweepBase(WORK_BASE, cutoff), sweepBase(RUNS_BASE, cutoff)]);
-  if (a + b) log.info({ checkouts: a, scratch: b, ttlDays: TTL_MS / 86_400_000 }, 'swept stale run dirs');
+export async function sweepOnce(pool: DB, key: Buffer): Promise<void> {
+  const ms = await ttlMs(pool, key);
+  const cutoff = Date.now() - ms;
+  // The agent's scratch pad ages out on the same clock as the checkouts. What is
+  // left there is by definition what nobody kept — anything worth keeping was
+  // moved into the workspace and committed.
+  const [a, b, c] = await Promise.all([
+    sweepBase(WORK_BASE, cutoff), sweepBase(RUNS_BASE, cutoff), sweepBase(FILES_BASE, cutoff),
+  ]);
+  if (a + b + c) log.info({ checkouts: a, piScratch: b, scratchPads: c, ttlDays: ms / 86_400_000 }, 'swept stale run dirs');
 }
 
-export function initSweeper(): void {
-  sweepOnce().catch((e) => log.error({ err: e?.message }, 'run-dir sweep failed'));
-  new Cron('0 * * * *', () => { sweepOnce().catch((e) => log.error({ err: e?.message }, 'run-dir sweep failed')); });
+export function initSweeper(pool: DB, key: Buffer): void {
+  const run = () => sweepOnce(pool, key).catch((e) => log.error({ err: e?.message }, 'run-dir sweep failed'));
+  run();
+  new Cron('0 * * * *', run);
 }

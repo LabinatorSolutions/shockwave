@@ -20,6 +20,7 @@ import { agentDirFor, ensureDirs, listBuiltinSkills, listWorkspaceSkills, comput
 import { assembleSystemPrompt, rebuildSystemPrompt } from './defaults/index.js';
 import { activeToolNames } from './defaults/tools.js';
 import { makeAgentTokenTools } from './agentTokens.js';
+import { makeTranscribeTool } from './transcribe.js';
 import { makeChatSearchTool, type ChatSearchHost } from './chatSearch.js';
 
 export type Emit = (event: any) => void;
@@ -45,6 +46,18 @@ export interface AgentHost {
   machine: string;                          // running_machine / provenance stamp
   extraTools: any[];                        // host-only tools (desktop: [open_file]; server: [])
   dataDir(chatId: string): string;       // pi scratch-dir root; per-session so the server can isolate runs
+  /**
+   * The AGENT's own directory for this chat — working files, downloads, anything
+   * it is producing to send rather than to keep, and (on the companion) the files
+   * the user sent it. Named in the system prompt, so it must be a real path.
+   *
+   * Deliberately not `dataDir`: that one is pi's working memory (its settings and
+   * session log), and mixing the agent's files into it makes the two
+   * indistinguishable to anything walking the tree.
+   */
+  scratchDir(chatId: string): string;
+  /** Speech-to-text config for the `transcribe` tool — `settings.transcription`. */
+  getTranscription(): Promise<{ provider?: string; apiKey?: string }>;
   // persistence — dumb I/O; the core does the mapping/ordering:
   getChat(id: string): Promise<any | null>;
   upsertChat(row: { chatId: string; workspaceId: string; systemPrompt?: string | null; model?: string | null; source?: string | null; sourceId?: string | null; machine?: string | null }): Promise<void>;
@@ -250,6 +263,12 @@ export function createAgentRuntime(host: AgentHost) {
     const level = toPiThinkingLevel(thinkingLevel || 'off');
 
     const dataDir = host.dataDir(chatId);
+    // The agent's own directory for this chat: working files, and anything the
+    // user sent it. Outside the workspace, so nothing here is committed. Created
+    // up front because the prompt names it, and a path the agent is told about
+    // should exist when it goes looking.
+    const scratchDir = host.scratchDir(chatId);
+    try { fs.mkdirSync(scratchDir, { recursive: true }); } catch { /* best-effort */ }
     await ensureDirs(dataDir);
     const builtins = await listBuiltinSkills(host.builtinDir);
     const wsSkills = await listWorkspaceSkills(workspacePath);
@@ -310,15 +329,15 @@ export function createAgentRuntime(host: AgentHost) {
       // Keep the SOUL this chat was created with; rebuild the helper for THIS
       // run, so its tool list matches the side actually executing the turn.
       promptOverride = row.systemPrompt
-        ? rebuildSystemPrompt(row.systemPrompt, { unattended: !!unattended, source })
-        : await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source });
+        ? rebuildSystemPrompt(row.systemPrompt, { unattended: !!unattended, source, scratchDir })
+        : await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir });
     } else {
       // A brand-new chat. If the row exists we'd be silently restarting a real
       // conversation from empty — refuse instead, so a lost transcript surfaces
       // rather than quietly truncating the chat.
       if (row) throw new Error('This chat\'s transcript is missing on the server, so it cannot be continued. Start a new chat.');
       sessionManager = SessionManager.create(workspacePath, sessionsDir, { id: chatId });
-      promptOverride = await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source });
+      promptOverride = await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir });
     }
 
     const resourceLoader = new DefaultResourceLoader({ cwd: workspacePath, agentDir, systemPromptOverride: () => promptOverride });
@@ -330,6 +349,10 @@ export function createAgentRuntime(host: AgentHost) {
     // catalog doesn't name is dropped without a word — warn instead of leaving
     // the agent to discover it mid-turn.
     const allowed = activeToolNames(source);
+    // Built per session because it writes into THIS chat's scratch pad.
+    const transcribeTools = allowed.includes('transcribe')
+      ? [makeTranscribeTool(host.getTranscription, scratchDir)]
+      : [];
     const extraTools = host.extraTools.filter((t: any) => allowed.includes(t?.name));
     for (const t of host.extraTools) {
       if (!allowed.includes(t?.name)) console.warn(`[agent] host tool "${t?.name}" is not offered on ${source ?? 'desktop'} runs — add it to TOOL_CATALOG to enable it.`);
@@ -338,7 +361,7 @@ export function createAgentRuntime(host: AgentHost) {
     const { session } = await createAgentSession({
       cwd: workspacePath, agentDir, model: modelObj, thinkingLevel: level as any,
       authStorage, modelRegistry, sessionManager, resourceLoader,
-      customTools: [...tokenTools, ...searchTools, ...extraTools],
+      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...extraTools],
       tools: allowed,
     });
 

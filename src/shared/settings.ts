@@ -81,6 +81,20 @@ export interface CodingAgentSettings {
   // Note: an unset/omitted level makes pi fall back to 'medium' for reasoning-
   // capable models — this field makes the choice explicit and user-controllable.
   thinkingLevel: ThinkingLevel;
+  // How long an unattended run may take before the watchdog aborts it. Applies to
+  // Telegram and cron turns, which have no one watching; a desktop chat has the
+  // user and the Stop button instead. Unset ⇒ 30 (read `?? 30` at the point of
+  // use — there are no defaults on the companion).
+  maxRunMinutes?: number;
+  // How many times the git-fixer agent may re-attempt a conflicted check-in
+  // before the run gives up and reports it. Each attempt reopens the SAME folder,
+  // so progress from earlier attempts carries over. `maxRunMinutes` bounds the
+  // whole loop, so raising this can't extend the total time. Unset ⇒ 3.
+  maxFixAttempts?: number;
+  // How long per-chat working directories are kept — the agent's scratch pad and
+  // the server's git checkouts — counted from last use. Read by the companion's
+  // hourly sweeper and the desktop's boot cleanup. Unset ⇒ 1.
+  scratchTtlDays?: number;
 }
 
 // OAuth connection state carried by an `oauth`-kind AgentSecret. The three
@@ -177,7 +191,7 @@ export interface Settings {
   timezone: string;
   // Scheduled runs (cron) have NO settings here. The desktop stopped running the
   // scheduler; the companion owns execution and its knobs are that server's env
-  // (CRON_ENABLED, CRON_REFRESH_SCHEDULE, CRON_MAX_RUN_MINUTES). Job definitions
+  // (CRON_ENABLED, CRON_REFRESH_SCHEDULE). Job definitions
   // live per-workspace in `<workspace>/cron.json`. The in-app surface is the
   // schedule panel (CronModal) — read-only over that file, plus Run now.
   chatSidebarOpen: boolean;

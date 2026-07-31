@@ -27,7 +27,7 @@ export const WORK_BASE = process.env.CRON_WORK_DIR || path.join(os.tmpdir(), 'sh
 // agent's own working directory for the turn, so a PAT embedded here is a file
 // the agent can simply read (`git remote -v`). That hands it write access to
 // every repo the token covers, and the checkout outlives the run by
-// RUN_DIR_TTL_DAYS. Auth goes through GIT_ASKPASS instead — same approach the
+// `codingAgent.scratchTtlDays`. Auth goes through GIT_ASKPASS instead — same approach the
 // desktop already uses (src/main/sync.ts) — so the PAT lives in one child
 // process's environment and never touches disk.
 //
@@ -128,11 +128,41 @@ async function git(cwd: string, args: string[], auth?: GitAuth): Promise<{ stdou
 }
 
 // Prepare a checkout for a run, keyed by chatId. If the dir already exists
-// (a prior run of this chat), REUSE it — but bring it to a pristine, up-to-date
-// state first: fetch + reset --hard + clean, so no stale files or half-committed
-// work carries over. Otherwise a fresh shallow clone. The dir is kept after the
-// run (the TTL sweeper reclaims old ones) so a re-run can reuse it. Mirrors
-// knack's init/fetch/reset reuse.
+// (a prior run of this chat), REUSE it. Otherwise a fresh shallow clone. The dir
+// is kept after the run (the TTL sweeper reclaims old ones) so a re-run can
+// reuse it.
+//
+// ── Catching up is `merge --ff-only`, NOT `reset --hard` ─────────────────────
+//
+// This used to fetch + `reset --hard origin/<branch>` + `clean -fd` on reuse, to
+// guarantee a pristine start. But a turn's work is only safe once it is PUSHED,
+// and the push happens after the agent has already replied — so a second Telegram
+// message arriving in that window starts a new run, and step one of a new run
+// deleted the previous turn's work before it ever reached GitHub. Silently: the
+// checkout is the only copy of it, and reset --hard leaves no trace of what it
+// removed. `clean -fd` did the same to untracked files.
+//
+// Guarding the reset with "is there anything to lose?" is the wrong shape — it
+// keeps a destructive command and adds a question that can be answered wrong
+// (shallow history makes ancestry genuinely unresolvable, and "I couldn't tell"
+// must never license a wipe). `merge --ff-only` IS the operation we actually
+// wanted: advance to the remote when we are strictly behind, and refuse — doing
+// nothing — in every other case. It cannot destroy anything, so there is no
+// question to get wrong:
+//
+//   clean, already current   → no-op
+//   clean, behind            → fast-forwards, picking up desktop/other pushes
+//   local unpushed commits   → refuses, leaves them
+//   dirty tree               → keeps the edits (refuses if they'd be overwritten)
+//
+// Whatever it declines to fold in is not stranded: the turn's own `git add -A`
+// sweeps leftover work into the next commit, and checkIn's fetch+merge reconciles
+// with the remote at the end. The previous turn's changes just ride along.
+//
+// The accepted cost is two agents briefly sharing one folder. That is messy — a
+// confusing commit, or git refusing a second concurrent operation — and both are
+// loud and recoverable, which a deleted file is not. gitFixer's prompt tells the
+// fixer to expect it.
 export async function prepareCheckout(
   chatId: string,
   owner: string, repo: string, branch: string, pat: string,
@@ -143,7 +173,7 @@ export async function prepareCheckout(
 
   if (hasGit) {
     // Reuse — normalize the remote (an older checkout may still carry a
-    // credential-bearing URL in .git/config) and reset to origin.
+    // credential-bearing URL in .git/config).
     await git(dir, ['remote', 'set-url', 'origin', remoteUrl(owner, repo)]).catch(() => {});
     // A hook planted on a previous run survives reset --hard and clean -fd —
     // neither touches .git — so it would fire on the next push. The hooksPath
@@ -151,8 +181,9 @@ export async function prepareCheckout(
     // for a call that forgets the guard.
     await fs.rm(path.join(dir, '.git', 'hooks'), { recursive: true, force: true }).catch(() => {});
     await git(dir, ['fetch', '--depth=1', 'origin', branch], auth);
-    await git(dir, ['reset', '--hard', `origin/${branch}`]);
-    await git(dir, ['clean', '-fd']);
+    // --no-verify: a merge can run hooks, and .git survives everything above.
+    // A refusal is an expected outcome here, not an error — see the note above.
+    await git(dir, ['merge', '--ff-only', '--no-verify', `origin/${branch}`]).catch(() => {});
     return dir;
   }
 
@@ -187,13 +218,19 @@ export async function checkIn(dir: string, branch: string, message: string, auth
   }
 }
 
-// Fetch, merge if the remote moved, push. One mechanical retry on
-// non-fast-forward. Split out of checkIn because the git-fixer path needs it on
-// its own: the fixer resolves and commits with NO credentials, and the push is
-// done here afterwards, deterministically.
+// How many times syncAndPush will re-fetch and re-push when the remote moves
+// underneath it. Each retry closes the same gap: we fetched, someone else pushed,
+// our push was rejected as non-fast-forward, so we fetch again — now holding
+// their commit — and push. Nothing else is retried; every other error throws.
+const PUSH_ATTEMPTS = 3;
+
+// Fetch, merge if the remote moved, push. Mechanical retries on non-fast-forward.
+// Split out of checkIn because the git-fixer path needs it on its own: the fixer
+// resolves and commits with NO credentials, and the push is done here afterwards,
+// deterministically.
 export async function syncAndPush(dir: string, branch: string, auth: GitAuth): Promise<CheckInResult> {
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < PUSH_ATTEMPTS; attempt++) {
       try {
         await git(dir, ['fetch', 'origin', branch], auth);
         const { stdout: behind } = await git(dir, ['rev-list', '--count', `HEAD..origin/${branch}`]);

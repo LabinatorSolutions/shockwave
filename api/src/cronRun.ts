@@ -11,6 +11,11 @@ import * as store from './store.js';
 import * as feed from './feed.js';
 import { prepareCheckout, type GitAuth } from './git.js';
 import { checkInWithFixer } from './gitFixer.js';
+import { chatFilesDir } from './dataDirs.js';
+import { sendTelegramFile } from './telegram/sendTool.js';
+import {
+  extractMedia, extractLocalFiles, filterDeliveryPaths, deliveryKind,
+} from '../../agent-core/mediaTags.js';
 
 export interface CronRunResult { chatId: string; checkIn: string; }
 
@@ -69,12 +74,13 @@ export async function runCronJob(
     wsBuiltinSkills = JSON.parse(wsRaw)?.builtinSkills ?? {};
   } catch { /* no workspace file → defaults */ }
 
-  // Hung-run watchdog: abort a turn that exceeds CRON_MAX_RUN_MINUTES so a stuck
+  // Hung-run watchdog: abort a turn that exceeds `codingAgent.maxRunMinutes` so a stuck
   // provider or runaway tool loop can't wedge the run forever (the aborted turn's
   // partial output is still persisted + checked in below).
-  const maxRunMs = (Number(process.env.CRON_MAX_RUN_MINUTES) || 30) * 60_000;
+  const maxRunMs = (Number(ca.maxRunMinutes) || 30) * 60_000;
   const watchdog = setTimeout(() => { runtime.agentAbort(chatId).catch(() => {}); }, maxRunMs);
   let finalMessages: any[] | undefined;
+  let turnText = '';
   let turnError: any = null;
   try {
     await runtime.agentSend(
@@ -87,6 +93,12 @@ export async function runCronJob(
       },
       (event: any) => {
         if (event?.type === 'agent_end') finalMessages = event.messages;
+        // Everything the agent said this run, for file delivery below. Built from
+        // the deltas rather than agent_end, whose `messages` is pi's whole session
+        // — scanning that would re-send a file on every later run of the job.
+        if (event?.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
+          turnText += event.assistantMessageEvent.delta ?? event.assistantMessageEvent.text ?? '';
+        }
         feed.publish(event);
       },
     );
@@ -110,7 +122,15 @@ export async function runCronJob(
   const result = await checkInWithFixer(
     dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, auth,
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
+    { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },
   );
+
+  // Files the job produced and asked to send. A scheduled run posts no reply to
+  // Telegram — the agent reaches the user with `send_message` — so a file it named
+  // is delivered on its own rather than attached to a message that isn't going
+  // anywhere. Best-effort: a delivery problem must not turn a successful run into
+  // a failed one.
+  await deliverCronFiles(pool, key, turnText, [dir, chatFilesDir(chatId)]).catch(() => { /* best-effort */ });
 
   if (turnError) throw turnError;
 
@@ -123,4 +143,25 @@ export async function runCronJob(
   if (last && last.stopReason !== 'stop') throw new Error(last.errorMessage || `the run ended early (${last.stopReason}).`);
 
   return { chatId, checkIn: result };
+}
+
+/**
+ * Send any files the run named, from `roots` and nowhere else.
+ *
+ * The two passes are CHAINED — the bare-path scan reads what the tag scan already
+ * cleaned — so a path written as `MEDIA:/x.pdf` is not also found as a bare
+ * `/x.pdf` and delivered twice.
+ */
+async function deliverCronFiles(pool: DB, key: Buffer, turnText: string, roots: string[]): Promise<void> {
+  if (!turnText.trim()) return;
+  const tagged = extractMedia(turnText);
+  const bare = await extractLocalFiles(tagged.cleaned);
+  const wanted = [...tagged.media, ...bare.paths.map((p) => ({ path: p, isVoice: false }))];
+  const files = await filterDeliveryPaths(wanted, roots);
+  for (const f of files) {
+    await sendTelegramFile(
+      pool, key, f.path,
+      deliveryKind(f.path, { isVoice: f.isVoice, forceDocument: tagged.forceDocument }),
+    );
+  }
 }

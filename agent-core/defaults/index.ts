@@ -28,6 +28,8 @@ export interface PromptOpts {
   unattended?: boolean;
   /** Where the turn runs from (RunOpts.source) — scopes the tool list. */
   source?: string;
+  /** The agent's own directory for this chat, named in the Boundaries section. */
+  scratchDir?: string;
 }
 
 // Build the full system prompt for the given workspace. Reads that workspace's
@@ -55,6 +57,16 @@ export function rebuildSystemPrompt(stored: string, opts: PromptOpts = {}): stri
   return `${stored.slice(0, at).trimEnd()}\n\n${helperFor(opts)}`;
 }
 
+// Everything the helper gates on must be forwarded, not just used here. `source`
+// picks the tool list AND gates the companion-only sections; `scratchDir` names a
+// real directory in the Boundaries rules. Deriving one from the other is not the
+// same as passing it on — drop a forward and that section is present at session
+// boot and silently gone after the first rebuild.
 function helperFor(opts: PromptOpts): string {
-  return buildShockwaveHelper({ tools: toolsForSource(opts.source), unattended: opts.unattended });
+  return buildShockwaveHelper({
+    tools: toolsForSource(opts.source),
+    unattended: opts.unattended,
+    source: opts.source,
+    scratchDir: opts.scratchDir,
+  });
 }

@@ -11,7 +11,7 @@ import * as parcelWatcher from '@parcel/watcher';
 import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
-import { initDesktopAgent, agentSend, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats, listThinkingLevels } from './codingAgent.js';
+import { initDesktopAgent, agentSend, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats, listThinkingLevels, sweepAgentScratch, removeAgentScratch } from './codingAgent.js';
 // Cron execution lives entirely on the companion now; the desktop only VIEWS the
 // schedule (from local cron.json + companion run-status) and triggers a manual run.
 import { cronRead, cronRunNow } from './api/cron.js';
@@ -1725,6 +1725,9 @@ ipcMain.handle('chat:delete', async (_evt, chatId) => {
   if (!chatId) return;
   // Abort + drop any live session first so a running turn can't keep writing.
   try { await agentDisposeChat(chatId); } catch { /* best-effort */ }
+  // The chat's scratch pad goes with it — the precise signal, so its working
+  // files don't sit around waiting for the age sweep to notice.
+  await removeAgentScratch(chatId);
   await deleteChat(chatId);
 });
 
@@ -2285,7 +2288,18 @@ initDesktopAgent({
   // token (which mints static or fresh-OAuth). The desktop never mints.
   getSecrets: () => api.get('/agent-secrets'),
   getToken: (name) => api.get(`/agent-secret/${encodeURIComponent(name)}/token`),
+  // The same AssemblyAI key the microphone uses. Main holds it; only the
+  // renderer's copy is stripped, and the agent runs here.
+  getTranscription: async () => (await readSettingsSafe())?.settings?.transcription ?? {},
 });
+
+// Reclaim scratch dirs from chats nobody has touched lately. Fire-and-forget:
+// boot never waits on it, and a companion that can't be reached for the setting
+// just means the default — reclaiming disk is never worth blocking startup or
+// failing over.
+void readSettingsSafe()
+  .then(({ settings }) => sweepAgentScratch(Number(settings?.codingAgent?.scratchTtlDays) || 1))
+  .catch(() => sweepAgentScratch(1));
 
 // Bridge for the open-file pi extension: validate the agent's path against the
 // active workspace, then ask the renderer to open it in a new tab. Confined to

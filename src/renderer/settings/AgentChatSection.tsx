@@ -299,14 +299,35 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caBaseUrl = codingAgent?.baseUrl ?? '';
   const caContextWindow = codingAgent?.contextWindow;
   const caThinkingLevel = codingAgent?.thinkingLevel ?? 'medium';
+  const caMaxRunMinutes = codingAgent?.maxRunMinutes;
+  const caMaxFixAttempts = codingAgent?.maxFixAttempts;
+  const caScratchTtlDays = codingAgent?.scratchTtlDays;
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
     baseUrl: caBaseUrl,
     contextWindow: caContextWindow,
     thinkingLevel: caThinkingLevel,
+    maxRunMinutes: caMaxRunMinutes,
+    maxFixAttempts: caMaxFixAttempts,
+    scratchTtlDays: caScratchTtlDays,
     ...patch,
   });
+
+  // Blank clears the value rather than storing 0 — unset is a real state here,
+  // and the consumers fall back at the point of use.
+  const maxRunField = useCommitField(
+    caMaxRunMinutes == null ? '' : String(caMaxRunMinutes),
+    (next) => updateCa({ maxRunMinutes: next ? Number(next) : undefined }),
+  );
+  const fixAttemptsField = useCommitField(
+    caMaxFixAttempts == null ? '' : String(caMaxFixAttempts),
+    (next) => updateCa({ maxFixAttempts: next ? Number(next) : undefined }),
+  );
+  const ttlField = useCommitField(
+    caScratchTtlDays == null ? '' : String(caScratchTtlDays),
+    (next) => updateCa({ scratchTtlDays: next ? Number(next) : undefined }),
+  );
   // Only the slot being typed into. The server merges rather than treating the map
   // as complete (see reconcileProviderKeys), so other providers' keys are untouched
   // and there is no need to hold — or resend — any of them.
@@ -333,6 +354,62 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
           onKeyChange={updateKey}
           onRemoveKey={removeKey}
         />
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      <SettingsGroup title="Unattended runs">
+        <Field>
+          <FieldLabel htmlFor="agent-max-run">Time limit (minutes)</FieldLabel>
+          <Input
+            id="agent-max-run"
+            type="number"
+            min={1}
+            placeholder="30"
+            value={maxRunField.value}
+            onChange={(e) => maxRunField.onChange(e.target.value)}
+            onBlur={maxRunField.onBlur}
+          />
+          <FieldDescription>
+            How long a Telegram or scheduled run may take before it is stopped. Chats in this
+            app have no limit — you can stop them yourself.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-fix-attempts">Conflict fix attempts</FieldLabel>
+          <Input
+            id="agent-fix-attempts"
+            type="number"
+            min={1}
+            placeholder="3"
+            value={fixAttemptsField.value}
+            onChange={(e) => fixAttemptsField.onChange(e.target.value)}
+            onBlur={fixAttemptsField.onBlur}
+          />
+          <FieldDescription>
+            When saving to GitHub hits a clash it can&apos;t merge on its own, the agent retries
+            this many times. Each try picks up where the last one left off. The time limit above
+            still caps the total.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-scratch-ttl">Keep scratch files for (days)</FieldLabel>
+          <Input
+            id="agent-scratch-ttl"
+            type="number"
+            min={1}
+            placeholder="1"
+            value={ttlField.value}
+            onChange={(e) => ttlField.onChange(e.target.value)}
+            onBlur={ttlField.onBlur}
+          />
+          <FieldDescription>
+            The agent's scratch pad holds working files and anything you send it, separately
+            from your workspace. Files there are deleted after this long.
+          </FieldDescription>
+        </Field>
       </SettingsGroup>
     </SettingsSection>
   );

@@ -25,7 +25,25 @@ WORKDIR /app
 # failure is fatal (settleTls in server.ts). `shockwave-fingerprint` runs it in
 # this container too. Relying on it arriving transitively means a future base-image
 # or dependency change turns "the server won't start" into the first symptom.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssl \
+#
+# The rest is for working with files the user sends. The base image is bare —
+# it has tar and gzip and nothing else — so without these the agent cannot open
+# a zip or read a PDF, and the attachment notes that tell it to "extract the text
+# yourself" are instructions it has no way to follow.
+#   unzip/zip/p7zip-full/xz-utils/bzip2 — archives (tar+gzip alone can't do .zip)
+#   poppler-utils                       — pdftotext, and pdftoppm to render a page
+#                                         as an image when a PDF has no text layer
+#   imagemagick                         — convert and resize, including shrinking
+#                                         an image that exceeds a model's limit
+#   ffmpeg                              — audio and video
+#   pandoc                              — docx/odt/rtf/epub to text
+#   python3 + openpyxl + pil            — spreadsheets, and general scripting
+#   file                                — identify an upload with no useful name
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates openssl \
+      unzip zip p7zip-full xz-utils bzip2 \
+      poppler-utils imagemagick ffmpeg pandoc \
+      python3 python3-openpyxl python3-pil file \
   && rm -rf /var/lib/apt/lists/*
 # Fail the BUILD, not the first boot, if the CLI isn't actually there.
 RUN openssl version

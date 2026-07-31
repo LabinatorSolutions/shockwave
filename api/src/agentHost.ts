@@ -7,6 +7,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { DATA_BASE, runScratchDir, chatFilesDir } from './dataDirs.js';
 import fs from 'node:fs';
 import { createAgentRuntime } from '../../agent-core/agent.js';
 import type { AgentHost } from '../../agent-core/agent.js';
@@ -18,17 +19,9 @@ import { mintToken } from './oauth.js';
 import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
 
-const DATA_BASE = process.env.AGENT_DATA_DIR || path.join(os.tmpdir(), 'shockwave-agent');
 // Bundled built-in skills, shipped into the image (BUILTIN_SKILLS_DIR) so the
 // server agent has the SAME skills as the desktop; falls back to an empty dir.
 const BUILTIN_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(DATA_BASE, 'builtins');
-
-// Per-run pi scratch dirs (hold the JSONL) live here, keyed by chatId. Kept
-// across runs (reused on re-run); the TTL sweeper reclaims old ones.
-export const RUNS_BASE = path.join(DATA_BASE, 'runs');
-export function runScratchDir(chatId: string): string {
-  return path.join(RUNS_BASE, chatId);
-}
 
 export function makeCompanionRuntime(pool: DB, key: Buffer) {
   const db = getDb(pool);
@@ -45,6 +38,11 @@ export function makeCompanionRuntime(pool: DB, key: Buffer) {
     extraTools: [makeSendMessageTool((text) => sendTelegramMessage(pool, key, text))],
     // Per-run scratch dir so concurrent runs don't share pi's settings.json.
     dataDir: (chatId) => runScratchDir(chatId),
+    // The same directory inbound Telegram attachments are written to, so a file
+    // the user sent and a file the agent made sit together — which is what the
+    // agent is told, and what delivery reads from.
+    scratchDir: (chatId) => chatFilesDir(chatId),
+    getTranscription: async () => (await store.readSettings(db, key))?.transcription ?? {},
     getChat: (id) => store.getChat(db, id),
     upsertChat: (row) => store.upsertChat(db, { ...row, now: Date.now() } as any),
     appendMessages: (id, rows) => store.appendMessages(db, id, rows as any),

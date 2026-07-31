@@ -9,6 +9,8 @@
 // api/ and calls the same `createAgentRuntime`.
 
 import os from 'node:os';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { app } from 'electron';
 import { createAgentRuntime, listThinkingLevels } from '../../agent-core/agent.js';
 import type { AgentHost, RunOpts, Emit } from '../../agent-core/agent.js';
@@ -30,6 +32,50 @@ const SEND_MESSAGE_TOOL = makeSendMessageTool(async (text) => {
   }
 });
 
+// The agent's own directory for a chat — working files and anything it is
+// producing to send rather than to keep. Kept OUT of the workspace, because the
+// workspace is committed and synced: without this, a temp file the agent made
+// lands in the user's repo. Per chat so two running chats can't collide.
+//
+// The companion's equivalent is the same directory its inbound attachments land
+// in; here nothing arrives from outside, so it starts empty.
+const SCRATCH_BASE = () => path.join(app.getPath('userData'), 'agent-scratch');
+const chatScratchDir = (chatId: string) => path.join(SCRATCH_BASE(), chatId);
+
+/**
+ * Delete scratch directories nobody has touched for `ttlDays`.
+ *
+ * Fire-and-forget at startup, never awaited on the boot path — reclaiming disk is
+ * not worth delaying the window by even the time it takes to stat a directory.
+ * mtime-based like the companion's sweeper, so an actively-used chat survives and
+ * an abandoned one ages out. There is no exemption for pinned chats: pinning says
+ * the conversation matters, not that its temp files do.
+ */
+export function sweepAgentScratch(ttlDays: number): void {
+  void (async () => {
+    const base = SCRATCH_BASE();
+    const cutoff = Date.now() - (ttlDays > 0 ? ttlDays : 1) * 24 * 60 * 60 * 1000;
+    let entries: string[];
+    try { entries = await fs.readdir(base); } catch { return; } // nothing written yet
+    let removed = 0;
+    for (const name of entries) {
+      const dir = path.join(base, name);
+      try {
+        if ((await fs.stat(dir)).mtimeMs < cutoff) {
+          await fs.rm(dir, { recursive: true, force: true });
+          removed++;
+        }
+      } catch { /* vanished mid-sweep */ }
+    }
+    if (removed) console.log(`[agent] swept ${removed} stale scratch dir(s)`);
+  })();
+}
+
+/** Drop one chat's scratch pad. Called when the chat itself is deleted. */
+export async function removeAgentScratch(chatId: string): Promise<void> {
+  await fs.rm(chatScratchDir(chatId), { recursive: true, force: true }).catch(() => { /* best-effort */ });
+}
+
 let runtime: ReturnType<typeof createAgentRuntime> | null = null;
 
 // Wire the desktop host. `getSecrets`/`getToken` are closures over settings +
@@ -39,12 +85,15 @@ export function initDesktopAgent(deps: {
   builtinDir: string;
   getSecrets: () => Promise<any[]>;
   getToken: (name: string) => Promise<string>;
+  getTranscription: () => Promise<{ provider?: string; apiKey?: string }>;
 }) {
   const host: AgentHost = {
     builtinDir: deps.builtinDir,
     machine: os.hostname(),
     extraTools: [OPEN_FILE_TOOL, SEND_MESSAGE_TOOL],
-    dataDir: () => app.getPath('userData'), // one global scratch dir on the desktop
+    dataDir: () => app.getPath('userData'), // one global pi scratch dir on the desktop
+    scratchDir: (chatId) => chatScratchDir(chatId),
+    getTranscription: deps.getTranscription,
     getChat,
     upsertChat,
     appendMessages,

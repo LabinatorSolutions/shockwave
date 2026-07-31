@@ -19,6 +19,9 @@ import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
 import { transcribeAudio } from './transcribe.js';
+import { cacheAttachment, composeMessage, MAX_INBOUND_BYTES, type CachedAttachment } from './attachments.js';
+import { getCatalogModel } from '../../../agent-core/modelCatalog.js';
+import { chatFilesDir } from '../dataDirs.js';
 
 // Chats with a turn in flight ON THIS SERVER. A second message for a busy chat
 // is handed to the running turn (pi picks it up at its next step) and must NOT
@@ -112,7 +115,37 @@ export async function handleWebhook(pool: DB, key: Buffer, runtime: any, req: ex
   if (!(await store.markTelegramUpdate(db, update.update_id))) { res.sendStatus(200); return; }
 
   res.sendStatus(200); // fast ack; do the work out-of-band
-  runTurn(pool, key, runtime, acc, msg).catch((e: any) => log?.error({ err: e?.message }, 'telegram turn failed'));
+
+  // An album (several photos sent at once) arrives as SEPARATE updates sharing a
+  // media_group_id. Run each as its own turn and the second one lands while the
+  // first is still working — it gets treated as an interruption, and the caption,
+  // which Telegram puts on only one item, is stranded away from the rest. So they
+  // are collected briefly and run as one message.
+  const groupId = msg.media_group_id ? String(msg.media_group_id) : null;
+  if (groupId) { queueAlbum(groupId, msg, (msgs) => runTurnLogged(pool, key, runtime, acc, msgs, log)); return; }
+
+  runTurnLogged(pool, key, runtime, acc, [msg], log);
+}
+
+function runTurnLogged(pool: DB, key: Buffer, runtime: any, acc: any, msgs: any[], log: any) {
+  runTurn(pool, key, runtime, acc, msgs).catch((e: any) => log?.error({ err: e?.message }, 'telegram turn failed'));
+}
+
+// Telegram sends album items back-to-back, so a short wait that restarts on each
+// arrival collects the whole set without delaying a single-photo message by more
+// than this once.
+const ALBUM_WAIT_MS = 800;
+const albums = new Map<string, { msgs: any[]; timer: NodeJS.Timeout }>();
+
+function queueAlbum(groupId: string, msg: any, run: (msgs: any[]) => void) {
+  const entry = albums.get(groupId) ?? { msgs: [], timer: null as any };
+  entry.msgs.push(msg);
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    albums.delete(groupId);
+    run(entry.msgs);
+  }, ALBUM_WAIT_MS);
+  albums.set(groupId, entry);
 }
 
 // ONE try around the whole turn, and everything that fails throws into it. A
@@ -120,14 +153,23 @@ export async function handleWebhook(pool: DB, key: Buffer, runtime: any, req: ex
 // place that reports — it loads its own bot token, so even a failure while
 // loading the token for the turn itself still gets reported. We rethrow so the
 // caller logs it server-side too.
-async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msg: any) {
+async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msgs: any[]) {
   const db = getDb(pool);
   const dm = acc.dmChatId as number;
+  const msg = msgs[0];
   try {
     const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'));
-    const text = await resolveText(db, key, client, dm, msg);
-    if (text === null) return; // nothing usable (already told the user why)
-    await runTurnInner(db, key, runtime, acc, client, dm, text, msg);
+    // Attachments land in the chat's own staging dir, so saving one needs the chat
+    // to exist. Minting it lazily keeps `/help` and friends from creating a chat
+    // just by being typed — they never carry a file.
+    let chatId: string | null = acc.activeChatId ?? null;
+    const getChatId = async () => {
+      if (!chatId) { chatId = crypto.randomUUID(); await store.setTelegramActiveChat(db, chatId); }
+      return chatId;
+    };
+    const input = await resolveInput(db, key, client, dm, getChatId, msgs);
+    if (input === null) return; // nothing usable (already told the user why)
+    await runTurnInner(db, key, runtime, acc, client, dm, getChatId, input, msg);
   } catch (err: any) {
     const token = await store.getTelegramSecret(db, key, 'botToken').catch(() => '');
     if (token) await new TelegramClient(token).sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
@@ -135,23 +177,66 @@ async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msg: any) 
   }
 }
 
-// What the user actually said: the message text, or a transcribed voice note.
-// Returns null when there's nothing to run (and the user has been told why).
-async function resolveText(db: DB, key: Buffer, client: TelegramClient, dm: number, msg: any): Promise<string | null> {
-  const text = String(msg.text ?? '').trim();
-  if (text) return text;
+// Every file-bearing field Telegram can put on a message, in the order we prefer
+// to read them. `kind` biases classification when the file arrives with no usable
+// name — a native photo has neither filename nor mime type.
+//
+// `document` is deliberately unbiased: Telegram uses it for anything sent via the
+// file picker, including images and video, so its own mime/extension decides.
+const MEDIA_FIELDS: Array<{ field: string; kind?: 'image' | 'video' | 'audio' }> = [
+  { field: 'photo', kind: 'image' },
+  { field: 'document' },
+  { field: 'video', kind: 'video' },
+  { field: 'video_note', kind: 'video' },
+  { field: 'animation', kind: 'video' },
+  { field: 'audio', kind: 'audio' },
+];
 
-  const audio = msg.voice ?? msg.audio;
-  if (audio) {
-    // Telegram's getFile caps at 20 MB; check the declared size first so an
-    // oversize file is declined cleanly instead of failing mid-download.
-    if (audio.file_size && audio.file_size > 20 * 1024 * 1024) {
+/** The file object for a field, picking the largest size for a photo. */
+function fileOf(msg: any, field: string): any {
+  const v = msg?.[field];
+  if (!v) return null;
+  return Array.isArray(v) ? v[v.length - 1] : v; // photo comes as ascending sizes
+}
+
+export interface ResolvedInput {
+  /** The prompt: attachment notes, inlined text files, then what the user typed. */
+  text: string;
+  /** Images for the model to actually look at. Empty when it can't see them. */
+  images: Array<{ type: 'image'; data: string; mimeType: string }>;
+}
+
+/**
+ * What the user actually sent: their words, plus any files.
+ *
+ * Returns null when there is nothing to run — and the user has been told why,
+ * because a bot that silently ignores a message reads as broken.
+ *
+ * A VOICE NOTE is transcribed and becomes the message — it is the user talking,
+ * just not in text. An audio FILE is not: it is a file, and goes through the same
+ * path as any other attachment. This used to read `msg.voice ?? msg.audio` and
+ * transcribe both, so sending an mp3 made its entire transcript the prompt.
+ */
+async function resolveInput(
+  db: DB, key: Buffer, client: TelegramClient, dm: number,
+  getChatId: () => Promise<string>, msgs: any[],
+): Promise<ResolvedInput | null> {
+  // Telegram puts the caption on whichever album item carried it, so take the
+  // first one present rather than assuming the first message.
+  const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
+
+  const settings = await store.readSettings(db, key);
+  const tr = settings?.transcription;
+
+  // A voice note is the message itself, not an attachment to it.
+  const voice = msgs.map((m) => m.voice).find(Boolean);
+  if (voice && !typed) {
+    if (voice.file_size && voice.file_size > MAX_INBOUND_BYTES) {
       await client.sendMessage(dm, "That audio is over Telegram's 20 MB limit for bots, so I can't fetch it.");
       return null;
     }
     await client.sendChatAction(dm, 'typing').catch(() => {});
-    const tr = (await store.readSettings(db, key))?.transcription;
-    const transcript = await transcribeAudio(tr?.apiKey, await client.downloadFile(audio.file_id));
+    const transcript = await transcribeAudio(tr?.apiKey, await client.downloadFile(voice.file_id), tr?.provider);
     if (transcript === null) {
       await client.sendMessage(dm, '🎤 Voice transcription is not set up — add an AssemblyAI key in the desktop app under Transcription.');
       return null;
@@ -162,29 +247,87 @@ async function resolveText(db: DB, key: Buffer, client: TelegramClient, dm: numb
     // (Settings → Transcription) — `?? false` at the point of use, since the
     // companion stores no defaults and an unset row must not fake a value.
     if (tr?.echoTelegramTranscript ?? false) await client.sendMessage(dm, `🎤 “${transcript}”`);
-    return transcript;
+    return { text: transcript, images: [] };
   }
 
-  await client.sendMessage(dm, "Send me a message or a voice note and I'll get to work.");
-  return null;
+  // Everything else is a file: save it, then describe it to the agent.
+  const pending = msgs.flatMap((m) =>
+    MEDIA_FIELDS.map(({ field, kind }) => ({ file: fileOf(m, field), kind }))
+      .filter((x) => x.file));
+
+  if (!pending.length) {
+    if (typed) return { text: typed, images: [] };
+    await client.sendMessage(dm, "Send me a message, a voice note, or a file and I'll get to work.");
+    return null;
+  }
+
+  await client.sendChatAction(dm, 'typing').catch(() => {});
+  const attachments: CachedAttachment[] = [];
+  for (const { file, kind } of pending) {
+    if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
+      await client.sendMessage(dm, `“${file.file_name ?? 'That file'}” is over Telegram's 20 MB limit for bots, so I can't fetch it.`);
+      continue;
+    }
+    const cached = await cacheAttachment(await getChatId(), await client.downloadFile(file.file_id), {
+      filename: file.file_name, mimeType: file.mime_type, defaultKind: kind,
+    });
+    if (cached) attachments.push(cached);
+  }
+
+  if (!attachments.length) {
+    if (typed) return { text: typed, images: [] };
+    await client.sendMessage(dm, "I couldn't read that file, so there's nothing for me to work with.");
+    return null;
+  }
+
+  // Only attach pixels a model can actually look at. When we can't confirm it
+  // can, the file still arrives and the note says the contents aren't visible —
+  // claiming to have seen an image is worse than saying we didn't.
+  const visionAvailable = await modelSeesImages(settings);
+  const images: ResolvedInput['images'] = [];
+  if (visionAvailable) {
+    for (const a of attachments.filter((x) => x.kind === 'image')) {
+      images.push({ type: 'image', data: (await fs.readFile(a.path)).toString('base64'), mimeType: a.mimeType });
+    }
+  }
+
+  return { text: composeMessage(attachments, typed, visionAvailable), images };
 }
 
-async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number, text: string, msg: any) {
+/** Does the configured model accept images? Unknown counts as no. */
+async function modelSeesImages(settings: any): Promise<boolean> {
+  const ca = settings?.codingAgent ?? {};
+  if (!ca.provider || !ca.model) return false;
+  try {
+    const entry = await getCatalogModel(ca.provider, ca.model);
+    return !!entry?.input?.includes('image');
+  } catch {
+    return false;
+  }
+}
+
+async function runTurnInner(
+  db: DB, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number,
+  getChatId: () => Promise<string>, input: ResolvedInput, msg: any,
+) {
+  const { text, images } = input;
   if (text.startsWith('/')) { await handleCommand(db, key, client, dm, text, isBusy); return; }
 
   const ws = await activeWorkspace(db);
   if (!ws) { await client.sendMessage(dm, '⚠️ No workspaces exist yet — add one in the desktop app first.'); return; }
 
-  let chatId = acc.activeChatId as string | null;
-  if (!chatId) { chatId = crypto.randomUUID(); await store.setTelegramActiveChat(db, chatId); }
+  const chatId = await getChatId();
 
   // Already working on this chat? Hand the message to the running turn — pi picks
   // it up at its next step — and STOP. The finish-up steps below (final render,
   // commit + push) belong to the turn that's still going: running them now would
   // commit half-edited files and abandon the first reply mid-sentence.
+  //
+  // Images ride along: a photo sent mid-turn is part of what the user is saying,
+  // and dropping it silently is the worst of the three options.
   if (busy.has(chatId)) {
     await client.sendMessage(dm, '⌛ Got it — after I finish the last task.', { replyToMessageId: msg?.message_id });
-    await runtime.agentSend({ chatId, text, workspaceId: ws.id, workspacePath: '', provider: '', model: '', apiKey: '' }, () => {})
+    await runtime.agentSend({ chatId, text, images, workspaceId: ws.id, workspacePath: '', provider: '', model: '', apiKey: '' }, () => {})
       .catch(() => { /* the running turn owns error reporting */ });
     return;
   }
@@ -204,7 +347,9 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   let wsBuiltinSkills: Record<string, any> = {};
   try { wsBuiltinSkills = JSON.parse(await fs.readFile(path.join(dir, '.shockwave', 'workspace.json'), 'utf8'))?.builtinSkills ?? {}; } catch { /* defaults */ }
 
-  const sink = makeTelegramSink(client, dm);
+  // The only two folders a file may be sent from: the workspace the agent is
+  // working in, and where its own attachments were saved.
+  const sink = makeTelegramSink(client, dm, [dir, chatFilesDir(chatId)]);
   let finalMessages: any[] | undefined;
   const emit = (e: any) => {
     if (e?.type === 'agent_end') finalMessages = e.messages;
@@ -212,14 +357,14 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
     sink.emit(e);                 // render to Telegram
   };
 
-  const maxRunMs = (Number(process.env.CRON_MAX_RUN_MINUTES) || 30) * 60_000;
+  const maxRunMs = (Number(ca.maxRunMinutes) || 30) * 60_000;
   const wd = setTimeout(() => runtime.agentAbort(chatId).catch(() => {}), maxRunMs);
   // Marked busy for the whole job, so a message arriving meanwhile is relayed
   // into THIS turn instead of starting a second one that would finish early.
   busy.add(chatId);
   try {
     await runtime.agentSend({
-      chatId, text, workspaceId: ws.id, workspacePath: dir,
+      chatId, text, images, workspaceId: ws.id, workspacePath: dir,
       provider: ca.provider, model: ca.model, apiKey,
       baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
@@ -234,6 +379,7 @@ async function runTurnInner(db: DB, key: Buffer, runtime: any, acc: any, client:
   const checkedIn = await checkInWithFixer(
     dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`, auth,
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
+    { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },
   ).catch(() => 'error' as const);
   // Say so in chat. This used to be `.catch(() => {})` with the result thrown
   // away, so work that never reached GitHub looked exactly like work that did —

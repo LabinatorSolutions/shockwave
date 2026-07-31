@@ -230,7 +230,7 @@ Cron **runs on the companion** now (`api/src/scheduler.ts` + `cronRun.ts` — se
 - A **read-only view** — `src/main/api/cron.ts` composes job definitions from the active workspace's local `cron.json` with run status from `GET /workspace/:id/cron/state`.
 - Two IPC channels: `cron:read` and `cron:runNow` (→ `POST /workspace/:id/cron/:name/run`). There are no `cron:setEnabled`/`setMaxCatchupHours`/`setMaxRunMinutes` handlers and no `cron:state`/`cron:chatsChanged` push events.
 
-There is **no `settings.cron`** and no cron settings page. The master toggle, refresh cadence, and max-run are the companion's env (`CRON_ENABLED`, `CRON_REFRESH_SCHEDULE`, `CRON_MAX_RUN_MINUTES`) — the desktop cannot write them, so a local copy could only ever lie. One did: after the desktop scheduler was deleted, `settings.cron` stayed in `local-settings.json` with nothing reading it, `cronRead` hardcoded `enabled: true`, and the panel kept an "it's off — turn it on…" banner wired to a page with no switch.
+There is **no `settings.cron`** and no cron settings page. The master toggle and refresh cadence are the companion's env (`CRON_ENABLED`, `CRON_REFRESH_SCHEDULE`) — the desktop cannot write them, so a local copy could only ever lie. (The run time limit is no longer among them: it is `codingAgent.maxRunMinutes`, a synced setting on the Agent Chat page, because it bounds Telegram turns too and the desktop is where you'd go to change it.) One did: after the desktop scheduler was deleted, `settings.cron` stayed in `local-settings.json` with nothing reading it, `cronRead` hardcoded `enabled: true`, and the panel kept an "it's off — turn it on…" banner wired to a page with no switch.
 
 ## GitHub sync
 

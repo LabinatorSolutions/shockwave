@@ -1,43 +1,50 @@
-// Server-side voice transcription for Telegram voice notes, via AssemblyAI —
-// the same `transcription.apiKey` setting the desktop uses for its microphone.
-// The caller reads it (it reads the neighbouring `echoTelegramTranscript` from
-// the same settings object) and hands it in, so one voice note costs one
-// settings read, not one per consumer.
+// Transcribing an inbound Telegram voice note.
+//
+// A thin adapter over the shared speech-to-text in `agent-core/transcribe.ts`, so
+// there is ONE implementation of "audio in, words out" — the same one the agent's
+// `transcribe` tool uses, and the same one a future provider swap replaces. This
+// file only bridges the shapes: Telegram hands us bytes, the provider wants a
+// file, and this path wants plain text rather than timestamped segments.
+//
+// The caller reads the settings (it reads the neighbouring `echoTelegramTranscript`
+// from the same object) and hands the key in, so one voice note costs one settings
+// read, not one per consumer.
 //
 // Telegram sends voice notes as OGG/Opus, which AssemblyAI accepts as-is, so the
-// audio is uploaded byte-for-byte with no conversion.
+// audio is written byte-for-byte with no conversion.
 
-const BASE = 'https://api.assemblyai.com/v2';
-const POLL_MS = 1500;
-const MAX_POLLS = 60; // ~90s ceiling — a Telegram voice note is far shorter
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { transcribeFile } from '../../../agent-core/transcribe.js';
 
 /**
- * Transcribe audio. Returns the text, `null` when no API key is configured (the
- * caller should say so rather than ignore the user), or `''` when the audio held
- * no speech. Throws if AssemblyAI reports a failure.
+ * Transcribe a voice note. Returns the text, `null` when no API key is configured
+ * (the caller should say so rather than ignore the user), or `''` when the audio
+ * held no speech. Throws if the provider reports a failure.
+ *
+ * The file is temporary and deleted afterwards: a voice note IS the message, not
+ * an attachment to it, so there is nothing to keep once it has been read.
  */
-export async function transcribeAudio(apiKey: string | undefined, audio: Buffer): Promise<string | null> {
+export async function transcribeAudio(
+  apiKey: string | undefined,
+  audio: Buffer,
+  provider?: string,
+): Promise<string | null> {
   if (!apiKey) return null;
-  const headers = { authorization: apiKey };
 
-  const up = await fetch(`${BASE}/upload`, { method: 'POST', headers, body: audio });
-  if (!up.ok) throw new Error(`uploading the audio failed (HTTP ${up.status}).`);
-  const { upload_url: uploadUrl } = await up.json() as any;
-
-  const started = await fetch(`${BASE}/transcript`, {
-    method: 'POST',
-    headers: { ...headers, 'content-type': 'application/json' },
-    body: JSON.stringify({ audio_url: uploadUrl }),
-  });
-  if (!started.ok) throw new Error(`starting the transcription failed (HTTP ${started.status}).`);
-  const { id } = await started.json() as any;
-
-  for (let i = 0; i < MAX_POLLS; i++) {
-    await new Promise((r) => setTimeout(r, POLL_MS));
-    const res = await fetch(`${BASE}/transcript/${id}`, { headers });
-    const job = await res.json() as any;
-    if (job.status === 'completed') return (job.text ?? '').trim();
-    if (job.status === 'error') throw new Error(job.error || 'transcription failed.');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'shockwave-voice-'));
+  const file = path.join(dir, `voice-${crypto.randomBytes(4).toString('hex')}.ogg`);
+  try {
+    await fs.writeFile(file, audio);
+    return (await transcribeFile(file, { provider, apiKey }, dir)).text;
+  } catch (e: any) {
+    // The shared layer signals a missing key this way. We already checked, so
+    // anything arriving here is a real failure and belongs to the caller's catch.
+    if (e?.message === 'no-key') return null;
+    throw e;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => { /* best-effort */ });
   }
-  throw new Error('the transcription timed out.');
 }

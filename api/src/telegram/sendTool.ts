@@ -4,7 +4,7 @@
 // reaches it over HTTP (`POST /telegram/send`). Reads the account at call time,
 // so it works whenever Telegram is connected and explains itself when it isn't.
 
-import { TelegramClient, splitMessage } from './client.js';
+import { TelegramClient, splitMessage, type SendKind } from './client.js';
 import * as store from '../store.js';
 import type { DB } from '../db.js';
 import { getDb } from '../db.js';
@@ -25,5 +25,31 @@ export async function sendTelegramMessage(pool: DB, key: Buffer, text: string): 
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: 'Could not send the message: ' + (e?.message || e) };
+  }
+}
+
+/**
+ * Same door, for a file. Used by the cron runner, whose reply never reaches
+ * Telegram on its own — a scheduled job that produces a report has no message to
+ * attach it to, so the file is sent on its own.
+ *
+ * The caller has already checked the path against its allowed roots; this only
+ * knows how to reach Telegram.
+ */
+export async function sendTelegramFile(
+  pool: DB, key: Buffer, filePath: string, kind: SendKind, caption?: string,
+): Promise<SendResult> {
+  try {
+    const db = getDb(pool);
+    const acc = await store.getTelegramAccount(db);
+    if (!acc || !acc.enabled || acc.dmChatId == null) {
+      return { ok: false, error: 'No Telegram account is connected, so the file was not sent.' };
+    }
+    const token = await store.getTelegramSecret(db, key, 'botToken');
+    if (!token) return { ok: false, error: 'Telegram bot token is missing.' };
+    await new TelegramClient(token).sendFile(kind, acc.dmChatId, filePath, caption);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: 'Could not send the file: ' + (e?.message || e) };
   }
 }

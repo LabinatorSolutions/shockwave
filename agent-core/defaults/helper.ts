@@ -11,6 +11,7 @@
 // list (from `tools.ts`) — everything else is literal prose.
 
 import { TOOL_CATALOG, ToolDescriptor, formatToolList } from './tools.js';
+import { SENDING_FILES, isCompanionSource } from './companion.js';
 
 // First line of the helper, and the seam the stored prompt is split on so the
 // helper can be rebuilt on a later run while the workspace's SOUL stays frozen
@@ -20,9 +21,17 @@ import { TOOL_CATALOG, ToolDescriptor, formatToolList } from './tools.js';
 // without it is left alone.
 export const HELPER_MARK = '<!-- shockwave-helper -->';
 
-const BOUNDARIES = `# Boundaries
+// Two directories, each described on its own terms. The agent needs somewhere to
+// work that isn't the user's files: everything in the workspace is committed and
+// synced, so without a scratch pad a temporary file it made to send somewhere ends
+// up in their repo. `scratchDir` is a real path supplied by the host — when it's
+// absent (a caller that predates it) the rule collapses to the workspace alone
+// rather than naming a directory that doesn't exist.
+const BOUNDARIES = (scratchDir?: string) => `# Boundaries
 
-- **Stay inside the workspace (cwd).** Don't read, write, or run commands outside it.
+- **Never write files outside your working directory or your scratch pad.**${scratchDir ? `
+  - **Working directory** (\`cwd\`) — the user's workspace. Everything in it is their files, and everything in it is saved and synced to their repo. Work that belongs to them goes here.
+  - **Scratch pad** (\`${scratchDir}\`) — yours. Temp files, intermediate output, downloads, and anything you're producing to send rather than to keep. Files the user sends you arrive here. Nothing here is saved, synced, or committed, and it is cleared out after a while.` : ''}
 - **Never delete or move files without explicit permission.** Ask first.`;
 
 // Injected ONLY on scheduled/manual cron runs (unattended === true). It sits
@@ -216,19 +225,26 @@ Skills are scanned at session boot. After writing the files, tell the user to cl
 
 // Compose the full helper. `tools` defaults to the wired catalog; pass a subset
 // if a session ever runs with fewer tools. `unattended` (a cron run) inserts the
-// UNATTENDED override right after BOUNDARIES.
+// UNATTENDED override right after BOUNDARIES. `source` gates the companion-only
+// sections — it is NOT derivable from `tools`, so every caller must pass it (see
+// `rebuildSystemPrompt` in index.ts, which forwards it for exactly this reason).
 export function buildShockwaveHelper(
-  { tools = TOOL_CATALOG, unattended = false }: { tools?: ToolDescriptor[]; unattended?: boolean } = {},
+  { tools = TOOL_CATALOG, unattended = false, source, scratchDir }:
+    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string } = {},
 ): string {
   return [
     HELPER_MARK,
-    BOUNDARIES,
+    BOUNDARIES(scratchDir),
     ...(unattended ? [UNATTENDED] : []),
     TOOLS(tools),
     GUIDELINES,
     // Only when the tool is actually in this run's set — the section tells the
     // agent to reach for it by name, which is worse than useless if it's absent.
     ...(tools.some((t) => t.name === 'send_message') ? [REACHING_THE_USER] : []),
+    // Telegram and cron only. On the desktop nothing parses a file path out of a
+    // reply, so documenting the syntax there would have the agent announce a
+    // delivery that never happens.
+    ...(isCompanionSource(source) ? [SENDING_FILES] : []),
     WORKSPACE,
     WIKILINKS,
     ASSOCIATION,

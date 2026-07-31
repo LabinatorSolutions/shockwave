@@ -336,7 +336,7 @@ async function settleTls(): Promise<void> {
   await settleTls();
   await ensureSchema(pool);
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
-  initSweeper();                                // reclaims idle per-run working dirs (TTL)
+  initSweeper(pool, masterKey);                 // reclaims idle per-run working dirs (TTL)
   tgSyncCommands(pool, masterKey, log);         // keep the /commands menu current
   const server = app.listen(PORT, () => log.info({ port: PORT }, 'shockwave-api listening'));
   const shutdown = () => { server.close(() => pool.end().finally(() => process.exit(0))); setTimeout(() => process.exit(0), 5000).unref(); };
