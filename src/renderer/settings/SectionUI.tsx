@@ -63,3 +63,6 @@ export function SettingsDivider() {
 // Field > Input is 360px, Field > div > Input is 64px. The wrapper takes the full
 // width the Field insists on, and the input inside is free to be its own size.
 export const NUMBER_FIELD = 'w-16 px-2';
+
+/** Same rules, for values up to about six digits (a context window, 128000). */
+export const NUMBER_FIELD_WIDE = 'w-24 px-2';

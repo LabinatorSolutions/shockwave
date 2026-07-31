@@ -4,7 +4,7 @@ import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
 import { useCommitField } from './useCommitField';
 import { removeCredential } from './credentialField';
 import CredentialRow from './CredentialRow';
-import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD } from './SectionUI';
+import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD, NUMBER_FIELD_WIDE } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -208,15 +208,18 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
       {isCompatible && (
         <Field>
           <FieldLabel htmlFor={`${idPrefix}-ctx`}>Context window</FieldLabel>
-          <Input
-            id={`${idPrefix}-ctx`}
-            type="number"
-            min={1}
-            value={ctxField.value}
-            placeholder="128000"
-            onChange={(e) => ctxField.onChange(e.target.value)}
-            onBlur={ctxField.onBlur}
-          />
+          <div>
+            <Input
+              id={`${idPrefix}-ctx`}
+              className={NUMBER_FIELD_WIDE}
+              type="number"
+              min={1}
+              value={ctxField.value}
+              placeholder="128000"
+              onChange={(e) => ctxField.onChange(e.target.value)}
+              onBlur={ctxField.onBlur}
+            />
+          </div>
           <FieldDescription className="text-xs">Tokens the model can hold. Leave blank for 128000.</FieldDescription>
         </Field>
       )}

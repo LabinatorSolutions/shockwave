@@ -54,6 +54,12 @@ type ChatEntry = {
   // Streaming cursors (formerly refs in ChatSidebar).
   currentAssistantId: string | null;
   currentThinkingId: string | null;
+  /** The bubbles belonging to the assistant message currently streaming, so
+   *  `message_end` can reconcile them whatever else nulled the cursors first
+   *  (pi's ordering of `tool_execution_start` vs `message_end` is not ours to
+   *  assume). Cleared at `message_end`. */
+  msgAssistantId: string | null;
+  msgThinkingId: string | null;
   lastSentUserId: string | null;
 };
 
@@ -82,6 +88,8 @@ export const EMPTY_CHAT: ChatEntry = {
   attachments: [],
   currentAssistantId: null,
   currentThinkingId: null,
+  msgAssistantId: null,
+  msgThinkingId: null,
   lastSentUserId: null,
 };
 
@@ -97,12 +105,23 @@ const nextId = () => `m${++idCounter}`;
 
 // Pi message content is `string | [{type:'text', text}, ...]`. Non-text parts
 // (images) have no transcript representation here and are dropped.
+//
+// This MUST stay identical to `textOf` in `agent-core/agent.ts` — that one builds
+// the stored row, this one builds the bubble, and `message_end` below makes the
+// two equal by running the same join over the same object. Same parity discipline
+// as `linkParser.js` vs `linkIndex.js`.
 function textOfContent(content: any): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content.filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
   }
   return '';
+}
+// Mirror of `thinkingOf` in `agent-core/agent.ts` — the row's `reasoning`.
+function thinkingOfContent(content: any): string | null {
+  if (!Array.isArray(content)) return null;
+  const t = content.filter((c) => c?.type === 'thinking' && typeof c.thinking === 'string').map((c) => c.thinking).join('');
+  return t || null;
 }
 
 function emitChange() {
@@ -162,6 +181,8 @@ function handleAgentEvent(evt: any) {
       queuedCount: 0,
       currentAssistantId: null,
       currentThinkingId: null,
+      msgAssistantId: null,
+      msgThinkingId: null,
       elapsedMs: c.runStartAt ? Date.now() - c.runStartAt : c.elapsedMs,
       runStartAt: 0,
       // Freeze any still-open thinking block (guards a missing thinking_end).
@@ -206,6 +227,41 @@ function handleAgentEvent(evt: any) {
     appendMessage(chatId, { id: nextId(), kind: 'user', text });
     return;
   }
+  if (evt.type === 'message_end') {
+    // The finished message, taken whole — NOT our running sum of deltas.
+    //
+    // pi persists THIS OBJECT (`sessionManager.appendMessage(event.message)`),
+    // and agent-core derives the stored row's `content`/`reasoning` from it with
+    // the same joins used here. Assigning from it therefore makes the bubble
+    // equal to the row BY CONSTRUCTION — the live view and a later re-read can't
+    // drift, whatever happened to the delta stream in between. Accumulating is
+    // how you render; the message is what you keep.
+    if (evt.message?.role !== 'assistant') return;
+    const text = textOfContent(evt.message.content);
+    const reasoning = thinkingOfContent(evt.message.content);
+    patchChat(chatId, (c) => {
+      let messages = c.messages;
+      let assistantId = c.msgAssistantId;
+      // Text that never streamed a delta has no bubble yet; open one so the
+      // equality above holds for it too rather than nearly holding.
+      if (!assistantId && text) {
+        assistantId = nextId();
+        messages = [...messages, { id: assistantId, kind: 'assistant', text: '' }];
+      }
+      return {
+        messages: messages.map((m) => {
+          if (m.id === assistantId) return { ...m, text };
+          if (m.id === c.msgThinkingId) return { ...m, text: reasoning ?? m.text, done: true };
+          return m;
+        }),
+        currentAssistantId: null,
+        currentThinkingId: null,
+        msgAssistantId: null,
+        msgThinkingId: null,
+      };
+    });
+    return;
+  }
   if (evt.type === 'turn_end') {
     // Pi's normalized Usage — sum totalTokens across turns; each turn re-pays
     // for the context, so the sum matches actual billed usage for the run.
@@ -222,22 +278,41 @@ function handleAgentEvent(evt: any) {
     const inner = evt.assistantMessageEvent;
     if (!inner) return;
     const chat = state.chats[chatId] ?? EMPTY_CHAT;
+    // A CONTENT-BLOCK boundary is not a message boundary. `*_start` fires per
+    // block, and how often a provider opens one is its own habit: pi-ai's
+    // google-generative-ai/google-vertex adapters open a fresh block on every
+    // thinking↔text flip, mistral-conversations on every flip AND after every
+    // tool call, anthropic-messages occasionally, openai-completions never. The
+    // stored row joins ALL of a message's text blocks into one string (and all
+    // its thinking into one `reasoning`), so opening a bubble per block splits
+    // one message across two — the split landing mid-word wherever the block
+    // boundary fell. So: one thinking bubble and one text bubble per message,
+    // matching what `hydrateMessages` renders from the row.
     if (inner.type === 'thinking_start') {
+      if (chat.msgThinkingId) {
+        const id = chat.msgThinkingId;
+        patchChat(chatId, (c) => ({
+          currentThinkingId: id,
+          messages: c.messages.map((m) => (m.id === id ? { ...m, done: false } : m)),
+        }));
+        return;
+      }
       const id = nextId();
       patchChat(chatId, (c) => ({
         currentThinkingId: id,
-        currentAssistantId: null,
+        msgThinkingId: id,
         messages: [...c.messages, { id, kind: 'thinking', text: '', done: false }],
       }));
       return;
     }
     if (inner.type === 'thinking_delta') {
       const delta = inner.delta ?? '';
-      const id = chat.currentThinkingId;
+      const id = chat.currentThinkingId ?? chat.msgThinkingId;
       if (!id) {
         const newId = nextId();
         patchChat(chatId, (c) => ({
           currentThinkingId: newId,
+          msgThinkingId: newId,
           messages: [...c.messages, { id: newId, kind: 'thinking', text: delta, done: false }],
         }));
         return;
@@ -246,25 +321,33 @@ function handleAgentEvent(evt: any) {
       return;
     }
     if (inner.type === 'thinking_end') {
+      // Closes the BLOCK, not the message — `msgThinkingId` deliberately stays,
+      // so a later flip back to thinking reopens this bubble instead of a new one.
       const id = chat.currentThinkingId;
       patchChat(chatId, { currentThinkingId: null });
       if (id) mapMessage(chatId, id, (m) => ({ ...m, done: true }));
       return;
     }
     if (inner.type === 'text_start') {
+      if (chat.msgAssistantId) {
+        patchChat(chatId, { currentAssistantId: chat.msgAssistantId });
+        return;
+      }
       const id = nextId();
       patchChat(chatId, (c) => ({
         currentAssistantId: id,
+        msgAssistantId: id,
         messages: [...c.messages, { id, kind: 'assistant', text: '' }],
       }));
       return;
     }
     if (inner.type === 'text_delta') {
-      const id = chat.currentAssistantId;
+      const id = chat.currentAssistantId ?? chat.msgAssistantId;
       if (!id) {
         const newId = nextId();
         patchChat(chatId, (c) => ({
           currentAssistantId: newId,
+          msgAssistantId: newId,
           messages: [...c.messages, { id: newId, kind: 'assistant', text: inner.delta ?? '' }],
         }));
         return;
@@ -458,6 +541,8 @@ export async function hydrateOnly(chatId: string) {
     messages: hydrateMessages(rows || []),
     currentAssistantId: null,
     currentThinkingId: null,
+    msgAssistantId: null,
+    msgThinkingId: null,
   }));
 }
 
@@ -515,6 +600,8 @@ export async function openChat(chatId: string, workspace: string | null) {
       messages: hydrateMessages(rows || []),
       currentAssistantId: null,
       currentThinkingId: null,
+      msgAssistantId: null,
+      msgThinkingId: null,
     }),
   }));
   if (ws) {

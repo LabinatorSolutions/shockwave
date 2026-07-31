@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { THEME_MODES } from '../constants.js';
 import { useCommitField } from './useCommitField';
-import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -111,16 +111,18 @@ export default function GeneralSection({
         {treePanel?.content !== 'off' && (
           <Field>
             <FieldLabel htmlFor="tree-panel-count">Items per list</FieldLabel>
-            <Input
-              id="tree-panel-count"
-              type="number"
-              min={1}
-              max={50}
-              className="w-24"
-              value={countField.value}
-              onChange={(e) => countField.onChange(e.target.value)}
-              onBlur={countField.onBlur}
-            />
+            <div>
+              <Input
+                id="tree-panel-count"
+                className={NUMBER_FIELD}
+                type="number"
+                min={1}
+                max={50}
+                value={countField.value}
+                onChange={(e) => countField.onChange(e.target.value)}
+                onBlur={countField.onBlur}
+              />
+            </div>
           </Field>
         )}
       </SettingsGroup>
