@@ -5,6 +5,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { describeSchedule, timezoneNote } from './cronSchedule.js';
 import type { CronView, CronJobView } from '../shared/api';
 
 // The in-app cron experience: the live schedule + manual Run-now buttons. There
@@ -30,8 +31,23 @@ function fmtRel(ms: number | null): string {
   return delta > 0 ? `in ${span}` : `${span} ago`;
 }
 
-function JobRow({ job, busy, running, onRun }: { job: CronJobView; busy: boolean; running: boolean; onRun: () => void }) {
+const PILL = 'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium';
+
+function JobRow({ job, tz, busy, running, onRun }: {
+  job: CronJobView; tz: string; busy: boolean; running: boolean; onRun: () => void;
+}) {
   const off = !job.enabled;
+  // Null when cronstrue can't parse the expression at all — then we show the raw
+  // string in mono rather than print its error message where a schedule goes.
+  const schedule = describeSchedule(job.schedule, tz);
+
+  // One muted line under the name. Timing and last-run read as phrases, so the
+  // old "Next"/"Last" labels are dead weight — "in 2h 15m" already says next.
+  const meta: string[] = [];
+  if (off) meta.push('paused');
+  else if (job.nextRunAt != null) meta.push(fmtRel(job.nextRunAt));
+  if (job.lastRunAt != null) meta.push(`${job.lastError ? '✕' : '✓'} ${fmtRel(job.lastRunAt)}`);
+
   return (
     <div className={cn(
       'flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5',
@@ -40,22 +56,19 @@ function JobRow({ job, busy, running, onRun }: { job: CronJobView; busy: boolean
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{job.name || <span className="italic text-muted-foreground">(unnamed)</span>}</span>
+          {job.once && (
+            <span className={cn(PILL, 'bg-selected text-primary')} title="Runs once, then removes itself from cron.json">One-time</span>
+          )}
           {off && !job.invalid && (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Off</span>
+            <span className={cn(PILL, 'bg-muted text-muted-foreground')}>Off</span>
           )}
           {job.invalid && (
-            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">{job.invalid}</span>
+            <span className={cn(PILL, 'bg-destructive/10 text-destructive')}>{job.invalid}</span>
           )}
         </div>
-        <div className="mt-0.5 font-mono text-xs text-muted-foreground">{job.description}</div>
-        <div className="mt-1 flex gap-5 text-xs text-muted-foreground">
-          <span><span className="text-muted-2">Next</span>&nbsp; {off ? '—' : fmtRel(job.nextRunAt)}</span>
-          <span>
-            <span className="text-muted-2">Last</span>&nbsp;{' '}
-            {job.lastRunAt != null
-              ? <span title={job.lastError ?? 'ok'}>{fmtRel(job.lastRunAt)} {job.lastError ? '✕' : '✓'}</span>
-              : 'never'}
-          </span>
+        <div className="mt-0.5 truncate text-xs text-muted-foreground">
+          <span className={cn(!schedule && 'font-mono')} title={job.schedule}>{schedule ?? job.schedule}</span>
+          {meta.map((m, i) => <span key={i}> · {m}</span>)}
         </div>
         {job.lastError && <div className="mt-1 truncate text-xs text-destructive" title={job.lastError}>{job.lastError}</div>}
       </div>
@@ -67,8 +80,11 @@ function JobRow({ job, busy, running, onRun }: { job: CronJobView; busy: boolean
   );
 }
 
-export default function CronModal({ open, onClose, onOpenFile, onRunStarted }: {
-  open: boolean; onClose: () => void;
+export default function CronModal({ open, timezone, onClose, onOpenFile, onRunStarted }: {
+  open: boolean;
+  /** `settings.timezone` — the zone the companion evaluates these schedules in. */
+  timezone: string;
+  onClose: () => void;
   onOpenFile?: (path: string) => void;
   onRunStarted?: (chatId: string) => void;
 }) {
@@ -87,6 +103,10 @@ export default function CronModal({ open, onClose, onOpenFile, onRunStarted }: {
   const busy = !!view?.inFlight;
   const jobs = view?.jobs ?? [];
   const hasWorkspace = !!view?.activeWorkspace;
+  const tz = timezone || 'UTC';
+  // Named once at the bottom rather than on every row — and only when it isn't
+  // the zone the user is already standing in.
+  const tzNote = timezoneNote(tz);
 
   const runNow = useCallback(async (name: string) => {
     const res = await window.api.cron.runNow(name);
@@ -125,20 +145,25 @@ export default function CronModal({ open, onClose, onOpenFile, onRunStarted }: {
             ) : (
               <div className="flex flex-col gap-2">
                 {jobs.map((job, i) => (
-                  <JobRow key={job.name || `__${i}`} job={job} busy={busy}
+                  <JobRow key={job.name || `__${i}`} job={job} tz={tz} busy={busy}
                     running={busy && view?.runningJobName === job.name} onRun={() => runNow(job.name)} />
                 ))}
               </div>
             )}
 
-            {view?.exists && onOpenFile && (
-              <div className="flex items-center gap-1">
-                <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground"
-                  onClick={() => { onClose(); onOpenFile(`${view.activeWorkspace}/cron.json`); }}>
-                  <FileText className="size-3.5" /> Open cron.json
-                </Button>
+            {(view?.exists && onOpenFile) || tzNote ? (
+              <div className="flex items-center justify-between gap-2">
+                {view?.exists && onOpenFile ? (
+                  <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground"
+                    onClick={() => { onClose(); onOpenFile(`${view.activeWorkspace}/cron.json`); }}>
+                    <FileText className="size-3.5" /> Open cron.json
+                  </Button>
+                ) : <span />}
+                {tzNote && (
+                  <span className="truncate text-xs text-muted-foreground">Times shown in {tzNote}</span>
+                )}
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </DialogContent>

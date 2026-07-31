@@ -47,8 +47,11 @@ export async function cronRead(): Promise<any> {
   const jobViews = jobs.map((j: any) => ({
     name: j?.name ?? '',
     schedule: j?.schedule ?? '',
-    description: j?.schedule ?? '',
     enabled: j?.enabled !== false,
+    // Only an explicit `true` is one-time — same shape as `enabled` above. A
+    // truthy-but-wrong value in a hand-edited file shouldn't label a recurring
+    // job as something that disposes of itself after one run.
+    once: j?.once === true,
     invalid: null,
     nextRunAt: next[j?.name] ?? null,
     lastRunAt: history[j?.name]?.lastRunAt ?? null,

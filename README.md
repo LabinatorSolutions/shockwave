@@ -129,53 +129,55 @@ Job status (next run, last run, manual run-now) is in **Settings → Cron** in t
 
 ## What it does
 
-### 🧠 Notes that link to each other
+Every notes app has a chat sidebar now. This one has a server.
 
-- **Plain `.md` in a folder** — copy the folder, you have everything.
-- **Link files with `[[brackets]]`** — one click to the related file, no folder digging.
-- **Rename anything, links follow** — you never fix a broken link.
-- **Every file lists what points at it** — you find the thread you forgot you started.
+Your workspace is a git repo. An agent holds a copy of it on a machine you own — so the work keeps going after you shut the laptop.
+
+### ⏰ Work that happens while you're gone
+
+- **A `cron.json` in your repo** — "every morning at 6, read yesterday and update TODO."
+- **Runs on your server, not your laptop** — the lid stays shut, the job still fires.
+- **Committed and pushed when it finishes** — you open the app to work already done.
+- **Text the bot from anywhere** — the job starts before you sit down.
+- **Send a voice note** — say it walking, read it at your desk.
+- **`/btw` asks how it's going** — check on a running job without interrupting it.
+- **One-time jobs delete themselves** — "remind me Thursday" leaves nothing behind.
+
+### 🤖 An agent with its hands on the files
+
+- **It edits, you don't paste** — ask for the change, the file changes.
+- **It remembers every past chat** — "what did we decide about pricing" finds the answer.
+- **It fetches the page** — real web search and a real browser, not a guess.
+- **It works in your Gmail and Drive** — connect the account once.
+- **It draws diagrams you can drag** — Excalidraw files, editable after.
+- **You teach it once** — drop in a skill folder and it does that job your way from then on.
+- **You talk, it types** — the mic writes the prompt.
+
+### 🧠 Notes that hold themselves together
+
+- **`[[Brackets]]` link the files** — one click to the related note, no folder digging.
+- **Rename anything** — every link pointing there follows. You never fix one.
+- **Each file lists what points at it** — the thread you forgot you started finds you.
 - **Same name in two folders** — `acme/Meeting` and `globex/Meeting` both work.
-- **A graph of the workspace** — spot the files nothing links to.
+- **A graph of the workspace** — the files nothing links to show up alone.
+- **Plain `.md` in a folder** — copy the folder and you have everything.
 
-### 🤖 An agent that edits them
+### 🔄 Sync nobody can switch off
 
-- **Sits beside the editor** — ask, and the file changes. Nothing to paste anywhere.
-- **Searches your old chats** — "what did we decide about pricing" finds the answer.
-- **Fetches the page, not a guess** — web search and a real browser, both bundled.
-- **Works in your Gmail and Drive** — connect the account once, it does the rest.
-- **Draws diagrams you can drag** — real Excalidraw files, editable after.
-- **Talk instead of type** — the mic writes the prompt.
-- **Your process as a skill folder** — teach it once, it does it your way after.
-
-### ⏰ Work that happens without you
-
-- **A `cron.json` in the repo** — "every morning, read yesterday, update TODO."
-- **Runs on your server** — the lid stays closed.
-- **Committed and pushed when done** — the work is there when you open the app.
-- **One-time jobs erase themselves** — "remind me Thursday" leaves nothing behind.
-- **Run one now, see the last one** — no wondering whether it fired.
-
-### 📱 It answers your texts
-
-- **Message the bot from anywhere** — the work starts before you sit down.
-- **Send a voice note** — talk it through on the walk.
-- **Watch the reply build** — the work, not a spinner.
-- **Ask `/btw` mid-job** — check on it without interrupting it.
-- **Results land in your repo** — finished by the time you're back.
-
-### 🖥 One server behind all of it
-
-- **One line on a cheap VPS** — Docker, database, TLS, done.
-- **A second machine sees everything** — chats, settings, workspaces, nothing to export.
-- **You host it, so you hold it** — no company sits between you and your notes.
-- **Upgrade from inside the app** — one button, no SSH.
-- **Restarts itself when it wedges** — you don't get paged.
-
-### 🔄 Sync through your own repo
-
-- **Your GitHub repo, no subscription** — sync is free because the repo is yours.
-- **Syncs on a timer in the background** — two machines agree without you thinking about it.
-- **Conflicts settled in the app** — keep yours, take theirs, click. No terminal.
+- **Your own GitHub repo** — free, because the repo is already yours.
+- **Every 10 seconds, quietly** — two machines agree without you thinking about it.
+- **Conflicts settled in the app** — keep yours or take theirs. No terminal.
 - **Every sync is a commit** — go back to any day.
-- **New laptop, pick a folder** — everything's there in a minute.
+- **A new laptop, a folder, a minute** — everything's there.
+
+### 🖥 The server the rest of it runs on
+
+- **One line on a $5 box** — it prints a URL and a key, and you're done.
+- **Every machine sees the same thing** — chats, settings, workspaces. Nothing to export.
+- **You host it, so you hold it** — no company sits between you and your notes.
+- **Upgrades from a button in the app** — no SSH.
+- **Comes back on its own** — it restarts itself when it hangs.
+
+### Why not Obsidian and Claude Code?
+
+You can. Two apps, two windows, and you paste between them. But the agent stops when you close the terminal. It can't fire at 6 a.m., can't answer a text, and can't work on a repo you aren't sitting in front of. That's the difference — not the sidebar.

@@ -448,8 +448,9 @@ export interface ShockwaveApi {
 export interface CronJobView {
   name: string;
   schedule: string;
-  description: string;
   enabled: boolean;
+  /** `"once": true` in cron.json — runs once, then deletes its own entry. */
+  once: boolean;
   invalid: string | null;
   nextRunAt: number | null;
   lastRunAt: number | null;

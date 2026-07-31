@@ -2379,6 +2379,7 @@ export default function App() {
 
       <CronModal
         open={cronOpen}
+        timezone={timezone}
         onClose={() => setCronOpen(false)}
         onOpenFile={(p) => { if (graphMode) setGraphMode(false); openInActiveTab(p); }}
         onRunStarted={(chatId) => {
