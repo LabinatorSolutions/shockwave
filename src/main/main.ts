@@ -86,6 +86,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 app.setName(APP_NAME);
 
+// Dev runs against its OWN userData so a dev build and the installed app don't
+// share api.json / local-settings.json / workspace-sync state. Must run before
+// the single-instance lock (the lock lives in userData) and any getPath use.
+if (!app.isPackaged) {
+  app.setPath('userData', `${app.getPath('userData')}-dev`);
+}
+
+// One instance per userData. Without this, a second launch — or a dev build
+// sitting next to the installed app on the SAME userData — collides on shared
+// state: two file watchers, two live feeds, two sync engines racing the same
+// files. The second instance quits; the first restores + focuses its window.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const [w] = BrowserWindow.getAllWindows();
+    if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+  });
+}
+
 // __dirname under electron-vite is `<project>/out/main/` in dev and inside the
 // asar at runtime. Both layouts have `build/icon.png` two levels up.
 const ICON_PATH = path.join(__dirname, '..', '..', 'build', 'icon.png');

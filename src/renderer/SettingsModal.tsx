@@ -113,13 +113,14 @@ export default function SettingsModal({
   appUpdate,
   saveStatus,
   setupStatus,
+  companionOnline = true,
 }) {
   // null = still checking on open; every non-Server page is disabled until the
   // server connection is confirmed reachable.
   const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
 
-  const gated = apiReady !== true; // true while checking or when not connected
+  const gated = apiReady !== true || !companionOnline; // checking, key rejected, or feed offline
   // When the server isn't set up, only the Server page is reachable.
   const effectiveActive = gated && active !== SETTINGS_SECTIONS.COMPANION
     ? SETTINGS_SECTIONS.COMPANION

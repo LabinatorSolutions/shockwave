@@ -2401,6 +2401,7 @@ export default function App() {
       {settingsOpen && (
         <SettingsModal
           initialSection={settingsInitialSection}
+          companionOnline={companionOnline}
           setupStatus={setup}
           // The companion URL/key and git are the two inputs that don't ride the
           // settings object, and Settings is the only place either can change —
