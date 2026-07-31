@@ -44,5 +44,9 @@ export function SettingsDivider() {
 // Width for a small whole-number input (an interval, a count, a number of days).
 // These take their width from the value they hold rather than the 360px measure:
 // a full-width box for "30" reads as somewhere to type a sentence, and leaves the
-// stepper arrows an inch away from the digits. Fits four digits plus the arrows.
-export const NUMBER_FIELD = 'w-24';
+// stepper arrows an inch away from the digits.
+//
+// 64px with the padding cut to 8px leaves ~30px of text column after Chromium's
+// ~15px stepper — enough for the largest value any of these holds (600, the sync
+// interval ceiling) without the box being wider than its contents.
+export const NUMBER_FIELD = 'w-16 px-2';
