@@ -4,7 +4,7 @@ import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
 import { useCommitField } from './useCommitField';
 import { removeCredential } from './credentialField';
 import CredentialRow from './CredentialRow';
-import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -358,11 +358,12 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
 
       <SettingsDivider />
 
-      <SettingsGroup title="Unattended runs">
+      <SettingsGroup>
         <Field>
-          <FieldLabel htmlFor="agent-max-run">Time limit (minutes)</FieldLabel>
+          <FieldLabel htmlFor="agent-max-run">Agent Run Max Minutes</FieldLabel>
           <Input
             id="agent-max-run"
+            className={NUMBER_FIELD}
             type="number"
             min={1}
             placeholder="30"
@@ -370,16 +371,14 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
             onChange={(e) => maxRunField.onChange(e.target.value)}
             onBlur={maxRunField.onBlur}
           />
-          <FieldDescription>
-            How long a Telegram or scheduled run may take before it is stopped. Chats in this
-            app have no limit — you can stop them yourself.
-          </FieldDescription>
+          <FieldDescription>Aborts a Telegram or scheduled run that overruns.</FieldDescription>
         </Field>
 
         <Field>
-          <FieldLabel htmlFor="agent-fix-attempts">Conflict fix attempts</FieldLabel>
+          <FieldLabel htmlFor="agent-fix-attempts">Git Fixer Max Attempts</FieldLabel>
           <Input
             id="agent-fix-attempts"
+            className={NUMBER_FIELD}
             type="number"
             min={1}
             placeholder="3"
@@ -387,17 +386,14 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
             onChange={(e) => fixAttemptsField.onChange(e.target.value)}
             onBlur={fixAttemptsField.onBlur}
           />
-          <FieldDescription>
-            When saving to GitHub hits a clash it can&apos;t merge on its own, the agent retries
-            this many times. Each try picks up where the last one left off. The time limit above
-            still caps the total.
-          </FieldDescription>
+          <FieldDescription>How many times the git-fixer retries a merge it can&apos;t resolve.</FieldDescription>
         </Field>
 
         <Field>
-          <FieldLabel htmlFor="agent-scratch-ttl">Keep scratch files for (days)</FieldLabel>
+          <FieldLabel htmlFor="agent-scratch-ttl">Scratch Pad Max Days</FieldLabel>
           <Input
             id="agent-scratch-ttl"
+            className={NUMBER_FIELD}
             type="number"
             min={1}
             placeholder="1"
@@ -405,10 +401,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
             onChange={(e) => ttlField.onChange(e.target.value)}
             onBlur={ttlField.onBlur}
           />
-          <FieldDescription>
-            The agent's scratch pad holds working files and anything you send it, separately
-            from your workspace. Files there are deleted after this long.
-          </FieldDescription>
+          <FieldDescription>How long files in the agent&apos;s scratch pad are kept.</FieldDescription>
         </Field>
       </SettingsGroup>
     </SettingsSection>

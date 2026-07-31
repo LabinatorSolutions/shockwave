@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD } from './SectionUI';
 import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { useCommitField } from './useCommitField';
 import { removeCredential } from './credentialField';
 import CredentialRow from './CredentialRow';
 import ErrorMessage from '../ErrorMessage.jsx';
@@ -57,8 +58,6 @@ export default function GitHubSection({ sync, onSyncChange }) {
   const [verifyState, setVerifyState] = useState<any>({ status: 'idle' });
   const [gitState, setGitState] = useState<any>({ status: 'checking' });
   // Tracks the thumb while dragging; the real write happens on release.
-  const [draftInterval, setDraftInterval] = useState(interval);
-  useEffect(() => { setDraftInterval(interval); }, [interval]);
 
   // Cheap (one process) and the answer can change while the app runs, so it's
   // re-checked whenever the section mounts rather than cached.
@@ -124,6 +123,14 @@ export default function GitHubSection({ sync, onSyncChange }) {
 
   // Clamped here as well as on the slider: the engine clamps to this same range
   // anyway, so anything outside it would silently not apply.
+  // Commits on blur like every other numeric settings box. Blank restores the
+  // stored value rather than writing 0 — there is no "no interval" state, and the
+  // engine would clamp it to the minimum anyway.
+  const intervalField = useCommitField(
+    String(interval),
+    (next) => { if (next.trim()) setInterval(Number(next)); },
+  );
+
   const setInterval = (n: number) => {
     if (!Number.isFinite(n)) return;
     updateSync({ pullIntervalSeconds: Math.max(MIN_INTERVAL, Math.min(MAX_INTERVAL, n)) });
@@ -190,21 +197,20 @@ export default function GitHubSection({ sync, onSyncChange }) {
 
       <SettingsGroup title="Sync">
         <Field>
-          <div className="flex items-center justify-between">
-            <FieldLabel htmlFor="sync-interval">Sync interval</FieldLabel>
-            <span className="text-xs text-muted-foreground">{draftInterval}s</span>
-          </div>
-          <Slider
+          <FieldLabel htmlFor="sync-interval">Sync Interval Seconds</FieldLabel>
+          <Input
             id="sync-interval"
+            className={NUMBER_FIELD}
+            type="number"
             min={MIN_INTERVAL}
             max={MAX_INTERVAL}
-            step={1}
-            value={[draftInterval]}
-            onValueChange={(v) => setDraftInterval(Number(v?.[0]))}
-            onValueCommit={(v) => setInterval(Number(v?.[0]))}
+            placeholder="10"
+            value={intervalField.value}
+            onChange={(e) => intervalField.onChange(e.target.value)}
+            onBlur={intervalField.onBlur}
           />
           <FieldDescription className="text-xs">
-            How often the open workspace pulls and pushes. Min {MIN_INTERVAL}s, max {MAX_INTERVAL}s.
+            How often the open workspace pulls and pushes. {MIN_INTERVAL}&ndash;{MAX_INTERVAL}s.
           </FieldDescription>
         </Field>
       </SettingsGroup>

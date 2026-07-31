@@ -40,3 +40,9 @@ export function SettingsGroup({ title, children, className }: any) {
 export function SettingsDivider() {
   return <div className={cn('h-px bg-border', SETTINGS_MEASURE, 'w-full')} />;
 }
+
+// Width for a small whole-number input (an interval, a count, a number of days).
+// These take their width from the value they hold rather than the 360px measure:
+// a full-width box for "30" reads as somewhere to type a sentence, and leaves the
+// stepper arrows an inch away from the digits. Fits four digits plus the arrows.
+export const NUMBER_FIELD = 'w-24';
