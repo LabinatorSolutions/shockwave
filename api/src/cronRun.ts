@@ -16,6 +16,9 @@ import { sendTelegramFile } from './telegram/sendTool.js';
 import {
   extractMedia, extractLocalFiles, filterDeliveryPaths, deliveryKind,
 } from '../../agent-core/mediaTags.js';
+import { logger, errStr } from './log.js';
+
+const log = logger('cron');
 
 export interface CronRunResult { chatId: string; checkIn: string; }
 
@@ -78,7 +81,11 @@ export async function runCronJob(
   // provider or runaway tool loop can't wedge the run forever (the aborted turn's
   // partial output is still persisted + checked in below).
   const maxRunMs = (Number(ca.maxRunMinutes) || 30) * 60_000;
-  const watchdog = setTimeout(() => { runtime.agentAbort(chatId).catch(() => {}); }, maxRunMs);
+  log.info({ ws: workspaceId, job: jobName, chatId }, 'cron run started');
+  const watchdog = setTimeout(() => {
+    log.warn({ ws: workspaceId, job: jobName, chatId, maxRunMs }, 'cron watchdog fired — aborting turn');
+    runtime.agentAbort(chatId).catch(() => {});
+  }, maxRunMs);
   let finalMessages: any[] | undefined;
   let turnText = '';
   let turnError: any = null;
@@ -124,13 +131,17 @@ export async function runCronJob(
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },
   );
+  log[result === 'conflict' || result === 'error' ? 'error' : 'info'](
+    { ws: workspaceId, job: jobName, chatId, checkIn: result, turnFailed: !!turnError }, 'cron run finished',
+  );
 
   // Files the job produced and asked to send. A scheduled run posts no reply to
   // Telegram — the agent reaches the user with `send_message` — so a file it named
   // is delivered on its own rather than attached to a message that isn't going
   // anywhere. Best-effort: a delivery problem must not turn a successful run into
   // a failed one.
-  await deliverCronFiles(pool, key, turnText, [dir, chatFilesDir(chatId)]).catch(() => { /* best-effort */ });
+  await deliverCronFiles(pool, key, turnText, [dir, chatFilesDir(chatId)])
+    .catch((e) => log.warn({ ws: workspaceId, job: jobName, chatId, err: errStr(e) }, 'file delivery failed'));
 
   if (turnError) throw turnError;
 

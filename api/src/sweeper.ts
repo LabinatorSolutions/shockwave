@@ -7,14 +7,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Cron } from 'croner';
-import pino from 'pino';
 import { WORK_BASE } from './git.js';
 import { RUNS_BASE, FILES_BASE } from './dataDirs.js';
 import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
+import { logger } from './log.js';
 
-const log = pino({ base: undefined });
+const log = logger('sweeper');
 // How long an idle working dir survives. A synced setting rather than env, so the
 // desktop's own scratch cleanup uses the same number and there is one place to
 // change it. Unset ⇒ 1 day, read at the point of use — the companion stores no

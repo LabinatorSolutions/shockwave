@@ -22,6 +22,9 @@ import { transcribeAudio } from './transcribe.js';
 import { cacheAttachment, composeMessage, MAX_INBOUND_BYTES, type CachedAttachment } from './attachments.js';
 import { getCatalogModel } from '../../../agent-core/modelCatalog.js';
 import { chatFilesDir } from '../dataDirs.js';
+import { logger } from '../log.js';
+
+const tlog = logger('telegram');
 
 // Chats with a turn in flight ON THIS SERVER. A second message for a busy chat
 // is handed to the running turn (pi picks it up at its next step) and must NOT
@@ -358,7 +361,11 @@ async function runTurnInner(
   };
 
   const maxRunMs = (Number(ca.maxRunMinutes) || 30) * 60_000;
-  const wd = setTimeout(() => runtime.agentAbort(chatId).catch(() => {}), maxRunMs);
+  tlog.info({ chatId, ws: ws.id }, 'telegram turn started');
+  const wd = setTimeout(() => {
+    tlog.warn({ chatId, maxRunMs }, 'telegram watchdog fired — aborting turn');
+    runtime.agentAbort(chatId).catch(() => {});
+  }, maxRunMs);
   // Marked busy for the whole job, so a message arriving meanwhile is relayed
   // into THIS turn instead of starting a second one that would finish early.
   busy.add(chatId);
@@ -381,6 +388,9 @@ async function runTurnInner(
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },
   ).catch(() => 'error' as const);
+  tlog[checkedIn === 'conflict' || checkedIn === 'error' ? 'error' : 'info'](
+    { chatId, ws: ws.id, checkIn: checkedIn }, 'telegram turn finished',
+  );
   // Say so in chat. This used to be `.catch(() => {})` with the result thrown
   // away, so work that never reached GitHub looked exactly like work that did —
   // and the next message's prepareCheckout reset --hard'd it out of existence.

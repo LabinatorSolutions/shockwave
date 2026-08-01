@@ -8,7 +8,7 @@ import path from 'node:path';
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import pino from 'pino';
+import { logger } from './log.js';
 import { makePool, getDb, ensureSchema } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
@@ -21,7 +21,7 @@ import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status
 import { configuredHost, ensureSelfSignedCert, readCertPem, removeSelfSignedCert } from './telegram/selfSigned.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
 
-const log = pino({ base: undefined });
+const log = logger('http');
 
 const { DATABASE_URL, MASTER_KEY, API_KEY } = process.env;
 const PORT = Number(process.env.PORT || 8080);

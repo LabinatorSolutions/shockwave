@@ -15,8 +15,10 @@ import path from 'node:path';
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import { resolveModel } from '../../agent-core/agent.js';
 import { checkIn, syncAndPush, type CheckInResult, type GitAuth } from './git.js';
+import { logger, errStr } from './log.js';
 
 const exec = promisify(execFile);
+const log = logger('fixer');
 
 export interface FixModel { provider: string; model: string; apiKey: string; baseUrl?: string }
 
@@ -45,8 +47,11 @@ export async function checkInWithFixer(
   if (result !== 'conflict') return result;
   // The deterministic merge left markers → hand to the fixer, which resolves and
   // commits with NO credentials of its own. The push is ours, after it verifies.
+  log.warn({ dir, branch }, 'deterministic check-in hit a conflict — starting git-fixer');
   const fixed = await gitFix(dir, branch, m, limits);
-  return fixed ? await syncAndPush(dir, branch, auth) : 'conflict';
+  const final = fixed ? await syncAndPush(dir, branch, auth) : 'conflict';
+  log[final === 'pushed' ? 'info' : 'error']({ dir, branch, fixed, result: final }, 'git-fixer finished');
+  return final;
 }
 
 async function sh(dir: string, cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -108,12 +113,14 @@ export async function gitFix(dir: string, branch: string, m: FixModel, limits: F
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
+    if (remaining <= 0) { log.warn({ dir, attempt, attempts }, 'fixer out of time before attempt'); break; }
+    log.info({ dir, branch, attempt, attempts, remainingMs: remaining }, 'fixer attempt starting');
     await runFixerSession(dir, branch, m, remaining);
     // Never trust what the model said it did — re-read the repo. This also
     // re-runs after a session that failed to start at all, so a tree that was
     // already clean still reports success.
-    if (await verify(dir)) return true;
+    if (await verify(dir)) { log.info({ dir, attempt }, 'fixer verified clean'); return true; }
+    log.warn({ dir, attempt }, 'verify failed after fixer attempt (tree dirty or markers remain)');
   }
   return false;
 }
@@ -123,7 +130,9 @@ export async function gitFix(dir: string, branch: string, m: FixModel, limits: F
 async function runFixerSession(dir: string, branch: string, m: FixModel, budgetMs: number): Promise<void> {
   try {
     const built = await buildModel(m);
-    if (!built) return;
+    // No model = no attempt at all — the loudest silent failure this loop had:
+    // a missing/blanked provider key surfaced only as 'conflict' at the caller.
+    if (!built) { log.error({ provider: m.provider, model: m.model, hasKey: !!m.apiKey }, 'fixer model not available — attempt skipped'); return; }
 
     const runGit: any = {
       name: 'run_git',
@@ -164,11 +173,16 @@ async function runFixerSession(dir: string, branch: string, m: FixModel, budgetM
 
     // The only bound on the session. Same mechanism the old step cap used —
     // session.abort() — driven by a clock instead of a tool-call counter.
-    const watchdog = setTimeout(() => { try { session.abort(); } catch { /* */ } }, budgetMs);
-    try { await session.prompt(`Recover branch "${branch}": resolve any conflicts and commit, leaving a clean working tree. Do not push. Start by inspecting the current state.`); } catch { /* */ }
+    const watchdog = setTimeout(() => { log.warn({ dir, budgetMs }, 'fixer watchdog fired — aborting session'); try { session.abort(); } catch { /* */ } }, budgetMs);
+    try { await session.prompt(`Recover branch "${branch}": resolve any conflicts and commit, leaving a clean working tree. Do not push. Start by inspecting the current state.`); } catch (e: any) { log.warn({ dir, err: errStr(e) }, 'fixer session errored'); }
     clearTimeout(watchdog);
     try { session.dispose(); } catch { /* */ }
-  } catch { /* the caller verifies against the repo either way */ }
+  } catch (e: any) {
+    // The caller verifies against the repo either way — but a session that never
+    // started (provider unreachable, bad key) must say so, or "couldn't connect"
+    // leaves no trace at all.
+    log.error({ dir, provider: m.provider, model: m.model, err: errStr(e) }, 'fixer session failed to start');
+  }
 }
 
 // Trust nothing the model said — confirm the tree is clean and no conflict

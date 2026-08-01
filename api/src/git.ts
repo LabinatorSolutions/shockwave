@@ -17,8 +17,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { remoteUrl } from './gitRemote.js';
+import { logger, errStr } from './log.js';
 
 const exec = promisify(execFile);
+const log = logger('git');
 
 export const WORK_BASE = process.env.CRON_WORK_DIR || path.join(os.tmpdir(), 'shockwave-cron');
 
@@ -213,7 +215,9 @@ export async function checkIn(dir: string, branch: string, message: string, auth
     // `add -A` and the commit changes what we are about to push.
     await git(dir, ['commit', '--no-verify', '-m', message]);
     return await syncAndPush(dir, branch, auth);
-  } catch {
+  } catch (e: any) {
+    // The status is all the caller gets — the WHY lives here or nowhere.
+    log.error({ dir, branch, err: errStr(e) }, 'check-in failed');
     return 'error';
   }
 }
@@ -237,10 +241,14 @@ export async function syncAndPush(dir: string, branch: string, auth: GitAuth): P
         if (Number(behind.trim()) > 0) {
           try {
             await git(dir, ['merge', '--no-edit', '--no-verify', `origin/${branch}`]);
-          } catch {
+          } catch (e: any) {
             // Unresolved conflict markers left in the tree → hand off.
             const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
-            if (unmerged.trim()) return 'conflict';
+            if (unmerged.trim()) {
+              log.warn({ dir, branch, files: unmerged.trim().split('\n') }, 'merge conflict — handing off');
+              return 'conflict';
+            }
+            log.warn({ dir, branch, err: errStr(e) }, 'merge failed without unmerged files — pushing anyway');
           }
         }
         // --no-verify belts the hooksPath guard: two independent things would both
@@ -249,12 +257,17 @@ export async function syncAndPush(dir: string, branch: string, auth: GitAuth): P
         return 'pushed';
       } catch (e: any) {
         // Non-fast-forward (someone pushed between fetch and push) → retry once.
-        if (/non-fast-forward|fetch first|rejected/i.test(String(e?.stderr || e))) continue;
+        if (/non-fast-forward|fetch first|rejected/i.test(String(e?.stderr || e))) {
+          log.warn({ dir, branch, attempt: attempt + 1 }, 'push rejected (remote moved) — retrying');
+          continue;
+        }
         throw e;
       }
     }
+    log.warn({ dir, branch, attempts: PUSH_ATTEMPTS }, 'push attempts exhausted — reporting conflict');
     return 'conflict';
-  } catch {
+  } catch (e: any) {
+    log.error({ dir, branch, err: errStr(e) }, 'sync-and-push failed');
     return 'error';
   }
 }

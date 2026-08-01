@@ -50,8 +50,17 @@ Six services (postgres, api, traefik-config, traefik, updater, autoheal):
 
 **`COMPANION_HOST` is not looked up at runtime.** The installer already resolves the public IP to print your Server URL, and the certificate must be issued for the exact address you type into the desktop — two independent lookups can disagree, and then the certificate is for one address while you connect to another. One lookup, at install, written down.
 
+## Logging (`log.ts`)
+
+One pino root; every subsystem logs through `logger(sub)` — a child with a `sub` field (`git`, `fixer`, `cron`, `telegram`, `agent`, `sweeper`, `http`) — so `docker compose logs api` (or `shockwave logs`) is the single place to look and one grep follows a run across subsystems by `chatId`. Don't `import pino` anywhere else.
+
+**What gets a line: every boundary result.** A turn started/finished, a check-in's outcome, a fixer attempt's verdict, a git call that failed *and its stderr* (`errStr` prefers `e.stderr` — the part that says why). Not per-step chatter. The rule that matters: **a failure that is caught and converted into a status (`'error'`, `'conflict'`, a silent retry) must log before the conversion.** The catch blocks in `git.ts`/`gitFixer.ts` used to swallow the only evidence of why a run failed — a fixer whose model provider was unreachable produced exactly the same visible outcome as a merge it genuinely couldn't resolve. Related: a cron run whose check-in returns `'conflict'`/`'error'` no longer records as a clean run — `fireJob` writes it to `cron_state.last_error`, since work that never reached GitHub is a failed run even though nothing threw.
+
+**Never log a payload that can carry secrets whole** (settings objects, agent run payloads — they hold API keys). Pick fields.
+
 ## Files
 
+- `log.ts` — the one pino root + `logger(sub)` + `errStr`. See "Logging" above.
 - `server.ts` — Express app: boots the pool + companion agent runtime, registers all routes + the bearer-auth middleware, the SSE feed, scheduler + sweeper, graceful shutdown.
 - `db.ts` — pg `Pool` + drizzle wiring; `int8`→`Number` parser (epoch-ms); `ensureSchema` (idempotent `init.sql` re-apply on boot).
 - `schema.ts` — drizzle table definitions (source of truth); `bytea` custom type + `epochMs` bigint helper.

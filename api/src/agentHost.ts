@@ -18,6 +18,9 @@ import * as store from './store.js';
 import { mintToken } from './oauth.js';
 import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
+import { logger, errStr } from './log.js';
+
+const alog = logger('agent');
 
 // Bundled built-in skills, shipped into the image (BUILTIN_SKILLS_DIR) so the
 // server agent has the SAME skills as the desktop; falls back to an empty dir.
@@ -58,5 +61,25 @@ export function makeCompanionRuntime(pool: DB, key: Buffer) {
       recentChats: (o) => store.recentChats(db, o.workspaceId, o.limit, o.excludeChatId),
     },
   };
-  return createAgentRuntime(host);
+  const runtime = createAgentRuntime(host);
+
+  // Log every turn's boundary. Picked fields only — the payload carries the
+  // provider API key, so it must never be logged whole.
+  const agentSend = async (payload: any, emit: any) => {
+    const t0 = Date.now();
+    const ctx = {
+      chatId: payload?.chatId, source: payload?.source, ws: payload?.workspaceId,
+      provider: payload?.provider, model: payload?.model,
+    };
+    alog.info(ctx, 'agent turn started');
+    try {
+      const r = await runtime.agentSend(payload, emit);
+      alog.info({ ...ctx, ms: Date.now() - t0 }, 'agent turn finished');
+      return r;
+    } catch (e: any) {
+      alog.error({ ...ctx, ms: Date.now() - t0, err: errStr(e) }, 'agent turn failed');
+      throw e;
+    }
+  };
+  return { ...runtime, agentSend };
 }
