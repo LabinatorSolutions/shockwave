@@ -9,7 +9,7 @@ import type { DB } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
-import { prepareCheckout, type GitAuth } from './git.js';
+import { prepareCheckout, landed, type GitAuth } from './git.js';
 import { checkInWithFixer } from './gitFixer.js';
 import { chatFilesDir } from './dataDirs.js';
 import { sendTelegramFile } from './telegram/sendTool.js';
@@ -132,7 +132,7 @@ export async function runCronJob(
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },
   );
-  log[result === 'conflict' || result === 'error' ? 'error' : 'info'](
+  log[landed(result) ? 'info' : 'error'](
     { ws: workspaceId, job: jobName, chatId, checkIn: result, turnFailed: !!turnError }, 'cron run finished',
   );
 

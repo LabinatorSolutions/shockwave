@@ -47,8 +47,10 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
   // text as a SECOND message — then the first post landed. Two messages.
   let chain: Promise<void> = Promise.resolve();
 
-  const typing = setInterval(() => client.sendChatAction(chatId).catch(() => {}), 4000);
-  client.sendChatAction(chatId).catch(() => {});
+  // No typing indicator here — `runTurn` owns it for the whole turn, starting
+  // the moment the message is acknowledged. This sink is built after the
+  // checkout, so a typing indicator that began here left the user watching an
+  // empty chat through the slowest part of the turn.
   const editTimer = setInterval(() => { void flush(false); }, 1300);
 
   function flush(force: boolean): Promise<void> {
@@ -98,7 +100,7 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
   }
 
   async function done(finalMessages?: any[]) {
-    clearInterval(typing); clearInterval(editTimer);
+    clearInterval(editTimer);
     await chain;   // let any in-flight post land so `messageId` is truthful
     // Authoritative final: the last assistant message from agent_end (falls back
     // to whatever we accumulated from deltas).

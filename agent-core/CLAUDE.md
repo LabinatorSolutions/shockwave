@@ -10,7 +10,9 @@ Read the root `CLAUDE.md` first. Deep docs for each host: `src/main/CLAUDE.md`, 
 
 ## The host/runtime split
 
-**`AgentHost`** (interface, `agent.ts`) is all host-specific I/O, **no logic**. Each host implements it and calls **`createAgentRuntime(host)`**, which returns `{ agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions }`. What the host supplies:
+**`AgentHost`** (interface, `agent.ts`) is all host-specific I/O, **no logic**. Each host implements it and calls **`createAgentRuntime(host)`**, which returns `{ agentSend, agentPrepare, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions }`.
+
+**`agentPrepare(opts, emit)`** boots the session without running a turn, so a host can do it while waiting on something else — the companion's Telegram path boots alongside transcribing a voice note, since booting needs none of the text. Safe to call and then `agentSend`: `booting` dedups an in-flight boot and `ensureSession` returns the cached entry. It **refuses for a chat with a turn in flight**, because the running entry would have its `emit` re-pointed at the new caller's sink — the bug that froze a reply half-written. Callers check that too; this checks it so a caller that forgets can't cause it. What the host supplies:
 
 - `builtinDir` — path to the bundled built-in skills.
 - `machine` — `os.hostname()`, stamped on chats for provenance.
@@ -97,7 +99,9 @@ Custom tools are in-process (`customTools`). `list_agent_secrets`/`get_agent_sec
 
 ## Model catalog (`modelCatalog.ts`)
 
-Sources the Settings model dropdown from **models.dev** (`/api.json`) — fresher than pi's bundled list; pi stays the execution engine. Cache chain (10-min TTL): live fetch → memory + disk (`<userData>/model-catalog.json`) → stale memory → disk → pi's bundled `getModels()`. Concurrent callers share one in-flight fetch. The only hand-maintained bit is `DEV_KEY` (our slug → models.dev key).
+Sources the Settings model dropdown from **models.dev** (`/api.json`) — fresher than pi's bundled list; pi stays the execution engine. Cache chain (10-min TTL): live fetch → memory + disk (`<userData>/model-catalog.json`) → stale memory → disk → pi's bundled `getModels()`. Concurrent callers share one in-flight fetch.
+
+**Stale-while-revalidate — a cached copy is returned at ANY age and the refresh happens out of band.** It used to block: the TTL expiring made the *next* caller wait on a live fetch with an 8-second timeout, and on the companion that caller is a Telegram message, because session boot resolves the model through here for anything pi's bundled catalog doesn't carry (i.e. any recent model). So roughly once every ten minutes somebody paid for the refresh with their reply. Nothing about a list of model metadata is urgent enough to sit on that path. A failed background refresh backs off (`RETRY_MS`) so an offline server doesn't start a fresh 8-second fetch on every turn; only a completely cold cache blocks. The only hand-maintained bit is `DEV_KEY` (our slug → models.dev key).
 
 `resolveModel(provider, model)` (used at boot and by `api/src/gitFixer.ts`): pi's bundled `getModel` wins; else **synthesize** a runnable pi Model from the models.dev record by cloning a sibling model's provider wiring and overlaying the metadata. `listThinkingLevels` returns `['off', ...reasoningLevels]`; `toPiThinkingLevel` translates models.dev's top tier **`max` → pi's `xhigh`** (same translation at boot, so the dropdown value is exactly what executes).
 

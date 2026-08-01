@@ -40,7 +40,14 @@ function scratch() {
   git(seed, ['remote', 'add', 'origin', origin]);
   git(seed, ['push', '-q', 'origin', 'main']);
 
-  execFileSync('git', ['clone', '-q', origin, work], { stdio: 'pipe' });
+  // SHALLOW, like production — and via file:// because git silently ignores
+  // --depth on a plain local path ("--depth is ignored in local clones"). This
+  // used to be a full clone, which is exactly why these tests passed for months
+  // while production failed: every behaviour below depends on whether the
+  // checkout has history, and a full clone has all of it.
+  execFileSync('git', ['clone', '-q', '--depth=1', '--branch', 'main', `file://${origin}`, work], { stdio: 'pipe' });
+  assert.equal(git(work, ['rev-parse', '--is-shallow-repository']).trim(), 'true',
+    'the fixture must be shallow or it does not mirror production');
   git(work, ['config', 'user.email', 'test@example.com']);
   git(work, ['config', 'user.name', 'test']);
   return { root, origin, seed, work };
@@ -56,11 +63,43 @@ function remoteMovesAhead({ seed, origin }, name, body) {
 }
 
 /** The reuse path of prepareCheckout (api/src/git.ts), mirrored.
- *  Catching up is `merge --ff-only`, never `reset --hard` + `clean -fd`. */
+ *
+ *  Catching up is `fetch` (NO --depth) then a `reset --hard` guarded on "is
+ *  there anything here that exists nowhere else?". The guard is the whole
+ *  safety property; the fetch having no --depth is what makes the guard
+ *  answerable, since a grafted history counts every local commit as unpushed
+ *  forever. */
 function reuseCheckout(dir, branch) {
   fs.rmSync(path.join(dir, '.git', 'hooks'), { recursive: true, force: true });
   git(dir, ['fetch', '-q', 'origin', branch]);
-  tryGit(dir, ['merge', '--ff-only', '--no-verify', `origin/${branch}`]);
+  repairGraft(dir, branch);
+  if (nothingToLose(dir, branch)) git(dir, ['reset', '-q', '--hard', `origin/${branch}`]);
+}
+
+/** Mirrors nothingToLose in api/src/git.ts. */
+function nothingToLose(dir, branch) {
+  try {
+    if (git(dir, ['status', '--porcelain']).trim()) return false;
+    return Number(git(dir, ['rev-list', '--count', `origin/${branch}..HEAD`]).trim()) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Mirrors repairGraft in api/src/git.ts. */
+function repairGraft(dir, branch) {
+  try {
+    if (git(dir, ['merge-base', 'HEAD', `origin/${branch}`]).trim()) return;
+  } catch { /* no merge base → grafted */ }
+  if (git(dir, ['rev-parse', '--is-shallow-repository']).trim() !== 'true') return;
+  tryGit(dir, ['fetch', '-q', '--unshallow', 'origin', branch]);
+}
+
+/** What the OLD reuse path did: fetch --depth=1, which rewrites .git/shallow so
+ *  the remote branch arrives as its own root with no link to what we hold. Used
+ *  to build a checkout already damaged by a previous release. */
+function grafItApart(dir, branch) {
+  git(dir, ['fetch', '-q', '--depth=1', 'origin', branch]);
 }
 
 test('reuse keeps uncommitted edits to a tracked file', () => {
@@ -113,7 +152,58 @@ test('unpushed work survives even when the remote has also moved', () => {
 
   reuseCheckout(s.work, 'main');
 
-  // The fast-forward is refused (or carries the edit through) — either way the
-  // agent's file is still here. checkIn's fetch+merge reconciles at the end.
+  // The reset is refused — the agent's file is still here. checkIn's fetch+merge
+  // reconciles at the end.
   assert.ok(fs.existsSync(path.join(s.work, 'mine.md')), 'agent work was destroyed');
+});
+
+// ── The bug: --depth=1 on the REUSE fetch ────────────────────────────────────
+//
+// It re-grafts the remote branch as a disconnected root, so git refuses every
+// later merge as "unrelated histories". The checkout silently never caught up,
+// the agent read stale files, and the check-in's push was rejected — the user
+// was told the save failed while the work sat in the folder. These two pin the
+// fix and the repair; both fail without them.
+
+test('a fetch carrying --depth=1 breaks the link to what we already hold', () => {
+  const s = scratch();
+  remoteMovesAhead(s, 'fromDesktop.md', 'pushed elsewhere\n');
+
+  grafItApart(s.work, 'main');
+
+  // This is the whole bug in one assertion: after a --depth=1 fetch there is no
+  // common commit, so nothing can merge and nothing can fast-forward.
+  assert.equal(tryGit(s.work, ['merge-base', 'HEAD', 'origin/main']), false,
+    '--depth=1 on a fetch must be understood to sever history — if this starts ' +
+    'passing, git changed and prepareCheckout can be simplified');
+  assert.equal(tryGit(s.work, ['merge', '--ff-only', '--no-verify', 'origin/main']), false);
+});
+
+test('a checkout damaged by an older release repairs itself and catches up', () => {
+  const s = scratch();
+  remoteMovesAhead(s, 'fromDesktop.md', 'pushed elsewhere\n');
+  grafItApart(s.work, 'main');           // what the previous release did to it
+
+  reuseCheckout(s.work, 'main');         // the current path, on a damaged folder
+
+  assert.ok(fs.existsSync(path.join(s.work, 'fromDesktop.md')),
+    'a grafted checkout must be repaired and brought up to date');
+  assert.ok(git(s.work, ['merge-base', 'HEAD', 'origin/main']).trim(),
+    'history must be reconnected, or every later merge still fails');
+});
+
+test('repairing a damaged checkout does not cost unpushed work', () => {
+  const s = scratch();
+  fs.writeFileSync(path.join(s.work, 'mine.md'), 'agent work\n');
+  git(s.work, ['add', '-A']);
+  git(s.work, ['commit', '-qm', 'unpushed turn']);
+  const head = git(s.work, ['rev-parse', 'HEAD']).trim();
+  remoteMovesAhead(s, 'theirs.md', 'someone else\n');
+  grafItApart(s.work, 'main');
+
+  reuseCheckout(s.work, 'main');
+
+  assert.equal(git(s.work, ['rev-parse', 'HEAD']).trim(), head,
+    'the repair must not move HEAD off an unpushed commit');
+  assert.ok(fs.existsSync(path.join(s.work, 'mine.md')));
 });

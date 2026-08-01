@@ -21,6 +21,7 @@ import { getModels } from '@earendil-works/pi-ai/compat';
 const URL = 'https://models.dev/api.json';
 const TTL_MS = 10 * 60 * 1000; // 10 minutes
 const FETCH_TIMEOUT_MS = 8000;
+const RETRY_MS = 60 * 1000; // how long a failed background refresh waits before retrying
 
 // Our provider slugs (settings + pi) → models.dev's top-level key. Identity for
 // everything not listed. Providers absent from models.dev entirely fall through
@@ -75,11 +76,33 @@ async function writeDisk(reg: RawRegistry): Promise<void> {
   }
 }
 
-// The whole registry, honoring the 10-min TTL, with the offline fallbacks.
-// Concurrent callers share one in-flight fetch. Returns null only when live +
-// memory + disk all fail (fresh offline first-run) — callers then use pi.
+// The whole registry. Stale-while-revalidate: a cached copy is returned at ANY
+// age and the refresh happens out of band, so nothing a user is waiting on ever
+// blocks on models.dev.
+//
+// It used to block. The TTL expiring made the NEXT caller wait for a live fetch
+// with an 8-second timeout — and on the companion that caller is a Telegram
+// message, because session boot resolves the model through here for anything
+// pi's bundled catalog doesn't carry (i.e. any recent model). So roughly once
+// every ten minutes somebody paid for the refresh with their reply, and if the
+// network was slow they paid the whole 8 seconds. Nothing about the catalog is
+// urgent enough to be on that path: it's a list of model metadata, and a copy
+// ten minutes old is the same list.
+//
+// Returns null only when live + memory + disk all fail (fresh offline first
+// run) — callers then fall back to pi's bundled list.
 async function loadRegistry(): Promise<RawRegistry | null> {
-  if (mem && Date.now() - mem.fetchedAt < TTL_MS) return mem.reg;
+  if (mem) {
+    // Stale → kick off a refresh, but answer from what we already have.
+    if (Date.now() - mem.fetchedAt >= TTL_MS && !inFlight) void refresh();
+    return mem.reg;
+  }
+  return refresh();
+}
+
+// Fetch live, cache to memory + disk, fall back to disk. Concurrent callers
+// share one in-flight fetch.
+async function refresh(): Promise<RawRegistry | null> {
   if (inFlight) return inFlight;
 
   inFlight = (async () => {
@@ -94,7 +117,13 @@ async function loadRegistry(): Promise<RawRegistry | null> {
     } catch {
       // network/parse failure — fall through to cached copies
     }
-    if (mem) return mem.reg; // stale but usable
+    if (mem) {
+      // Stale but usable. Hold off before trying again, or an offline server
+      // starts a fresh 8-second fetch on every call that reads the catalog —
+      // which, now that stale copies are served immediately, is every turn.
+      mem.fetchedAt = Date.now() - TTL_MS + RETRY_MS;
+      return mem.reg;
+    }
     const disk = await readDisk();
     if (disk) {
       mem = { reg: disk, fetchedAt: 0 }; // treat as stale so next call retries live

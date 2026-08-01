@@ -547,6 +547,30 @@ export function createAgentRuntime(host: AgentHost) {
     maybeGenerateTitle(entry, chatId, entry.session.state?.messages ?? []).catch(() => { /* best-effort */ });
   }
 
+  // Boot the session WITHOUT running a turn, so a host can do it while it is
+  // waiting on something else.
+  //
+  // The companion's Telegram path uses this: transcribing a voice note is
+  // seconds of network, and booting needs none of the text — so the checkout and
+  // the boot happen alongside the transcription instead of after it. The
+  // subsequent agentSend then finds the session already in `sessions` and starts
+  // prompting immediately.
+  //
+  // Safe to call and then call agentSend: `booting` dedups an in-flight boot and
+  // `ensureSession` returns the cached entry. Never call it for a chat with a
+  // turn in flight — the running entry would have its `emit` re-pointed at the
+  // new caller's sink, which is the bug that froze a reply half-written (see
+  // agentSend). Hosts check that themselves; this one does too, so a caller that
+  // forgets can't cause it.
+  async function agentPrepare(opts: RunOpts, emitEvent: Emit): Promise<void> {
+    const { chatId, workspacePath, provider, model, apiKey } = opts;
+    if (!chatId || !workspacePath || !provider || !model) return;
+    if (provider !== 'openai-compatible' && !apiKey) return;
+    if (sessions.get(chatId)?.running) return; // a live turn owns its own sink
+    searchCtx = { workspaceId: opts.workspaceId ?? '', chatId };
+    await ensureSession(chatId, opts, emitEvent);
+  }
+
   // Wait for in-flight appends, then re-send anything that failed. Idempotent by
   // entryId, so a re-send of an already-stored row is a true no-op.
   async function flushPending(entry: Entry, chatId: string) {
@@ -604,5 +628,5 @@ export function createAgentRuntime(host: AgentHost) {
     return [...sessions.entries()].filter(([, e]) => e.running).map(([id]) => id);
   }
 
-  return { agentSend, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats };
+  return { agentSend, agentPrepare, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats };
 }

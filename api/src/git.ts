@@ -14,15 +14,27 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { DATA_BASE } from './dataDirs.js';
 import { remoteUrl } from './gitRemote.js';
 import { logger, errStr } from './log.js';
 
 const exec = promisify(execFile);
 const log = logger('git');
 
-export const WORK_BASE = process.env.CRON_WORK_DIR || path.join(os.tmpdir(), 'shockwave-cron');
+// Checkouts live on the SAME volume as pi's scratch and the chat staging dirs
+// (`AGENT_DATA_DIR`, /data/agent in compose), beside `runs/` and `files/`.
+//
+// This used to be `CRON_WORK_DIR || os.tmpdir()/shockwave-cron`, and
+// CRON_WORK_DIR was set nowhere — not in compose, not in the Dockerfile, not in
+// install.sh. So the one thing here that is expensive to rebuild was the one
+// thing NOT on the volume: every restart and every `POST /update` wiped the
+// container's overlay layer, and the next message in every chat re-cloned.
+//
+// Deriving it from DATA_BASE rather than reading an env var of its own is
+// deliberate — there is no longer a variable to forget to set. The old name was
+// stale anyway: Telegram uses these checkouts too, and has since it shipped.
+export const WORK_BASE = path.join(DATA_BASE, 'work');
 
 // Plain remote — NO credentials. `git clone <url>` and `git remote set-url` both
 // persist whatever URL they're given into <dir>/.git/config, and <dir> is the
@@ -83,6 +95,14 @@ const NO_HOOKS = '/dev/null';
 /** What a network git call needs: the token, and the repo it is allowed to reach. */
 export interface GitAuth { pat: string; owner: string; repo: string }
 
+/** Hand a caller a checkout that was cloned ahead of time, if one is waiting.
+ *  Implemented by `checkoutPool.ts`; passed to prepareCheckout by callers that
+ *  are allowed to use the queue (Telegram — see the note there on why not cron). */
+export type ClaimWarmCheckout = (
+  target: { owner: string; repo: string; branch: string },
+  dest: string,
+) => Promise<boolean>;
+
 /** Config overrides that must precede EVERY git call carrying the PAT.
  *
  *  Command-line `-c` beats repository config, which is the whole point — every
@@ -129,37 +149,92 @@ async function git(cwd: string, args: string[], auth?: GitAuth): Promise<{ stdou
   });
 }
 
+/** Is there anything in this folder that only exists here?
+ *
+ *  Two questions, both local and instant: an edit nobody committed, and a commit
+ *  nobody pushed. Either one means the folder is the ONLY copy of some work, and
+ *  the answer is to leave it entirely alone.
+ *
+ *  This is answerable only because the fetch above no longer passes `--depth=1`
+ *  (see prepareCheckout). With a grafted history `rev-list origin/<b>..HEAD`
+ *  counts every local commit as unpushed forever, so the guard would never let a
+ *  reset through and the folder would never catch up. */
+async function nothingToLose(dir: string, branch: string): Promise<boolean> {
+  try {
+    const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
+    if (dirty.trim()) return false;
+    const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${branch}..HEAD`]);
+    return Number(ahead.trim()) === 0;
+  } catch {
+    return false; // couldn't tell → never license a wipe
+  }
+}
+
+/** Reconnect a checkout that an older build grafted apart, once.
+ *
+ *  Until this was fixed, the reuse path fetched with `--depth=1`, which rewrites
+ *  `.git/shallow` so the remote branch arrives as its own root commit with no
+ *  link to what we already have. Git then refuses every merge with "unrelated
+ *  histories", the deterministic check-in falls through to a push it cannot
+ *  land, and the turn's work sits in the checkout while the user is told the
+ *  save failed.
+ *
+ *  Dropping the flag stops NEW damage; it does not repair a folder already
+ *  grafted, because the break is written into the repository. A plain fetch
+ *  cannot heal it — only `--unshallow` can, verified against real git.
+ *
+ *  `merge-base` is the detector: a healthy shallow checkout still reports a
+ *  common commit, a grafted one reports nothing. So healthy folders skip this
+ *  entirely, and a repaired one never enters it again. */
+async function repairGraft(dir: string, branch: string, auth: GitAuth): Promise<void> {
+  try {
+    const { stdout } = await git(dir, ['merge-base', 'HEAD', `origin/${branch}`]);
+    if (stdout.trim()) return; // healthy
+  } catch { /* no merge base → grafted, fall through */ }
+  const { stdout: shallow } = await git(dir, ['rev-parse', '--is-shallow-repository']).catch(() => ({ stdout: 'false' }) as any);
+  if (shallow.trim() !== 'true') return; // complete repo; --unshallow would error
+  log.warn({ dir, branch }, 'checkout history is grafted (old --depth=1 fetch) — unshallowing to repair');
+  await git(dir, ['fetch', '--unshallow', 'origin', branch], auth);
+}
+
 // Prepare a checkout for a run, keyed by chatId. If the dir already exists
 // (a prior run of this chat), REUSE it. Otherwise a fresh shallow clone. The dir
 // is kept after the run (the TTL sweeper reclaims old ones) so a re-run can
 // reuse it.
 //
-// ── Catching up is `merge --ff-only`, NOT `reset --hard` ─────────────────────
+// ── Catching up is `fetch` then a GUARDED `reset --hard` ────────────────────
 //
-// This used to fetch + `reset --hard origin/<branch>` + `clean -fd` on reuse, to
-// guarantee a pristine start. But a turn's work is only safe once it is PUSHED,
-// and the push happens after the agent has already replied — so a second Telegram
-// message arriving in that window starts a new run, and step one of a new run
-// deleted the previous turn's work before it ever reached GitHub. Silently: the
-// checkout is the only copy of it, and reset --hard leaves no trace of what it
-// removed. `clean -fd` did the same to untracked files.
+// The fetch carries NO `--depth`. That flag belongs on the initial clone, where
+// it is the whole saving; on a fetch into an existing checkout it saves nothing
+// (a fetch only ever transfers objects we don't have — measured at 3 for a
+// one-file change in a 200-file repo) and it re-grafts the remote branch as a
+// disconnected root. That is not a subtle cost: with it, git refuses every
+// subsequent merge as "unrelated histories", so the checkout silently never
+// caught up and every push after an outside change was rejected. See
+// repairGraft above for folders already damaged that way.
 //
-// Guarding the reset with "is there anything to lose?" is the wrong shape — it
-// keeps a destructive command and adds a question that can be answered wrong
-// (shallow history makes ancestry genuinely unresolvable, and "I couldn't tell"
-// must never license a wipe). `merge --ff-only` IS the operation we actually
-// wanted: advance to the remote when we are strictly behind, and refuse — doing
-// nothing — in every other case. It cannot destroy anything, so there is no
-// question to get wrong:
+// With a connected history, "is there anything to lose?" has a real answer, so
+// `reset --hard` is safe AND is the operation we want — one round trip, no merge
+// to half-succeed, an exact match with the remote:
 //
-//   clean, already current   → no-op
-//   clean, behind            → fast-forwards, picking up desktop/other pushes
-//   local unpushed commits   → refuses, leaves them
-//   dirty tree               → keeps the edits (refuses if they'd be overwritten)
+//   clean, already current   → reset is a no-op
+//   clean, behind            → lands exactly on the remote
+//   local unpushed commits   → guard refuses, folder untouched
+//   dirty tree               → guard refuses, folder untouched
 //
-// Whatever it declines to fold in is not stranded: the turn's own `git add -A`
-// sweeps leftover work into the next commit, and checkIn's fetch+merge reconciles
-// with the remote at the end. The previous turn's changes just ride along.
+// The guard is what makes this different from the `reset --hard` + `clean -fd`
+// that was removed here earlier. THAT one was unconditional, and it deleted work
+// that had not reached GitHub yet — a turn's changes are only safe once pushed,
+// and the push happens after the agent has already replied, so a second Telegram
+// message landing in that window started a run whose first act wiped the
+// previous turn. The objection recorded at the time was that ancestry is
+// unresolvable on a shallow clone so the question can be answered wrong. That
+// was true of the code, not of git: it was unresolvable *because* the fetch
+// threw the link away.
+//
+// Nothing the guard declines to fold in is stranded: the turn's own `git add -A`
+// sweeps it into the next commit, and checkIn reconciles with the remote at the
+// end.
 //
 // The accepted cost is two agents briefly sharing one folder. That is messy — a
 // confusing commit, or git refusing a second concurrent operation — and both are
@@ -168,10 +243,25 @@ async function git(cwd: string, args: string[], auth?: GitAuth): Promise<{ stdou
 export async function prepareCheckout(
   chatId: string,
   owner: string, repo: string, branch: string, pat: string,
+  opts: { claim?: ClaimWarmCheckout } = {},
 ): Promise<string> {
   const dir = path.join(WORK_BASE, chatId);
   const auth: GitAuth = { pat, owner, repo };
-  const hasGit = await fs.access(path.join(dir, '.git')).then(() => true).catch(() => false);
+  let hasGit = await fs.access(path.join(dir, '.git')).then(() => true).catch(() => false);
+
+  // No folder yet, and the caller offered a way to get a warm one — take it if
+  // the queue has one. Purely an optimisation, and deliberately changes nothing
+  // else: a claimed folder is a checkout of this repo, so it drops into the
+  // reuse path below and gets the same fetch and the same guard as any other.
+  // If the queue is empty (or disabled, or the rename loses a race) hasGit stays
+  // false and the clone runs, exactly as it did before the queue existed.
+  //
+  // Passed IN rather than imported so this module keeps knowing nothing about
+  // the queue — which is also what keeps the two out of an import cycle, since
+  // the queue is built on the clone and refresh below.
+  if (!hasGit && opts.claim) {
+    hasGit = await opts.claim({ owner, repo, branch }, dir).catch(() => false);
+  }
 
   if (hasGit) {
     // Reuse — normalize the remote (an older checkout may still carry a
@@ -182,25 +272,73 @@ export async function prepareCheckout(
     // guard already neuters it; removing it means it isn't sitting there waiting
     // for a call that forgets the guard.
     await fs.rm(path.join(dir, '.git', 'hooks'), { recursive: true, force: true }).catch(() => {});
-    await git(dir, ['fetch', '--depth=1', 'origin', branch], auth);
-    // --no-verify: a merge can run hooks, and .git survives everything above.
-    // A refusal is an expected outcome here, not an error — see the note above.
-    await git(dir, ['merge', '--ff-only', '--no-verify', `origin/${branch}`]).catch(() => {});
+    // NO --depth here. See the note above — it is what broke every reused
+    // checkout, and it saves nothing on a fetch.
+    await git(dir, ['fetch', 'origin', branch], auth);
+    await repairGraft(dir, branch, auth);
+    if (await nothingToLose(dir, branch)) {
+      await git(dir, ['reset', '--hard', `origin/${branch}`]);
+    } else {
+      log.info({ dir, branch }, 'checkout holds unpushed work — leaving it as-is');
+    }
     return dir;
   }
 
+  await cloneFresh(dir, owner, repo, branch, pat);
+  return dir;
+}
+
+/** A brand-new shallow checkout at `dir`, ready to be worked in.
+ *
+ *  Shared with the warm-checkout queue (`checkoutPool.ts`), which needs a folder
+ *  indistinguishable from one prepareCheckout made — including the commit
+ *  identity, which only ever got set on the clone path. A queued folder missing
+ *  it would fail at `git commit` after the agent had already replied. */
+export async function cloneFresh(
+  dir: string, owner: string, repo: string, branch: string, pat: string,
+): Promise<void> {
+  const auth: GitAuth = { pat, owner, repo };
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(dir), { recursive: true });
+  // --depth=1 belongs HERE and only here: on the initial clone it is the whole
+  // saving. On a later fetch it severs history — see prepareCheckout.
   await exec('git', [...guards(auth), 'clone', '--depth=1', '--branch', branch, remoteUrl(owner, repo), dir], {
     maxBuffer: 32 * 1024 * 1024,
     env: gitEnv(pat),
   });
   await git(dir, ['config', 'user.name', 'Shockwave Cron']);
   await git(dir, ['config', 'user.email', 'cron@shockwave.local']);
-  return dir;
 }
 
-export type CheckInResult = 'clean' | 'pushed' | 'conflict' | 'error';
+/** Bring a checkout that is KNOWN to hold nothing of its own exactly up to the
+ *  remote. Unguarded on purpose — the queue's folders have never been worked in,
+ *  so there is nothing to weigh. Anything a user or agent has touched goes
+ *  through prepareCheckout instead, which asks first. */
+export async function refreshPristine(
+  dir: string, owner: string, repo: string, branch: string, pat: string,
+): Promise<void> {
+  const auth: GitAuth = { pat, owner, repo };
+  await git(dir, ['fetch', 'origin', branch], auth);
+  await git(dir, ['reset', '--hard', `origin/${branch}`]);
+}
+
+// 'conflict' means the tree holds unresolved markers — something the git-fixer
+// can actually work on. 'diverged' means the merge could not START (no common
+// history, or it would clobber local changes): nothing is conflicted, so the
+// fixer has nothing to resolve, its "clean tree, no markers" check passes on
+// arrival, and it reports success while the same push fails again. One status
+// for both is how that hid — see checkInWithFixer, which hands off only on
+// 'conflict'.
+export type CheckInResult = 'clean' | 'pushed' | 'conflict' | 'diverged' | 'error';
+
+/** Did the work reach GitHub? The ONE place that decides, so adding a failure
+ *  status can't miss a caller. Every call site used to spell out
+ *  `=== 'conflict' || === 'error'`, which is a list that has to be edited in
+ *  three files every time the set grows — and a missed one reads a failure as a
+ *  success and says nothing. */
+export function landed(r: CheckInResult): boolean {
+  return r === 'clean' || r === 'pushed';
+}
 
 // Deterministic check-in. add -A; nothing staged → clean. Else commit, fetch,
 // merge if the remote moved, push. One mechanical merge retry on non-fast-forward.
@@ -248,7 +386,13 @@ export async function syncAndPush(dir: string, branch: string, auth: GitAuth): P
               log.warn({ dir, branch, files: unmerged.trim().split('\n') }, 'merge conflict — handing off');
               return 'conflict';
             }
-            log.warn({ dir, branch, err: errStr(e) }, 'merge failed without unmerged files — pushing anyway');
+            // The merge never started. We are behind and cannot fold the remote
+            // in, so the push below is guaranteed to be rejected — it used to be
+            // attempted anyway ("pushing anyway"), burning the retry loop and
+            // then reporting 'conflict', which sent a git-fixer run at a tree
+            // with nothing wrong in it. Report it as itself instead.
+            log.error({ dir, branch, err: errStr(e) }, 'merge could not start — local and remote have diverged');
+            return 'diverged';
           }
         }
         // --no-verify belts the hooksPath guard: two independent things would both

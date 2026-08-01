@@ -49,10 +49,26 @@ services:
       # boot. Not looked up at runtime: the installer already resolves it to print
       # your Server URL, and the certificate must match the address you type.
       COMPANION_HOST: ${COMPANION_HOST:-}
-      # pi's per-run scratch (working copies of each chat's session file). On a
-      # volume so a rebuild doesn't throw them away — losing them is survivable
-      # (they're rebuilt from the stored transcript) but it's a needless refetch.
+      # Everything the agent works in, on a volume so a rebuild doesn't throw it
+      # away: pi's per-run scratch (runs/), inbound attachments (files/), the
+      # workspace checkouts (work/) and the warm-checkout queue (pool/).
+      #
+      # The checkouts used to sit in the container's temp dir instead — the one
+      # thing here that is expensive to rebuild was the one thing not kept — so
+      # every restart and every remote upgrade made the next message in every
+      # chat re-clone. They're derived from this path now (api/src/git.ts), so
+      # there is no second variable to set.
       AGENT_DATA_DIR: /data/agent
+      # pi's Anthropic prompt cache. The default tier expires 5 minutes after the
+      # last message, which is shorter than the gaps in an ordinary Telegram
+      # conversation — so most turns re-read the whole system prompt and the
+      # entire history from scratch. `long` holds it for an hour.
+      #
+      # The trade is asymmetric, which is why it's on: a cache write costs 2x
+      # base instead of 1.25x, but that applies only to the one new message,
+      # while a miss reprocesses everything before it — and that grows with the
+      # conversation. Read by pi-ai directly from the environment.
+      PI_CACHE_RETENTION: long
       # Where POST /update drops the requested release tag for the updater
       # sidecar (shared volume; the sidecar polls it).
       UPDATE_TRIGGER_DIR: /trigger

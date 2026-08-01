@@ -42,7 +42,7 @@ Six services (postgres, api, traefik-config, traefik, updater, autoheal):
 
 > **Add subcommands to `host/shockwave`; never add a second file to `/usr/local/bin`.** This used to be one generated script per command, each written by `install.sh` from a heredoc and symlinked separately. Those scripts existed nowhere but inside the installer, and upgrades only fetch a fixed file list — so no upgrade could ever deliver them. A box installed before a command existed simply never had it, with no way to find out but typing it. Now the symlink's target path never changes, so replacing one file IS the update, and `apply.sh` never needs to write outside the install dir (it can't: `watch.sh` mounts only that dir into the helper). `tests/hostArtifacts.test.js` pins all of it — one symlink in `install.sh`, none in `apply.sh`, and every file `install.sh` fetches must also be in `apply.sh`'s `FILES`.
 
-**Env (`.env`, see `.env.example`):** required `POSTGRES_PASSWORD`, `MASTER_KEY` (32 bytes base64 — validated at boot, process exits if missing/wrong length), `API_KEY` (bearer token; the server stores only its SHA-256 hash). `COMPANION_HOST` — this server's public address, **written by the installer** and required in self-signed mode (the certificate is issued for it at boot). Optional `COMPANION_DOMAIN` (domain or ngrok host; empty ⇒ self-signed mode), `COMPANION_CERT_EMAIL` (Let's Encrypt expiry warnings), plus tunables `PORT`, `CRON_ENABLED`, `CRON_REFRESH_SCHEDULE`. (The per-run watchdog and the working-dir TTL used to be env here; they are now the synced settings `codingAgent.maxRunMinutes` / `codingAgent.scratchTtlDays`, so the desktop can set them and the desktop's own scratch cleanup expires on the same number.) `api/.env` is git-ignored — never commit it.
+**Env (`.env`, see `.env.example`):** required `POSTGRES_PASSWORD`, `MASTER_KEY` (32 bytes base64 — validated at boot, process exits if missing/wrong length), `API_KEY` (bearer token; the server stores only its SHA-256 hash). `COMPANION_HOST` — this server's public address, **written by the installer** and required in self-signed mode (the certificate is issued for it at boot). Optional `COMPANION_DOMAIN` (domain or ngrok host; empty ⇒ self-signed mode), `COMPANION_CERT_EMAIL` (Let's Encrypt expiry warnings), plus tunables `PORT`, `CRON_ENABLED`, `CRON_REFRESH_SCHEDULE`. `PI_CACHE_RETENTION: long` is set in compose and read by pi-ai straight from the environment: its default holds the Anthropic prompt cache for 5 minutes after the last message, which is shorter than the gaps in an ordinary Telegram conversation, so most turns re-read the whole system prompt and history from scratch. The trade is asymmetric — a cache write costs 2× base instead of 1.25×, but that applies only to the one new message, while a miss reprocesses everything before it and that grows with the conversation. (The per-run watchdog and the working-dir TTL used to be env here; they are now the synced settings `codingAgent.maxRunMinutes` / `codingAgent.scratchTtlDays`, so the desktop can set them and the desktop's own scratch cleanup expires on the same number.) `api/.env` is git-ignored — never commit it.
 
 > **An IP in `COMPANION_DOMAIN` is normalized to `COMPANION_HOST`, in three places.** The two variables are one thing — this server's address — split by which TLS mode you want, and nothing checked that the value suited the variable. An IP in the domain slot took the worst path available: `settleTls` deletes the self-signed certificate because a real one is supposedly coming, Let's Encrypt can never issue for a bare IP so none arrives, and Traefik falls back to the throwaway certificate it regenerates at **every startup** — a new fingerprint for every desktop to approve after every restart, which is how you teach someone to click through the one prompt that catches a real attack. An IP can only mean self-signed, so `normalizeTlsEnv` (`server.ts`, before any reader), `gen-router.sh` (different container, can't see the first), and `install.sh --domain=` all map it to the host and say so. The check rejects non-IP characters first so a hostname that merely starts like one (`10.0.0.1.nip.io`) keeps its real certificate.
 
@@ -72,10 +72,11 @@ One pino root; every subsystem logs through `logger(sub)` — a child with a `su
 - `feed.ts` — in-memory ephemeral SSE pub/sub, ONE global channel (not per chat). A desktop can't subscribe per chat: the point is to hear about turns it doesn't know exist yet (Telegram, cron, another machine). Every event carries its `chatId`, so the client routes. Never stored — it mirrors what the `message` table already holds, so a client that misses events re-reads with `?after=`.
 - `scheduler.ts` — croner scheduler: one fire-cron per `cron.json` entry + a refresh cron that reconciles registrations non-destructively (ETag).
 - `cronRun.ts` — executes one cron run: checkout → agent turn (stream to feed) → deterministic check-in (git-fixer on conflict).
-- `git.ts` — server-side git CLI: `prepareCheckout` (reuse-or-shallow-clone), `checkIn` (add/commit → `syncAndPush`), `syncAndPush` (fetch/merge/push, one retry), `cleanup`. **The PAT is never in the remote URL.** `clone` and `remote set-url` both persist whatever URL they're given into `<dir>/.git/config`, and `<dir>` is the agent's own cwd for the turn — so an embedded PAT was a file the agent could read (`git remote -v`), granting write access to every repo the token covers, for `RUN_DIR_TTL_DAYS` after the run. Auth now goes through a `GITHUB_PAT` child env (`gitEnv`) answered by a credential helper passed **on the command line** — nothing on disk, same mechanism as the desktop's `src/main/sync.ts`. Existing checkouts predating this still hold the old URL — `prepareCheckout` rewrites it on reuse, but wipe `WORK_BASE` on deploy to be sure. **Every PAT-carrying call also gets `guards()`** — see the boxed rule below.
+- `git.ts` — server-side git CLI: `prepareCheckout` (claim-or-reuse-or-shallow-clone), `cloneFresh`/`refreshPristine` (shared with the checkout queue), `checkIn` (add/commit → `syncAndPush`), `syncAndPush` (fetch/merge/push, one retry), `landed`, `cleanup`. **`WORK_BASE` is `DATA_BASE/work`** — on the `agent-data` volume beside `runs/` and `files/`. It used to read a `CRON_WORK_DIR` env var that was set nowhere, so it fell back to the container's temp dir: the one thing here expensive to rebuild was the only one not kept, and every restart or `POST /update` made the next message in every chat re-clone. Derived from `DATA_BASE` now, so there is no variable to forget. **The PAT is never in the remote URL.** `clone` and `remote set-url` both persist whatever URL they're given into `<dir>/.git/config`, and `<dir>` is the agent's own cwd for the turn — so an embedded PAT was a file the agent could read (`git remote -v`), granting write access to every repo the token covers, for `RUN_DIR_TTL_DAYS` after the run. Auth now goes through a `GITHUB_PAT` child env (`gitEnv`) answered by a credential helper passed **on the command line** — nothing on disk, same mechanism as the desktop's `src/main/sync.ts`. Existing checkouts predating this still hold the old URL — `prepareCheckout` rewrites it on reuse, but wipe `WORK_BASE` on deploy to be sure. **Every PAT-carrying call also gets `guards()`** — see the boxed rule below.
 - `gitFixer.ts` — LLM tool-loop (single `run_git` tool) that recovers merge conflicts and independently verifies the tree is clean with no surviving markers — trusting nothing the model claims. Retries up to `codingAgent.maxFixAttempts` (unset ⇒ 3), bounded overall by `codingAgent.maxRunMinutes`. It holds **no credentials**: it resolves and commits locally, and the caller pushes afterwards via `syncAndPush`. Deliberate — `run_git` is a model-controlled shell running over conflict text that came from outside, which is the last place a PAT should be reachable. Also exports **`checkInWithFixer`** — see the boxed rules below.
 - `github.ts` — `fetchCronJson` over the GitHub Contents API, ETag-conditional (304 = unchanged, free).
-- `sweeper.ts` — boot + hourly TTL sweep of per-run working dirs (checkouts + pi scratch), keyed by mtime.
+- `sweeper.ts` — boot + hourly TTL sweep of per-run working dirs (checkouts + pi scratch), keyed by mtime. Sweeps `work/`, `runs/` and `files/`; the queue's `pool/` is a sibling it deliberately does not touch (the tick owns those).
+- `checkoutPool.ts` — the warm-checkout queue. See "Starting a new chat shouldn't begin with a download" below.
 - `telegram/webhook.ts` — connect/disconnect/status + the webhook handler and out-of-band turn runner.
 - `telegram/commands.ts` — the slash commands (`/help`, `/new`, `/chats`, `/chat n`, `/workspaces`, `/workspace n`, `/status`, `/btw`) + `BOT_COMMANDS` + `activeWorkspace`. Answer in-chat, run no turn.
 - `telegram/btw.ts` — `/btw <question>`: one short model call over the chat's stored messages. Not a turn — it never steers, never joins the conversation, touches no files, and works WHILE a job is running (which is the point). It can see an in-flight job only because messages are stored as pi completes each one.
@@ -116,22 +117,62 @@ Which is exactly what happened. Telegram ran `checkIn(...).catch(() => {})` — 
 
 **A third agent path must call `checkInWithFixer` too.** The turn is the part that differs between callers (prompt source, event sink, `unattended`, one-time-job disposal); landing the work is not.
 
-### Reusing a checkout: `merge --ff-only`, never `reset --hard`
+### Reusing a checkout: `fetch` (no `--depth`) then a GUARDED `reset --hard`
 
-`prepareCheckout` reuses a folder keyed by chatId. It used to bring it to a pristine state with `reset --hard origin/<branch>` + `clean -fd`. **That deleted work that had not reached GitHub yet.** A turn's changes are only safe once pushed, and the push happens *after* the agent has replied — so a second Telegram message landing in that window starts a new run whose first act wiped the previous turn's work. Silently: the checkout is the only copy.
+**`--depth=1` belongs on the clone and NOWHERE else.** On the initial clone it is the whole saving. On a fetch into an existing checkout it saves nothing — a fetch only ever transfers objects we don't already have (measured: 3, for a one-file change in a 200-file repo) — and it rewrites `.git/shallow` so the remote branch arrives as its own root commit with no link to what we hold.
 
-Guarding the reset with a "is there anything to lose?" test is the wrong shape — it keeps a destructive command and adds a question that can be answered wrong (shallow history makes ancestry genuinely unresolvable, and *I couldn't tell* must never license a wipe). **`git merge --ff-only` is the operation that was actually wanted**: advance when strictly behind, refuse — changing nothing — otherwise.
+That flag was on the reuse fetch, and it broke every reused checkout:
+
+```
+reuse:   fetch --depth=1 + merge --ff-only   → fatal: refusing to merge unrelated histories  (swallowed)
+         the agent then reads a stale tree
+checkIn: behind=1 → merge                    → fatal: refusing to merge unrelated histories
+         no unmerged files → "pushing anyway" → push rejected, non-fast-forward
+         3 retries, all identical             → 'conflict'
+```
+
+The user is told the save failed while the work sits in the folder. It fires whenever anything else pushes between two turns of the same chat — the desktop syncing, another chat, a cron job. A checkout that only ever pushes its own commits stays healthy, which is why it wasn't constant.
+
+**Dropping the flag does not repair a folder already grafted** — the break is written into the repository, and a plain fetch cannot heal it. Only `git fetch --unshallow` can. `repairGraft` detects it with `git merge-base HEAD origin/<branch>`: a healthy shallow checkout still reports a common commit, a grafted one reports nothing. Healthy folders skip it; a repaired one never enters it again.
+
+With a connected history, *"is there anything to lose?"* has a real answer — so `reset --hard` is both safe and the operation actually wanted: one round trip, nothing that can half-succeed, an exact match with the remote.
 
 | state | outcome |
 |---|---|
-| clean, already current | no-op |
-| clean, behind | fast-forwards, picking up desktop/other pushes |
-| local unpushed commits | refuses, leaves them |
-| dirty tree | keeps the edits (refuses if they'd be overwritten) |
+| clean, already current | reset is a no-op |
+| clean, behind | lands exactly on the remote |
+| local unpushed commits | `nothingToLose` refuses, folder untouched |
+| dirty tree | `nothingToLose` refuses, folder untouched |
 
-Nothing it declines to fold in is stranded: the turn's own `git add -A` sweeps leftover work into the next commit, and `checkIn`'s fetch+merge reconciles with the remote at the end.
+**The guard is the whole difference** from the unconditional `reset --hard` + `clean -fd` that was removed here earlier — that one deleted work which hadn't reached GitHub, because a turn's changes are only safe once pushed and the push happens *after* the agent has replied. The objection recorded at the time was that shallow history makes ancestry unresolvable so the question can be answered wrong. **That was true of the code, not of git**: it was unresolvable *because* the fetch threw the link away. `nothingToLose` returns false on any error, so "I couldn't tell" still never licenses a wipe.
 
-**The accepted cost is two agents briefly sharing one folder** — a confusing commit, or git refusing a concurrent operation. Both are loud and recoverable, which a deleted file is not. That trade is deliberate: the fixer's prompt tells it files may appear mid-resolution and to fold them in. Pinned by `tests/checkoutReuse.test.js` against real git.
+Nothing the guard declines to fold in is stranded: the turn's own `git add -A` sweeps it into the next commit, and `checkIn` reconciles with the remote at the end.
+
+**The accepted cost is two agents briefly sharing one folder** — a confusing commit, or git refusing a concurrent operation. Both are loud and recoverable, which a deleted file is not. That trade is deliberate: the fixer's prompt tells it files may appear mid-resolution and to fold them in. Pinned by `tests/checkoutReuse.test.js` against real git — **which clones shallow**, because it used to clone full and therefore passed throughout the entire life of the bug.
+
+### `'diverged'` is not `'conflict'` — the fixer can only fix one of them
+
+`syncAndPush` returns `'conflict'` when the merge left markers in the tree: something `gitFix` can work on. It returns **`'diverged'`** when the merge could not START (no common history, or it would clobber local changes). Nothing is conflicted then, so the fixer's `verify` — clean tree, no markers — passes the moment it arrives, it reports success without doing anything, and `checkInWithFixer` retries the same doomed push. One status for both is how that hid; `checkInWithFixer` hands off only on `'conflict'`.
+
+**Ask `landed(result)`, never `=== 'conflict' || === 'error'`.** That spelled-out list lived in three files, and a missed one reads a failure as a success and says nothing.
+
+### Starting a new chat shouldn't begin with a download (`checkoutPool.ts`)
+
+A chat's first message used to pay for a full clone while the user waited. The queue keeps one cloned ahead of time, and **a folder's LOCATION is its state**:
+
+```
+pool/setup/<owner>__<repo>__<branch>__<uuid>   being cloned — never read
+pool/ready/<owner>__<repo>__<branch>__<uuid>   complete, usable
+work/<chatId>                                  claimed; a chat owns it
+```
+
+Every move is a rename, and always forward. No marker file, no status column, nothing that can disagree with the disk — a clone that dies halfway is stranded in `setup/` and *cannot* be mistaken for usable, because being in `ready/` is what usable means. Renames are also what make it safe without a lock: `rename` is atomic within one filesystem, so two chats claiming at once cannot get the same folder — one wins, the other gets ENOENT and takes the next or clones. **All three directories live under `DATA_BASE` for exactly this reason**; across filesystems `rename` fails and the property is gone.
+
+**Claiming is the only thing a turn does, and it has no side effects.** Restocking, refreshing and cleaning are one per-minute tick that reconciles the directory to the target, so a turn is never slowed by maintenance and the queue can be reasoned about on its own. Every failure path degrades to a normal clone.
+
+**Telegram only.** `prepareCheckout` takes the claim as an argument (`opts.claim`) rather than importing the queue — which also keeps the two out of an import cycle, since the queue is built on `cloneFresh`/`refreshPristine`. Cron doesn't pass it: it fires far more often than a new chat starts, so letting it claim would mean the folder is usually gone when a person needs one, and nothing waits on a scheduled run.
+
+`codingAgent.checkoutPoolSize` (unset ⇒ 1, 0 disables) and `codingAgent.checkoutPoolRefreshMinutes` (unset ⇒ 60). Refreshing a queued folder uses `refreshPristine` — an *unguarded* `reset --hard`, legitimate only because these folders have never been worked in. Anything a user or agent has touched goes through `prepareCheckout`, which asks first. Claim semantics are pinned by `tests/checkoutPool.test.js`.
 
 ### The fixer is bounded by time and attempts, not tool calls
 
@@ -205,6 +246,16 @@ Do **not** add a defaults object or seed default rows. The desktop learned this 
 **Webhook (`handleWebhook`):** account enabled? → secret-token header timing-safe-checked (403 on mismatch) → sender must be `authorizedTgUserId` (single user, DM-only; unknown senders silently 200) → `markTelegramUpdate` dedups retries → **fast-ack 200**, then run the turn out-of-band.
 
 **Concurrency — a second message while the agent is working.** The chat is marked busy for the whole job. A message arriving meanwhile is relayed into the RUNNING turn (pi delivers it at its next step), acknowledged with `⌛ Got it — after I finish the last task.` replied under the offending message, and then the handler **returns**. It must not fall through to the finish-up steps: those belong to the turn still in flight, and running them early committed half-edited files and abandoned the first reply mid-sentence. `agent-core` checks for a steer BEFORE validating provider/model, so the relay can pass none.
+
+**Two halves of a turn run at once.** Resolving the message (downloading a voice note and transcribing it, or fetching attachments) needs no workspace; getting the workspace ready needs no message. Run in sequence they add up — transcription is seconds of network and so is a clone — so `runTurn` starts `prepareRun` (workspace, PAT, checkout, and for an EXISTING chat the pi session boot) alongside `resolveInput` and joins them before prompting. Three rules make it legal:
+
+- **A `/command` never fans out.** It's answered from the database and runs no turn, so it must not drag a checkout behind it. Decided from the raw message (`typedTextOf`) *before* `resolveInput` runs — which is the point. A voice note or file is never a command.
+- **A busy chat is never prepared.** Its session is live and owns its event sink; preparing would re-point `emit` mid-reply, the bug that once froze a reply half-written. Checked before the fan-out **and again after the join**, because with both sides running the turn can start during the window.
+- **Failures are held, not thrown** (`settle`). An unhandled rejection while the other side is still working takes the process down.
+
+The pi session is pre-booted **only for a chat that already exists**. Booting also creates the chat row, and a row whose transcript never arrived — because the transcription came back empty and no turn ran — is a chat that refuses to resume once its scratch dir ages out. An existing chat has both already, and is where the pre-boot is worth most anyway (resuming downloads and parses the transcript). `agentPrepare` lives in `agent-core`.
+
+**The typing indicator starts at the ack**, owned by `runTurn` for the whole turn. It used to come from `makeTelegramSink`, built *after* the checkout — so a plain text message left the user watching an empty chat through the slowest part of the turn. `stream.ts` no longer starts one.
 
 **Turn (`runTurn` → `runTurnInner`):** `runTurn` wraps the inner run in try/catch so **any failure replies in-chat** (`⚠️ Something went wrong running the agent:\n<message>`) and then rethrows for server logging — a silent failure reads as the bot ignoring you. `runTurnInner` handles `/new`,`/status`,`/help`; picks the workspace via `activeWorkspace` (in-chat error only when no workspaces exist); requires `sync.pat` (in-chat error if absent); `prepareCheckout` clones/refreshes via `git.ts`; runs `runtime.agentSend` under a `codingAgent.maxRunMinutes` watchdog (unset ⇒ 30); dual-publishes each event to the `feed` (desktop watches live) and the Telegram sink; then lands the work via `checkInWithFixer` — the same path cron uses, git-fixer included — and reports a `'conflict'`/`'error'` result in-chat. `source: 'telegram'`, `sourceId` = DM chat id.
 

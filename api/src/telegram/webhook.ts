@@ -13,7 +13,8 @@ import type { DB } from '../db.js';
 import { getDb } from '../db.js';
 import * as store from '../store.js';
 import * as feed from '../feed.js';
-import { prepareCheckout, type GitAuth } from '../git.js';
+import { prepareCheckout, landed, type GitAuth } from '../git.js';
+import { claimCheckout } from '../checkoutPool.js';
 import { checkInWithFixer } from '../gitFixer.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
@@ -160,8 +161,15 @@ async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msgs: any[
   const db = getDb(pool);
   const dm = acc.dmChatId as number;
   const msg = msgs[0];
+  let stopTyping = () => { /* nothing started yet */ };
   try {
     const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'));
+    // Say we're here BEFORE doing any of the work. The first sign of life used
+    // to come from makeTelegramSink, which is built after the workspace checkout
+    // — so on a plain text message the user watched an empty chat through a
+    // clone and a session boot, with nothing to say whether the bot had even
+    // received it.
+    stopTyping = startTyping(client, dm);
     // Attachments land in the chat's own staging dir, so saving one needs the chat
     // to exist. Minting it lazily keeps `/help` and friends from creating a chat
     // just by being typed — they never carry a file.
@@ -170,14 +178,108 @@ async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msgs: any[
       if (!chatId) { chatId = crypto.randomUUID(); await store.setTelegramActiveChat(db, chatId); }
       return chatId;
     };
+
+    // A command is answered from the database and runs no turn, so it must not
+    // drag a checkout in behind it. Read from the raw message rather than from
+    // resolveInput's result, because the decision has to be made BEFORE that
+    // runs — which is the whole point of starting the two sides together. A
+    // voice note or a file is never a command.
+    const typed = typedTextOf(msgs);
+    const isCommand = typed.startsWith('/');
+    // A chat with a turn in flight is joined, not started: its session is live
+    // and owns its own event sink, so preparing would re-point it mid-reply.
+    const alreadyRunning = !!chatId && busy.has(chatId);
+
+    // Both sides start here. Failures are captured rather than thrown, so an
+    // unhandled rejection can't escape while the other side is still working.
+    const prep = isCommand || alreadyRunning
+      ? null
+      : settle(prepareRun(db, key, runtime, dm, getChatId));
+
     const input = await resolveInput(db, key, client, dm, getChatId, msgs);
-    if (input === null) return; // nothing usable (already told the user why)
-    await runTurnInner(db, key, runtime, acc, client, dm, getChatId, input, msg);
+    if (input === null) { await prep; return; } // nothing usable (already told the user why)
+
+    if (isCommand) { await handleCommand(db, key, client, dm, input.text, isBusy); return; }
+
+    if (alreadyRunning && chatId) { await relayToRunningTurn(db, runtime, client, dm, chatId, input, msg); return; }
+
+    const ready = await prep!;
+    if (!ready.ok) throw ready.error;
+    if (isRefusal(ready.value)) { await client.sendMessage(dm, ready.value.refusal); return; }
+
+    // The turn could have STARTED while we were resolving the message — with the
+    // two sides running together that window is real, so the check has to happen
+    // again here and not only before the fan-out.
+    if (busy.has(ready.value.chatId)) {
+      await relayToRunningTurn(db, runtime, client, dm, ready.value.chatId, input, msg);
+      return;
+    }
+
+    await runTurnInner(db, key, runtime, acc, client, dm, input, msg, ready.value);
   } catch (err: any) {
     const token = await store.getTelegramSecret(db, key, 'botToken').catch(() => '');
     if (token) await new TelegramClient(token).sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
     throw err;
+  } finally {
+    stopTyping();
   }
+}
+
+// Telegram's typing indicator lasts about five seconds, so holding it means
+// re-sending it. ONE owner for the whole turn (`runTurn`'s finally), rather than
+// the stream sink starting a second one for the part it covers — overlapping
+// timers would just be duplicate API calls, and the gap before the sink existed
+// was the actual problem.
+const TYPING_INTERVAL_MS = 4000;
+
+/**
+ * Hand the message to the turn already in flight — pi picks it up at its next
+ * step — and STOP. The finish-up steps (final render, commit + push) belong to
+ * the turn that's still going: running them now would commit half-edited files
+ * and abandon the first reply mid-sentence.
+ *
+ * Images ride along: a photo sent mid-turn is part of what the user is saying,
+ * and dropping it silently is the worst of the three options.
+ *
+ * `workspaceId` is real, not blank. A steer returns from agentSend before it
+ * needs a workspace, but `searchCtx` — what scopes the agent's `search_chats`
+ * to this workspace — is assigned BEFORE that early return, so an empty value
+ * would silently unscope the search tool for the turn that is still running.
+ */
+async function relayToRunningTurn(
+  db: DB, runtime: any, client: TelegramClient, dm: number,
+  chatId: string, input: ResolvedInput, msg: any,
+) {
+  const ws = await activeWorkspace(db);
+  await client.sendMessage(dm, '⌛ Got it — after I finish the last task.', { replyToMessageId: msg?.message_id });
+  await runtime.agentSend(
+    { chatId, text: input.text, images: input.images, workspaceId: ws?.id ?? '', workspacePath: '', provider: '', model: '', apiKey: '' },
+    () => { /* the running turn owns its own sink */ },
+  ).catch(() => { /* the running turn owns error reporting */ });
+}
+
+/** What the user typed, before any file or audio is resolved. Telegram puts the
+ *  caption on whichever album item carried it, so take the first one present. */
+function typedTextOf(msgs: any[]): string {
+  return msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
+}
+
+/** Run a promise to completion and report which way it went.
+ *
+ *  Two things are started together here and only joined later, so a rejection
+ *  has to be held rather than thrown — an unhandled rejection while the other
+ *  side is still running takes the process down under Node's default. */
+type Settled<T> = { ok: true; value: T } | { ok: false; error: any };
+
+function settle<T>(p: Promise<T>): Promise<Settled<T>> {
+  return p.then((value) => ({ ok: true as const, value }), (error) => ({ ok: false as const, error }));
+}
+
+function startTyping(client: TelegramClient, dm: number): () => void {
+  const ping = () => { client.sendChatAction(dm).catch(() => { /* best-effort */ }); };
+  ping();
+  const timer = setInterval(ping, TYPING_INTERVAL_MS);
+  return () => clearInterval(timer);
 }
 
 // Every file-bearing field Telegram can put on a message, in the order we prefer
@@ -224,9 +326,9 @@ async function resolveInput(
   db: DB, key: Buffer, client: TelegramClient, dm: number,
   getChatId: () => Promise<string>, msgs: any[],
 ): Promise<ResolvedInput | null> {
-  // Telegram puts the caption on whichever album item carried it, so take the
-  // first one present rather than assuming the first message.
-  const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
+  // The same read runTurn used to decide whether this is a command — one
+  // function, so the two can't disagree about what the user typed.
+  const typed = typedTextOf(msgs);
 
   const settings = await store.readSettings(db, key);
   const tr = settings?.transcription;
@@ -238,7 +340,6 @@ async function resolveInput(
       await client.sendMessage(dm, "That audio is over Telegram's 20 MB limit for bots, so I can't fetch it.");
       return null;
     }
-    await client.sendChatAction(dm, 'typing').catch(() => {});
     const transcript = await transcribeAudio(tr?.apiKey, await client.downloadFile(voice.file_id), tr?.provider);
     if (transcript === null) {
       await client.sendMessage(dm, '🎤 Voice transcription is not set up — add an AssemblyAI key in the desktop app under Transcription.');
@@ -264,7 +365,6 @@ async function resolveInput(
     return null;
   }
 
-  await client.sendChatAction(dm, 'typing').catch(() => {});
   const attachments: CachedAttachment[] = [];
   for (const { file, kind } of pending) {
     if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
@@ -309,39 +409,57 @@ async function modelSeesImages(settings: any): Promise<boolean> {
   }
 }
 
-async function runTurnInner(
-  db: DB, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number,
-  getChatId: () => Promise<string>, input: ResolvedInput, msg: any,
-) {
-  const { text, images } = input;
-  if (text.startsWith('/')) { await handleCommand(db, key, client, dm, text, isBusy); return; }
+/** Everything a turn needs that does NOT depend on what the user said. */
+interface PreparedRun {
+  ws: any; chatId: string; dir: string; auth: GitAuth;
+  ca: any; apiKey: string; wsBuiltinSkills: Record<string, any>;
+  /** Carried rather than re-read: the settings read happens in prepareRun, which
+   *  now runs on the other side of the fan-out from the turn that needs this. */
+  timezone: string | undefined;
+}
 
+/** A reason to stop, phrased for the user. Returned rather than thrown so the
+ *  caller reports it in chat instead of it surfacing as "something went wrong". */
+interface PrepareRefusal { refusal: string }
+
+const isRefusal = (r: PreparedRun | PrepareRefusal): r is PrepareRefusal => 'refusal' in r;
+
+/**
+ * Get the workspace ready and boot the agent — the half of a turn that needs
+ * none of the message.
+ *
+ * Split out so it can run WHILE the message is still being resolved. A voice
+ * note is seconds of transcription and a file is a download, and this side is a
+ * git fetch plus a session boot; run in sequence they add up, run together the
+ * slower one is the whole wait. Nothing here reads the text, which is what makes
+ * that legal.
+ *
+ * The pi session is only pre-booted for a chat that ALREADY EXISTS. Booting also
+ * creates the chat row (`upsertChat`), and a row whose transcript never arrived
+ * — because the transcription came back empty and no turn ever ran — is a chat
+ * that refuses to resume once the scratch dir ages out. An existing chat has
+ * both already, so there is nothing to leave half-made; and it is the case the
+ * pre-boot is worth most in, since resuming downloads and parses the transcript.
+ */
+async function prepareRun(
+  db: DB, key: Buffer, runtime: any, dm: number, getChatId: () => Promise<string>,
+): Promise<PreparedRun | PrepareRefusal> {
   const ws = await activeWorkspace(db);
-  if (!ws) { await client.sendMessage(dm, '⚠️ No workspaces exist yet — add one in the desktop app first.'); return; }
-
-  const chatId = await getChatId();
-
-  // Already working on this chat? Hand the message to the running turn — pi picks
-  // it up at its next step — and STOP. The finish-up steps below (final render,
-  // commit + push) belong to the turn that's still going: running them now would
-  // commit half-edited files and abandon the first reply mid-sentence.
-  //
-  // Images ride along: a photo sent mid-turn is part of what the user is saying,
-  // and dropping it silently is the worst of the three options.
-  if (busy.has(chatId)) {
-    await client.sendMessage(dm, '⌛ Got it — after I finish the last task.', { replyToMessageId: msg?.message_id });
-    await runtime.agentSend({ chatId, text, images, workspaceId: ws.id, workspacePath: '', provider: '', model: '', apiKey: '' }, () => {})
-      .catch(() => { /* the running turn owns error reporting */ });
-    return;
-  }
+  if (!ws) return { refusal: '⚠️ No workspaces exist yet — add one in the desktop app first.' };
 
   const pat = await store.getSecret(db, key, 'settings', 'sync.pat');
-  if (!pat) { await client.sendMessage(dm, '⚠️ No GitHub token is configured on the server.'); return; }
+  if (!pat) return { refusal: '⚠️ No GitHub token is configured on the server.' };
+
+  const chatId = await getChatId();
+  const existing = await store.getChat(db, chatId);
   // Carried together so every network git call is pinned to THIS repo — the URL
   // is set from it on the command line rather than read from a .git/config the
   // agent can rewrite. See guards() in git.ts.
   const auth: GitAuth = { pat, owner: ws.repoOwner, repo: ws.repoName };
-  const dir = await prepareCheckout(chatId, ws.repoOwner, ws.repoName, ws.defaultBranch, pat);
+  // `claim` is what makes a NEW chat start from a folder that was cloned ahead
+  // of time instead of downloading one now. Telegram passes it and cron doesn't
+  // — see checkoutPool.ts.
+  const dir = await prepareCheckout(chatId, ws.repoOwner, ws.repoName, ws.defaultBranch, pat, { claim: claimCheckout });
 
   const settings = await store.readSettings(db, key);
   process.env.TZ = settings.timezone || 'UTC';   // optional setting → fallback at point of use
@@ -349,6 +467,28 @@ async function runTurnInner(
   const apiKey = (ca.providerKeys ?? {})[ca.provider] ?? '';
   let wsBuiltinSkills: Record<string, any> = {};
   try { wsBuiltinSkills = JSON.parse(await fs.readFile(path.join(dir, '.shockwave', 'workspace.json'), 'utf8'))?.builtinSkills ?? {}; } catch { /* defaults */ }
+
+  if (existing) {
+    // Events during boot go to the feed only; agentSend re-points the session at
+    // the Telegram sink when the turn actually starts. A misconfiguration here
+    // surfaces from agentSend with the same message, so it is not reported twice.
+    await runtime.agentPrepare({
+      chatId, text: '', workspaceId: ws.id, workspacePath: dir,
+      provider: ca.provider, model: ca.model, apiKey,
+      baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
+      wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
+    }, feed.publish).catch(() => { /* agentSend reports it */ });
+  }
+
+  return { ws, chatId, dir, auth, ca, apiKey, wsBuiltinSkills, timezone: settings.timezone };
+}
+
+async function runTurnInner(
+  db: DB, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number,
+  input: ResolvedInput, msg: any, prepared: PreparedRun,
+) {
+  const { text, images } = input;
+  const { ws, chatId, dir, auth, ca, apiKey, wsBuiltinSkills, timezone } = prepared;
 
   // The only two folders a file may be sent from: the workspace the agent is
   // working in, and where its own attachments were saved.
@@ -375,7 +515,7 @@ async function runTurnInner(
       provider: ca.provider, model: ca.model, apiKey,
       baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
-      timezone: settings.timezone,   // same zone the scheduler evaluates cron.json in
+      timezone,   // same zone the scheduler evaluates cron.json in
     }, emit);
   } finally { clearTimeout(wd); busy.delete(chatId); }
 
@@ -389,14 +529,19 @@ async function runTurnInner(
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },
   ).catch(() => 'error' as const);
-  tlog[checkedIn === 'conflict' || checkedIn === 'error' ? 'error' : 'info'](
+  tlog[landed(checkedIn) ? 'info' : 'error'](
     { chatId, ws: ws.id, checkIn: checkedIn }, 'telegram turn finished',
   );
   // Say so in chat. This used to be `.catch(() => {})` with the result thrown
-  // away, so work that never reached GitHub looked exactly like work that did —
-  // and the next message's prepareCheckout reset --hard'd it out of existence.
-  if (checkedIn === 'conflict' || checkedIn === 'error') {
-    await client.sendMessage(dm, `⚠️ I finished, but couldn't save the changes to GitHub (${checkedIn}). The work is still in this run's checkout — say so before sending me anything else, or the next message will discard it.`).catch(() => {});
+  // away, so work that never reached GitHub looked exactly like work that did.
+  //
+  // It no longer warns that the next message will discard the work: it won't.
+  // prepareCheckout's reset is guarded on "is there anything to lose?", and a
+  // failed check-in leaves exactly that — so the folder is left alone and the
+  // next turn's `add -A` sweeps the work into its commit. Telling the user to
+  // stop typing was asking them to protect against something that can't happen.
+  if (!landed(checkedIn)) {
+    await client.sendMessage(dm, `⚠️ I finished, but couldn't save the changes to GitHub (${checkedIn}). The work is safe in this run's checkout and I'll try again on your next message.`).catch(() => {});
   }
 
   // A turn can end badly WITHOUT throwing: pi reports it as the last assistant
