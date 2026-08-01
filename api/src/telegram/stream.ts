@@ -30,6 +30,10 @@ function textOf(content: any): string {
  * checkout and its attachment staging dir. Pass none and nothing is delivered,
  * which is what a caller with no notion of either should get.
  */
+/** What an empty bubble shows. Also `flushInner`'s fallback when the text so far
+ *  cleans down to nothing (a segment that is only a file tag). */
+const PLACEHOLDER = '…';
+
 export function makeTelegramSink(client: TelegramClient, chatId: number, deliverRoots: string[] = []) {
   let text = '';            // current assistant text segment
   // Everything the agent has said THIS turn, across tool boundaries. `text` is
@@ -40,6 +44,10 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
   let messageId: number | null = null; // Telegram message being edited for this segment
   let dirty = false;
   let lastEdit = 0;
+  // True while `messageId` points at a bubble nothing has been written into yet.
+  // That bubble is a SLOT, claimed by whichever of text or a tool line renders
+  // first — see the placeholder post below and `toolLine`.
+  let placeholder = false;
 
   // Every flush is chained, and `done()` awaits the chain. Without that, the
   // first post ("H") could still be in flight when the turn ended: `done` saw
@@ -51,6 +59,23 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
   // the moment the message is acknowledged. This sink is built after the
   // checkout, so a typing indicator that began here left the user watching an
   // empty chat through the slowest part of the turn.
+
+  // Post the bubble BEFORE the agent has produced anything, so the reply has a
+  // visible home from the start and the wait for the first token happens inside
+  // a message rather than in an empty chat. It is the same bubble the text is
+  // then edited into — nothing extra is sent, the first flush just becomes an
+  // edit instead of a post, so this costs exactly one API call per turn.
+  //
+  // On the chain like every other write, so a delta that arrives before the post
+  // lands can't edit a message id we don't have yet.
+  chain = chain.then(async () => {
+    try {
+      const m = await client.sendMessage(chatId, PLACEHOLDER);
+      messageId = m?.message_id ?? null;
+      placeholder = messageId != null;
+    } catch { /* couldn't post it — fall back to the bubble being born on first flush */ }
+  });
+
   const editTimer = setInterval(() => { void flush(false); }, 1300);
 
   function flush(force: boolean): Promise<void> {
@@ -68,10 +93,16 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
     // confirming a bare path is a file needs disk, and a bare path reads as
     // ordinary prose until it's delivered anyway.
     const shown = extractMedia(text).cleaned;
-    const body = (shown.length > 4096 ? shown.slice(0, 4096) : shown) || '…';
+    const body = (shown.length > 4096 ? shown.slice(0, 4096) : shown) || PLACEHOLDER;
     try {
       if (messageId == null) { const m = await client.sendMessage(chatId, body); messageId = m?.message_id ?? null; }
       else await client.editMessageText(chatId, messageId, body);
+      // Only once a write has actually LANDED is the bubble no longer a free
+      // slot. Inside the try on purpose: a rate-limited edit leaves it claimable,
+      // and an unchanged body (text that cleaned down to `PLACEHOLDER` again)
+      // throws "message is not modified", which is precisely the case where it
+      // still holds nothing.
+      placeholder = false;
     } catch { /* rate limit / transient — the final flush will correct it */ }
   }
 
@@ -80,8 +111,19 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
   function toolLine(name: string) {
     void flush(true);         // close the current text segment first (ordering)
     chain = chain.then(async () => {
-      messageId = null; text = '';
-      try { await client.sendMessage(chatId, `${TOOL_EMOJI[name] || '🔧'} ${name}`); } catch { /* best-effort */ }
+      // The placeholder belongs to whatever renders first, and on most turns that
+      // is a tool call — the agent reads or greps before it says anything. Take
+      // the bubble over instead of posting below it, or every tool-first turn
+      // leaves a bare "…" stranded above the tool line, never updated again.
+      const slot = placeholder ? messageId : null;
+      // Reset BEFORE the await, not after: `emit` appends to `text` outside this
+      // chain, so a delta arriving mid-send would be wiped by a later reset.
+      messageId = null; text = ''; placeholder = false;
+      const line = `${TOOL_EMOJI[name] || '🔧'} ${name}`;
+      try {
+        if (slot != null) await client.editMessageText(chatId, slot, line);
+        else await client.sendMessage(chatId, line);
+      } catch { /* best-effort */ }
     }).catch(() => { /* best-effort */ });
   }
 
@@ -97,6 +139,27 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
     } else if (t === 'tool_execution_start') {
       toolLine(e.toolName || e.name || 'tool');
     }
+  }
+
+  /** Remove an unclaimed placeholder bubble. No-op once anything has written to it. */
+  async function dropPlaceholder() {
+    if (!placeholder || messageId == null) return;
+    const id = messageId;
+    messageId = null; placeholder = false;
+    await client.deleteMessage(chatId, id).catch(() => { /* best-effort */ });
+  }
+
+  /**
+   * Tear the sink down for a turn that THREW. `done()` is never reached on that
+   * path, which left two things behind: the placeholder bubble sitting above
+   * runTurn's error reply, and — already true before the placeholder existed —
+   * the edit timer running for the life of the process, one leaked interval per
+   * failed turn.
+   */
+  async function dispose() {
+    clearInterval(editTimer);
+    await chain.catch(() => { /* best-effort */ });
+    await dropPlaceholder();
   }
 
   async function done(finalMessages?: any[]) {
@@ -137,6 +200,11 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
         else await client.sendMessage(chatId, chunks[0]);
         for (const c of chunks.slice(1)) await client.sendMessage(chatId, c);
       } catch { /* best-effort */ }
+    } else {
+      // The turn said nothing and nothing ever claimed the bubble. Take it back —
+      // a bare "…" left as the entire reply reads as the bot having given up
+      // mid-sentence. Any files below still speak for themselves.
+      await dropPlaceholder();
     }
 
     // Files go after the text, so the message that explains them arrives first.
@@ -151,5 +219,5 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
     }
   }
 
-  return { emit, done };
+  return { emit, done, dispose };
 }

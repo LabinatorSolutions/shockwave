@@ -32,6 +32,19 @@ const tlog = logger('telegram');
 const busy = new Set<string>();
 const isBusy = (chatId: string) => busy.has(chatId);
 
+// Progress shown ON the voice message itself: ✍ while we're transcribing, 👍 once
+// the words are in hand and the turn is about to run. Cleared on every bail-out,
+// so a dead ✍ never outlives the message explaining what went wrong.
+//
+// WRITTEN AS ESCAPES ON PURPOSE. Telegram's allowed reaction list is a fixed set
+// of 73 emoji and NOT ONE of them carries a variation selector — the writing hand
+// is U+270D alone, never U+270D U+FE0F. A glyph pasted from an emoji picker or a
+// browser brings the selector with it, which is a different string than the one
+// Telegram accepts, and the call comes back REACTION_INVALID. An escape is the
+// one spelling an editor can't silently change.
+const REACT_TRANSCRIBING = '\u{270D}';  // ✍ writing hand, no U+FE0F
+const REACT_HEARD = '\u{1F44D}';        // 👍 thumbs up
+
 function timingSafeEqualStr(a: string, b: string): boolean {
   const ab = Buffer.from(a); const bb = Buffer.from(b);
   if (ab.length !== bb.length) return false;
@@ -332,19 +345,38 @@ async function resolveInput(
   const settings = await store.readSettings(db, key);
   const tr = settings?.transcription;
 
-  // A voice note is the message itself, not an attachment to it.
-  const voice = msgs.map((m) => m.voice).find(Boolean);
+  // A voice note is the message itself, not an attachment to it. Keep the whole
+  // message, not just its `voice` field — the reactions below go on that bubble,
+  // so we need its message_id.
+  const voiceMsg = msgs.find((m) => m.voice);
+  const voice = voiceMsg?.voice;
   if (voice && !typed) {
+    // Best-effort and awaited. Awaited because these replace each other: fired
+    // and forgotten, a ✍ that lands after the 👍 leaves the message showing the
+    // wrong state permanently. One cheap round trip against seconds of
+    // transcription is not a cost worth racing.
+    const react = (emoji?: string) =>
+      client.setMessageReaction(dm, voiceMsg.message_id, emoji).catch(() => { /* cosmetic */ });
+
     if (voice.file_size && voice.file_size > MAX_INBOUND_BYTES) {
       await client.sendMessage(dm, "That audio is over Telegram's 20 MB limit for bots, so I can't fetch it.");
-      return null;
+      return null;   // nothing started, so nothing to clear
     }
-    const transcript = await transcribeAudio(tr?.apiKey, await client.downloadFile(voice.file_id), tr?.provider);
+    await react(REACT_TRANSCRIBING);
+    const transcript = await transcribeAudio(tr?.apiKey, await client.downloadFile(voice.file_id), tr?.provider)
+      .catch(async (e) => { await react(); throw e; });
     if (transcript === null) {
+      await react();
       await client.sendMessage(dm, '🎤 Voice transcription is not set up — add an AssemblyAI key in the desktop app under Transcription.');
       return null;
     }
-    if (!transcript) { await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+    if (!transcript) {
+      await react();
+      await client.sendMessage(dm, "🎤 I couldn't make out any speech in that.");
+      return null;
+    }
+    // Heard, and the turn is about to run on these words.
+    await react(REACT_HEARD);
     // Optional: show what was heard before acting on it, so a mis-transcription is
     // distinguishable from a misunderstood instruction. Off unless switched on
     // (Settings → Transcription) — `?? false` at the point of use, since the
@@ -513,6 +545,12 @@ async function runTurnInner(
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
       timezone,   // same zone the scheduler evaluates cron.json in
     }, emit);
+  } catch (e) {
+    // `sink.done()` below is never reached on this path, so the sink has to be
+    // torn down here: otherwise its placeholder bubble is stranded above the
+    // error reply runTurn is about to send, and its edit timer runs forever.
+    await sink.dispose();
+    throw e;
   } finally { clearTimeout(wd); busy.delete(chatId); }
 
   // Only now — with the agent actually finished — is it safe to close the reply

@@ -71,7 +71,23 @@ export class TelegramClient {
     });
   }
   editMessageText(chatId: number, messageId: number, text: string) { return this.call('editMessageText', { chat_id: chatId, message_id: messageId, text }); }
+  deleteMessage(chatId: number, messageId: number) { return this.call('deleteMessage', { chat_id: chatId, message_id: messageId }); }
   sendChatAction(chatId: number, action = 'typing') { return this.call('sendChatAction', { chat_id: chatId, action }); }
+
+  /**
+   * Set (or clear) the bot's reaction on a message. Bots get ONE reaction per
+   * message and a new one replaces the old, which is what makes a progress
+   * signal possible: ✍ while we work, 👍 when it lands. Pass no emoji to clear.
+   *
+   * The emoji must be one of Telegram's fixed reaction set, spelled EXACTLY as
+   * Telegram spells it — see the note on the constants in `webhook.ts`.
+   */
+  setMessageReaction(chatId: number, messageId: number, emoji?: string) {
+    return this.call('setMessageReaction', {
+      chat_id: chatId, message_id: messageId,
+      reaction: emoji ? [{ type: 'emoji', emoji }] : [],
+    });
+  }
   setMyCommands(commands: Array<{ command: string; description: string }>) { return this.call('setMyCommands', { commands }); }
 
   // Fetch an inbound file (voice note, document, photo). Telegram's getFile caps
