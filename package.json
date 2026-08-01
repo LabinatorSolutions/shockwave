@@ -1,6 +1,6 @@
 {
   "name": "shockwave",
-  "version": "1.0.36",
+  "version": "1.0.37",
   "description": "Shockwave — markdown-vault editor",
   "type": "module",
   "main": "./out/main/index.js",
