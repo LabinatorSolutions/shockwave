@@ -78,7 +78,57 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
+      # Full history + tags: the notes below are built from the commit range
+      # between the previous version tag and this one.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Write the release notes before publishing.
+      #
+      # electron-builder creates the draft with an EMPTY body and nothing else
+      # ever filled it in, so every release through v1.0.36 has no notes at all.
+      # That's invisible on github.com (the commit list is right there) but the
+      # app's "What's new" dialog reads `body` over the API and had nothing to
+      # show.
+      #
+      # **Notes are COMMIT SUBJECTS, not GitHub's generator.** `releases/generate-
+      # notes` summarizes merged pull requests, and this repo commits straight to
+      # main — asked for v1.0.36 it returns one line, a compare link, and nothing
+      # else. The commit subjects here are already written as changelog lines
+      # ("Telegram disconnect button uses primary style"), so they ARE the notes.
+      #
+      # The previous tag comes from `git tag --sort=-v:refname` rather than
+      # `releases/latest`: at this point in the run our own release is still a
+      # draft, so "latest" happens to mean the previous one — true today and
+      # quietly wrong the first time a release doesn't get published.
+      #
+      # Best-effort on purpose (`|| true` plus the emptiness check below), so a
+      # hiccup here can never leave a fully-built release stuck as a draft.
+      # Shipping beats annotating.
+      - name: Build release notes from commits
+        run: |
+          PREV=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1) || true
+          if [ -n "$PREV" ]; then
+            {
+              echo "## What's changed"
+              echo
+              git log --no-merges --pretty=format:'%s' "$PREV..$GITHUB_REF_NAME" \
+                | grep -v '^Release v' | sed 's/^/- /'
+              echo
+              echo
+              echo "**Full changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$PREV...$GITHUB_REF_NAME"
+            } > notes.md || true
+          fi
+
       - name: Publish the draft release
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest --repo "$GITHUB_REPOSITORY"
+        run: |
+          if [ -s notes.md ]; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md \
+              --draft=false --latest --repo "$GITHUB_REPOSITORY"
+          else
+            gh release edit "$GITHUB_REF_NAME" \
+              --draft=false --latest --repo "$GITHUB_REPOSITORY"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

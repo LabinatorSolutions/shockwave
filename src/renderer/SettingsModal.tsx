@@ -71,6 +71,16 @@ const BADGE_KEY_FOR_SECTION: Record<string, string> = Object.freeze({
   [SETTINGS_SECTIONS.AGENT_LLM]: 'agent',
 });
 
+// The pages that stay usable while the companion is unreachable. Companion,
+// because it is the fix. Updates, because it is the one page that talks to
+// GitHub rather than that server — updating the desktop app has nothing to do
+// with the companion being up, and it's where the update pill points, so gating
+// it would send anyone whose companion is away to a page about a different
+// problem entirely.
+const UNGATED_SECTIONS: string[] = Object.freeze([
+  SETTINGS_SECTIONS.COMPANION, SETTINGS_SECTIONS.UPDATES,
+]) as string[];
+
 // Per-workspace sections need an active workspace. Shown when none is open.
 function NoWorkspaceNote() {
   return (
@@ -146,7 +156,7 @@ export default function SettingsModal({
   // beside a green "Connected" row. And it gated on draft edits, which is
   // wrong — other pages talk to the stored config, not the boxes.
   const gated = !companionOnline;
-  const effectiveActive = gated && active !== SETTINGS_SECTIONS.COMPANION
+  const effectiveActive = gated && !UNGATED_SECTIONS.includes(active)
     ? SETTINGS_SECTIONS.COMPANION
     : active;
 
@@ -156,7 +166,7 @@ export default function SettingsModal({
   // links survive because this only runs while gated — every target section is
   // disabled then anyway.
   useEffect(() => {
-    if (gated && active !== SETTINGS_SECTIONS.COMPANION) {
+    if (gated && !UNGATED_SECTIONS.includes(active)) {
       setActive(SETTINGS_SECTIONS.COMPANION);
     }
   }, [gated, active]);
@@ -218,7 +228,7 @@ export default function SettingsModal({
                 </div>
               );
             }
-            const disabled = gated && row.id !== SETTINGS_SECTIONS.COMPANION;
+            const disabled = gated && !UNGATED_SECTIONS.includes(row.id ?? '');
             const badgeKey = BADGE_KEY_FOR_SECTION[row.id ?? ''];
             const needsSetup = !!(badgeKey && setupStatus?.[badgeKey]);
             return (

@@ -455,19 +455,28 @@ contextBridge.exposeInMainWorld('api', {
 
   // ---- App / updates ------------------------------------------------------
   //
-  // Packaged builds auto-download via electron-updater (status pushes carry
-  // `downloaded: true` once ready; restartToUpdate installs + relaunches).
-  // Dev builds fall back to the notify-only GitHub poll.
+  // Checking is automatic (launch + daily); DOWNLOADING AND INSTALLING ARE NOT.
+  // Status is a phase — idle | available | downloading | ready | error — and it
+  // only leaves `available` because the user pressed downloadUpdate. Dev builds
+  // have no downloader: `canDownload` is false and the UI offers the release page.
 
   app: {
     /** This machine's name (os.hostname). Used to tell a chat running on THIS
      *  machine (my turn) from one running elsewhere (freeze). @returns {Promise<string>} */
     machineId: () => ipcRenderer.invoke('app:machineId'),
     /** Force an update check now (Settings → Updates). Resolves with the freshest status.
-     *  @returns {Promise<{ updateAvailable: boolean, latest: string|null, current: string, url: string|null, error: string|null, downloaded: boolean }>} */
+     *  @returns {Promise<{ phase: string, latest: string|null, current: string, url: string|null, error: string|null, percent: number, canDownload: boolean, snoozedVersion: string|null }>} */
     checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
-    /** Install the downloaded update and relaunch (no-op unless a download finished). */
+    /** Start downloading the found update. The ONLY thing that fetches it. */
+    downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
+    /** Install the downloaded update and relaunch (no-op unless phase is `ready`).
+     *  Confirm with the user first — this quits, killing any running agent turn. */
     restartToUpdate: () => ipcRenderer.invoke('app:restartToUpdate'),
+    /** Silence the toast for this version (null clears). The pill still shows. */
+    snoozeUpdate: (version) => ipcRenderer.invoke('app:snoozeUpdate', version ?? null),
+    /** Release notes for every version newer than the running one, newest first.
+     *  `body` is raw markdown. @returns {Promise<{ notes: any[], error: string|null }>} */
+    getReleaseNotes: () => ipcRenderer.invoke('app:getReleaseNotes'),
     /** Last computed update status, or null until the first check completes. */
     getUpdateStatus: () => ipcRenderer.invoke('app:getUpdateStatus'),
     /** Subscribe to background update-status pushes (launch check + daily poll).

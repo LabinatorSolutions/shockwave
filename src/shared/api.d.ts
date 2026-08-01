@@ -101,19 +101,40 @@ export interface InstalledSkill {
 export type Unsubscribe = () => void;
 
 export interface UpdateStatus {
-  /** True when the latest GitHub release is newer than the running version. */
-  updateAvailable: boolean;
-  /** Latest release version (tag with leading "v" stripped), or null on error. */
+  /** Where this app is in the update sequence. Nothing downloads or installs
+   *  without the user asking, so `available` never advances on its own.
+   *  - `idle`        — up to date (or nothing checked yet)
+   *  - `available`   — a newer release exists; not downloaded
+   *  - `downloading` — user pressed Download; see `percent`
+   *  - `ready`       — downloaded, installs on the next restart
+   *  - `error`       — the check or download failed; see `error` */
+  phase: 'idle' | 'available' | 'downloading' | 'ready' | 'error';
+  /** Latest release version (tag with leading "v" stripped), or null if unknown.
+   *  Survives an error, so failures can still name the version they were after. */
   latest: string | null;
   /** Running app version (app.getVersion()). */
   current: string;
-  /** Release page to open, or null on error. */
+  /** Release page to open, or null when unknown. */
   url: string | null;
-  /** Error message when the check failed (offline, rate-limited, …), else null. */
+  /** Error message when the check or download failed, else null. */
   error: string | null;
-  /** True once electron-updater has the update downloaded and ready to install
-   *  on restart. Always false in dev (notify-only fallback). */
-  downloaded: boolean;
+  /** Download progress 0-100. Only meaningful while `phase === 'downloading'`. */
+  percent: number;
+  /** False in dev (unpackaged): there is no downloader, so the UI offers the
+   *  release page in place of a Download button. */
+  canDownload: boolean;
+  /** Version whose toast the user dismissed — the toast stays quiet for it, the
+   *  pill does not. */
+  snoozedVersion: string | null;
+}
+
+/** One GitHub release newer than the running version. `body` is raw markdown. */
+export interface ReleaseNote {
+  version: string;
+  name: string | null;
+  body: string;
+  url: string | null;
+  publishedAt: string | null;
 }
 
 // Result of the two workspace setup flows. On success the row already exists
@@ -397,7 +418,14 @@ export interface ShockwaveApi {
     checkForUpdates(): Promise<UpdateStatus>;
     getUpdateStatus(): Promise<UpdateStatus | null>;
     onUpdateStatus(cb: (status: UpdateStatus) => void): Unsubscribe;
+    /** Start downloading the found update. Nothing downloads without this call. */
+    downloadUpdate(): Promise<UpdateStatus>;
+    /** Quit and install a `ready` update. Confirm first — it kills a running turn. */
     restartToUpdate(): Promise<void>;
+    /** Silence the toast for `version` (null clears). The pill is unaffected. */
+    snoozeUpdate(version: string | null): Promise<UpdateStatus>;
+    /** Release notes for every version newer than the running one, newest first. */
+    getReleaseNotes(): Promise<{ notes: ReleaseNote[]; error: string | null }>;
   };
 
   // A workspace IS a GitHub repo — both calls clone into a new folder and

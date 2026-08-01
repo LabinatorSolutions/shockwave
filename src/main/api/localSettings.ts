@@ -34,6 +34,10 @@ export interface LocalSettings {
   showHiddenFiles?: boolean;
   activeWorkspaceId?: string | null;
   cron?: any;
+  /** Update version whose toast the user dismissed. Machine-local because
+   *  installing an update is a per-machine act. Not in LOCAL_KEYS — the renderer
+   *  never patches it through a settings save; app:snoozeUpdate writes it. */
+  updateSnoozedVersion?: string | null;
   // workspaceId -> { path, syncEnabled }
   workspaceLocal?: Record<string, { path?: string | null; syncEnabled?: boolean }>;
 }

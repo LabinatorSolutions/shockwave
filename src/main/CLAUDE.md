@@ -325,6 +325,31 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 
 One credential helper works everywhere: git runs `!`-prefixed helpers through a shell, and Git for Windows ships its own, so the single `CREDENTIAL_HELPER` string covers all three platforms where the old `.sh`/`.cmd` pair needed two. The only platform branch left is `NO_HOOKS` (`NUL` on Windows, `/dev/null` elsewhere). `gitSpawn` is otherwise platform-agnostic, so sync runs anywhere `git` is on PATH.
 
+## App updates
+
+**Checking is automatic; downloading and installing are not.** `runUpdateCheck()` fires 8s after launch and daily thereafter, and reports what it found. Nothing else happens until the user presses something.
+
+Both of electron-updater's self-driving flags are **off** and must stay off:
+
+- `autoDownload` — every check used to pull ~100MB the moment it found a release, 8 seconds after launch.
+- `autoInstallOnAppQuit` — the one nothing surfaced: once a download had landed, the **next ordinary Cmd+Q installed a different version**. No pill click, no toast, no consent at any point.
+
+Turning off only the first moves the download decision to the user while leaving the *install* decision to whenever they happen to quit, which is why both are off. The cost is intended: someone who never presses the button stays behind indefinitely.
+
+**Status is a phase, not a pair of booleans**: `idle → available → downloading → ready`, plus `error`. Three places render it (the pill, the toast, Settings → Updates) and five states across two flags is how they drift — same reasoning as the sync status machine. `pushUpdateStatus` **merges**, so an error mid-download still knows which version it was after; `current` / `canDownload` / `snoozedVersion` are re-derived on every push rather than stored. `runUpdateCheck` returns early while `downloading` or `ready` — a re-check would walk the phase back to `available` and lose the Restart button.
+
+`canDownload` is `app.isPackaged`. Dev has no `app-update.yml` and so no downloader at all: the notify-only GitHub API poll fills the same shape and the UI offers the release page instead of pretending a Download button would work.
+
+**Release notes come from the GitHub releases API, not `info.releaseNotes`** — electron-updater's GitHub provider returns HTML in a shape that varies with `fullChangelog`, while the API's `body` is raw markdown the renderer already draws (so nothing has to sanitize HTML). `app:getReleaseNotes` returns **every** version newer than the running one, newest first: someone four releases behind should see all four, and it's one list request either way. Cached per running version.
+
+> Those bodies were **empty for every release through v1.0.36** — electron-builder creates the draft with no body and the workflow's publish step only flipped the draft flag, so nothing ever wrote notes. Invisible on github.com (the commit list is right there), fatal to a dialog that reads `body`. `.github/workflows/release.yml` now writes them before publishing, best-effort (`|| true` + an emptiness check) so a hiccup there can never strand a fully-built release as a draft.
+>
+> **The notes are commit subjects, not GitHub's `generate-notes`.** That endpoint summarizes merged pull requests, and this repo commits straight to main — asked for v1.0.36 it returns a compare link and nothing else. The commit subjects are already written as changelog lines, so they are the source. The previous tag comes from `git tag --sort=-v:refname`, not `releases/latest`: at that point in the run our own release is still a draft, so "latest" *happens* to mean the previous one — true today and quietly wrong the first time a release doesn't get published.
+
+`app:snoozeUpdate` writes `updateSnoozedVersion` to `local-settings.json` — machine-local, because installing an update is a per-machine act. It silences the **toast** for that version only; the pill is a state and keeps showing. It is deliberately not in `LOCAL_KEYS`: the renderer never patches it through a settings save.
+
+`app:restartToUpdate` only acts while `ready`, and **the renderer confirms first** — it quits, which kills a running agent turn.
+
 ## Voice transcription IPC
 
 `voice:getToken` mints a short-lived (60s) AssemblyAI streaming token. The long-lived API key (`settings.transcription.apiKey`) never leaves main — the renderer requests a fresh streaming token on each WebSocket connection. The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/CLAUDE.md`.
@@ -350,7 +375,7 @@ One credential helper works everywhere: git runs `!`-prefixed helpers through a 
 | Cron | `cron:read`, `cron:runNow` (the desktop's read-only view; cron runs on the companion) |
 | Telegram | `telegram:status`, `telegram:connect`, `telegram:disconnect`, `telegram:setWorkspace` (thin passthroughs to the companion `/telegram/*`; the companion owns the bot) |
 | Companion config | `api:read`, `api:write`, `api:test` (the "connect to your server" form — URL + key, key `safeStorage`-wrapped; `api:test` also returns the companion's release version), `api:checkVersion` (classify desktop-vs-companion via `versionCompare.js` — `companion-older` is the only status that offers an upgrade), `api:upgradeCompanion` (`POST /update` with this desktop's version — the companion's updater sidecar does the pull + restart; fire-and-forget, sets `pendingUpgradeTag`); `companion:getState` (is the companion reachable right now); push events `api:companionUpdated` (the live feed reconnected on the requested version — the feed's `onOpen` fires when the stream's HTTP response arrives, NOT on the first event, so a quiet server still announces) and `companion:state` (reachability changed — see "Connection state" below) |
-| App / updates | `app:machineId`, `app:checkForUpdates`, `app:getUpdateStatus`, `app:restartToUpdate` (electron-updater); plus update-status push events |
+| App / updates | `app:machineId`, `app:checkForUpdates`, `app:getUpdateStatus`, `app:downloadUpdate`, `app:restartToUpdate`, `app:snoozeUpdate`, `app:getReleaseNotes` (electron-updater + the GitHub releases API); plus update-status push events. See "App updates" below |
 | Sync | `sync:verifyPat`, `sync:checkGit`, `sync:listRepos`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
 
 The renderer reaches every one of these via `window.api.*` — see `src/preload/preload.cjs`. The renderer never touches Node directly.

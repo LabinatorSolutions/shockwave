@@ -308,7 +308,13 @@ export default function App() {
   });
 
   // App-update status: feeds the editor-pane "Update available" pill + Settings → Updates.
-  const appUpdate = useAppUpdate();
+  //
+  // Installing quits the app — it kills a running agent turn and drops whatever
+  // the editor hasn't flushed — so every path to it (pill, toast, Settings)
+  // routes through this ONE confirm rather than each remembering to ask. It used
+  // to be a bare `quitAndInstall()` on a soft status pill: one stray click.
+  const [updateRestartPending, setUpdateRestartPending] = useState(false);
+  const appUpdate = useAppUpdate({ onRequestRestart: () => setUpdateRestartPending(true) });
 
   // Which required settings are still empty → the red dot on the gear and on
   // the settings nav rows. Filled-in only; a value that's present but refused
@@ -2068,7 +2074,11 @@ export default function App() {
       <main className="editor-pane relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background">
         {(() => {
           const u = appUpdate.status;
-          if (!u?.updateAvailable || !u.url) return null;
+          const showing = u?.phase === 'available' || u?.phase === 'downloading' || u?.phase === 'ready';
+          if (!showing) return null;
+          const label = u.phase === 'ready' ? 'Restart to update'
+            : u.phase === 'downloading' ? `Downloading ${u.percent}%`
+            : 'Update available';
           return (
             <button
               type="button"
@@ -2080,14 +2090,18 @@ export default function App() {
               // free. Kept absolutely positioned instead of being a TabStrip
               // child so it still shows when no workspace is open and there is
               // no strip to sit in.
+              //
+              // **It opens Settings → Updates and does nothing else.** It is
+              // ambient chrome the eye passes over constantly, so it must not
+              // be one click from quitting the app (it was) or from leaving for
+              // a browser (it was that too). Everything about the update —
+              // version, notes, download, install — is on that one page.
               className="absolute right-3 top-1.5 z-20 inline-flex items-center gap-1.5 rounded-full border border-success/20 bg-success-soft px-2.5 py-1 text-[11.5px] font-medium text-success hover:brightness-95"
-              onClick={() => u.downloaded ? window.api.app.restartToUpdate() : window.api.openExternal(u.url!)}
-              title={u.downloaded
-                ? `Version ${u.latest} is downloaded — you're on ${u.current}. Click to restart and install.`
-                : `Version ${u.latest} is available — you're on ${u.current}. Click to view the release.`}
+              onClick={() => openSettings(SETTINGS_SECTIONS.UPDATES)}
+              title={`Version ${u.latest} — you're on ${u.current}. Click for details.`}
             >
               <span className="size-1.5 rounded-full bg-success" />
-              {u.downloaded ? 'Restart to update' : 'Update available'}
+              {label}
             </button>
           );
         })()}
@@ -2341,6 +2355,23 @@ export default function App() {
         destructive
         onConfirm={confirmResetToRemote}
         onClose={() => setResetToRemotePending(false)}
+      />
+
+      {/* Not `destructive` — red is for removing something, and this installs an
+          update. It still confirms, because it quits. */}
+      <ConfirmDialog
+        open={updateRestartPending}
+        title="Restart to update"
+        message={`Restart now to install version ${appUpdate.status?.latest ?? ''}? Any agent run in progress will be interrupted.`}
+        confirmLabel="Restart"
+        onConfirm={async () => {
+          setUpdateRestartPending(false);
+          // Flush the editor before quitting — the same rule as every other
+          // place that ends the active file's life (see "Save lifecycle").
+          await writeNow();
+          await window.api.app.restartToUpdate();
+        }}
+        onClose={() => setUpdateRestartPending(false)}
       />
 
       <ConfirmDialog

@@ -48,7 +48,7 @@ import {
 import os from 'node:os';
 import { api } from './api/client.js';
 import { classifyVersions } from './versionCompare.js';
-import { readLocalSettings } from './api/localSettings.js';
+import { readLocalSettings, patchLocalSettings } from './api/localSettings.js';
 import {
   verifyPat as syncVerifyPat,
   checkGit as syncCheckGit,
@@ -1157,16 +1157,34 @@ ipcMain.handle('voice:getToken', async () => {
 
 // ---- App update check ------------------------------------------------------
 //
-// Packaged builds use electron-updater (feed baked in from package.json's
-// `build.publish` GitHub block): check → auto-download → push status with
-// `downloaded: true`; install happens via app:restartToUpdate (quitAndInstall)
-// or on normal quit (autoInstallOnAppQuit). macOS requires the signed +
-// notarized build — electron-updater refuses unsigned apps there.
+// **Checking is automatic; downloading and installing are not.** Packaged builds
+// use electron-updater (feed baked in from package.json's `build.publish` GitHub
+// block), but with BOTH of its self-driving flags off:
 //
-// Dev (unpackaged) has no app-update.yml, so we keep the old notify-only
-// GitHub API poll: same UpdateStatus shape, `downloaded` just never flips
-// true. Unauthenticated GitHub API allows ~60 req/hr — a daily poll plus the
-// odd manual check is nowhere near that.
+//   autoDownload         — every check used to download ~100MB the moment it
+//                          found something, 8s after launch, unasked.
+//   autoInstallOnAppQuit — worse, because nothing showed it: once a download had
+//                          landed, the next ordinary Cmd+Q installed a different
+//                          version. The user agreed to nothing at any point.
+//
+// Turning off only the first would have moved the download decision to the user
+// while leaving the *install* decision to whenever they happened to quit, so
+// both are off. The cost is real and intended: someone who never presses the
+// button stays on an old version indefinitely.
+//
+// The status is a PHASE, not a pair of booleans (idle → available → downloading
+// → ready, plus error). Three places render it — the pill, the toast, and
+// Settings → Updates — and with five states across two flags they drift; this is
+// the same shape as sync's status machine for the same reason.
+//
+// macOS requires the signed + notarized build — electron-updater refuses
+// unsigned apps there.
+//
+// Dev (unpackaged) has no app-update.yml and so has no downloader at all: the
+// notify-only GitHub API poll fills in the same status with `canDownload: false`,
+// and the UI offers the release page instead of a Download button. Unauthenticated
+// GitHub API allows ~60 req/hr — a daily poll, the odd manual check and the
+// release-notes read are nowhere near that.
 const { autoUpdater } = electronUpdater;
 
 // electron-updater's own log of the whole check → download → stage sequence,
@@ -1198,12 +1216,41 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+// The mutable part of the status. `current`, `canDownload` and `snoozedVersion`
+// are derived on every push (see buildUpdateStatus), so they can't go stale.
+let updateState = {
+  phase: 'idle' as 'idle' | 'available' | 'downloading' | 'ready' | 'error',
+  latest: null as string | null,
+  url: null as string | null,
+  error: null as string | null,
+  percent: 0,
+};
+
+// Which version the user dismissed the toast for. Machine-local: installing is a
+// per-machine act, so snoozing one is too. Read fresh rather than cached — it is
+// one small file read on an event that fires a few times a day.
+function snoozedUpdateVersion(): string | null {
+  return readLocalSettings().updateSnoozedVersion ?? null;
+}
+
+function buildUpdateStatus() {
+  return {
+    ...updateState,
+    current: app.getVersion(),
+    canDownload: app.isPackaged,
+    snoozedVersion: snoozedUpdateVersion(),
+  };
+}
+
 // Last computed status, served to renderers that subscribe after a background
 // check already ran (so the pill hydrates without waiting for the next poll).
 let lastUpdateResult: any = null;
 
-function pushUpdateStatus(status: any) {
-  lastUpdateResult = status;
+// MERGES — an error mid-download must not blank out which version we were after,
+// or the UI ends up saying "couldn't update" with nothing to name.
+function pushUpdateStatus(patch: Partial<typeof updateState>) {
+  updateState = { ...updateState, ...patch };
+  lastUpdateResult = buildUpdateStatus();
   for (const w of BrowserWindow.getAllWindows()) {
     w.webContents.send('app:updateStatus', lastUpdateResult);
   }
@@ -1215,35 +1262,38 @@ function releasePageUrl(version: string | null) {
 }
 
 if (app.isPackaged) {
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  const current = app.getVersion();
+  // Both off on purpose — see the block comment above. Do not turn either back on.
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.on('update-available', (info) => pushUpdateStatus({
-    updateAvailable: true, latest: info.version, current,
-    url: releasePageUrl(info.version), error: null, downloaded: false,
+    phase: 'available', latest: info.version, url: releasePageUrl(info.version),
+    error: null, percent: 0,
   }));
   autoUpdater.on('update-not-available', (info) => pushUpdateStatus({
-    updateAvailable: false, latest: info?.version ?? null, current,
-    url: releasePageUrl(info?.version ?? null), error: null, downloaded: false,
+    phase: 'idle', latest: info?.version ?? null,
+    url: releasePageUrl(info?.version ?? null), error: null, percent: 0,
+  }));
+  autoUpdater.on('download-progress', (p) => pushUpdateStatus({
+    phase: 'downloading', percent: Math.max(0, Math.min(100, Math.round(p?.percent ?? 0))),
   }));
   autoUpdater.on('update-downloaded', (info) => pushUpdateStatus({
-    updateAvailable: true, latest: info.version, current,
-    url: releasePageUrl(info.version), error: null, downloaded: true,
+    phase: 'ready', latest: info.version, url: releasePageUrl(info.version),
+    error: null, percent: 100,
   }));
   autoUpdater.on('error', (err) => {
     console.warn('[update] electron-updater error:', err.message);
-    pushUpdateStatus({
-      updateAvailable: false, latest: null, current,
-      url: null, error: err.message || 'update failed', downloaded: false,
-    });
+    pushUpdateStatus({ phase: 'error', error: err.message || 'update failed' });
   });
 }
 
 async function runUpdateCheck() {
   const current = app.getVersion();
+  // A finished download is terminal until the user restarts — re-checking would
+  // walk the phase back to `available` and lose the Restart button.
+  if (updateState.phase === 'downloading' || updateState.phase === 'ready') return lastUpdateResult;
   if (app.isPackaged) {
-    // Events above push status as the check/download progresses; the resolved
-    // value is just the freshest snapshot for the invoking caller.
+    // Events above push status as the check progresses; the resolved value is
+    // just the freshest snapshot for the invoking caller.
     try { await autoUpdater.checkForUpdates(); } catch { /* 'error' event already pushed */ }
     return lastUpdateResult;
   }
@@ -1258,12 +1308,12 @@ async function runUpdateCheck() {
     const url = data.html_url
       || `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`;
     pushUpdateStatus({
-      updateAvailable: latest ? compareVersions(latest, current) > 0 : false,
-      latest, current, url, error: null, downloaded: false,
+      phase: latest && compareVersions(latest, current) > 0 ? 'available' : 'idle',
+      latest, url, error: null, percent: 0,
     });
   } catch (err: any) {
     console.warn('[update] check failed:', err.message);
-    pushUpdateStatus({ updateAvailable: false, latest: null, current, url: null, error: err.message || 'check failed', downloaded: false });
+    pushUpdateStatus({ phase: 'error', error: err.message || 'check failed' });
   }
   return lastUpdateResult;
 }
@@ -1272,10 +1322,73 @@ async function runUpdateCheck() {
 ipcMain.handle('app:checkForUpdates', async () => runUpdateCheck());
 // Cached status for a freshly-mounted renderer (null until the first check).
 ipcMain.handle('app:getUpdateStatus', async () => lastUpdateResult);
+
+// Start the download — the only thing that fetches the update, and it exists
+// only because the user pressed something. electron-updater downloads against
+// the update info its last check cached, which is exactly the check that put us
+// in `available`, so there is nothing to re-fetch first.
+ipcMain.handle('app:downloadUpdate', async () => {
+  if (!app.isPackaged) return lastUpdateResult;           // dev: no downloader
+  if (updateState.phase === 'downloading' || updateState.phase === 'ready') return lastUpdateResult;
+  if (!updateState.latest) return lastUpdateResult;       // nothing found yet
+  pushUpdateStatus({ phase: 'downloading', percent: 0, error: null });
+  // Not awaited: the whole point is that the UI follows `download-progress`
+  // rather than blocking on a multi-hundred-megabyte transfer. Failures arrive
+  // through the 'error' event, which is why the catch is empty.
+  autoUpdater.downloadUpdate().catch(() => {});
+  return lastUpdateResult;
+});
+
 // Install the downloaded update and relaunch. Goes through app.quit(), so the
-// before-quit/will-quit drains (agent, sync, settings queue) still run.
+// before-quit/will-quit drains (agent, sync, settings queue) still run. The
+// renderer confirms first — this kills a running agent turn.
 ipcMain.handle('app:restartToUpdate', () => {
-  if (app.isPackaged && lastUpdateResult?.downloaded) autoUpdater.quitAndInstall();
+  if (app.isPackaged && updateState.phase === 'ready') autoUpdater.quitAndInstall();
+});
+
+// "Don't tell me about this one again." Silences the TOAST for that version only;
+// the pill is ambient and stays. Passing null clears it (a fresh version found
+// later is news again anyway, since the check compares against this exact string).
+ipcMain.handle('app:snoozeUpdate', (_evt, version: string | null) => {
+  patchLocalSettings({ updateSnoozedVersion: version || null });
+  pushUpdateStatus({});   // re-derives snoozedVersion and broadcasts
+  return lastUpdateResult;
+});
+
+// Release notes for every version between the running one and the newest, so a
+// user four releases behind sees all four rather than only the last. One list
+// request either way. Cached per running-version because the answer only grows
+// at the top and a dialog reopen shouldn't re-fetch.
+let releaseNotesCache: { current: string; notes: any[] } | null = null;
+ipcMain.handle('app:getReleaseNotes', async () => {
+  const current = app.getVersion();
+  if (releaseNotesCache?.current === current) return { notes: releaseNotesCache.notes, error: null };
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases?per_page=30`,
+      { headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(8000) },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const notes = (Array.isArray(data) ? data : [])
+      .filter((r: any) => !r.draft)
+      .map((r: any) => ({
+        version: String(r.tag_name || '').replace(/^v/i, ''),
+        name: r.name || null,
+        // Raw markdown — the renderer already draws markdown, so nothing here
+        // has to sanitize HTML.
+        body: r.body || '',
+        url: r.html_url || null,
+        publishedAt: r.published_at || null,
+      }))
+      .filter((r: any) => r.version && compareVersions(r.version, current) > 0)
+      .sort((a: any, b: any) => compareVersions(b.version, a.version));
+    releaseNotesCache = { current, notes };
+    return { notes, error: null };
+  } catch (err: any) {
+    console.warn('[update] release notes failed:', err.message);
+    return { notes: [], error: err.message || 'Could not load release notes' };
+  }
 });
 
 // ---- GitHub sync ----
