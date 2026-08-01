@@ -97,6 +97,7 @@ export async function runCronJob(
         contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
         wsBuiltinSkills,
         unattended: true, source: 'cron', cronTitle: jobName,
+        timezone: settings.timezone,   // same zone the scheduler evaluates cron.json in
       },
       (event: any) => {
         if (event?.type === 'agent_end') finalMessages = event.messages;

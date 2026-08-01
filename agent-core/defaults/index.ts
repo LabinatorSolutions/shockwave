@@ -30,6 +30,13 @@ export interface PromptOpts {
   source?: string;
   /** The agent's own directory for this chat, named in the Boundaries section. */
   scratchDir?: string;
+  /**
+   * The one system timezone (`settings.timezone`) — named in Scheduled runs so
+   * the agent writes one-time schedules in the zone the scheduler evaluates them
+   * in. Static, so baking it into the cached prompt is safe; the current TIME is
+   * deliberately not here (it would miss the session cache every turn).
+   */
+  timezone?: string;
 }
 
 // Build the full system prompt for the given workspace. Reads that workspace's
@@ -68,5 +75,6 @@ function helperFor(opts: PromptOpts): string {
     unattended: opts.unattended,
     source: opts.source,
     scratchDir: opts.scratchDir,
+    timezone: opts.timezone,
   });
 }

@@ -41,14 +41,19 @@ const UNATTENDED = `# Unattended run
 
 You are running on a schedule with no user present. You will not receive a reply, so do not ask for confirmation or wait for input. Use your judgment, complete the task described, and finish. You may create, edit, and — when the task requires it — move or delete files inside the workspace without asking. This overrides the "ask first" boundary above for this run. Your changes are committed automatically after the run.`;
 
-const SCHEDULED_RUNS = `# Scheduled runs (cron)
+// `tz` is the one system timezone (`settings.timezone`). It is baked into the
+// prompt, which is fine — it is static. The CURRENT TIME deliberately is not:
+// the assembled prompt is part of pi's session cache key, so a timestamp in it
+// would miss the cache on every turn. Hence the instruction to run `date`, which
+// costs one tool call only on the turns that actually need to know the time.
+const SCHEDULED_RUNS = (tz?: string) => `# Scheduled runs (cron)
 
 You can schedule yourself to run unattended. Schedules live in \`cron.json\` at the workspace root — a JSON array you can read and edit like any other file. Each entry:
 
     { "name": "nightly-triage", "schedule": "0 2 * * *", "prompt": "…", "enabled": true }
 
 - \`name\` — unique within the file, stable. Each run opens as its own chat titled after the job; renaming a job orphans its run history.
-- \`schedule\` — either a standard 5-field cron expression for something recurring, **or** an ISO datetime (\`"2026-03-14T18:50:00"\`) for a one-time run. Both are evaluated in the user's timezone.
+- \`schedule\` — either a standard 5-field cron expression for something recurring, **or** an ISO datetime (\`"2026-03-14T18:50:00"\`) for a one-time run. Both are evaluated in ${tz ? `\`${tz}\`` : 'the one system timezone'}.
 - \`prompt\` — sent to a fresh chat each run; make it self-contained (it won't see earlier runs).
 - \`enabled\` — set \`false\` to pause a job without deleting it.
 - \`once\` — set \`true\` for a one-time job. It runs once and then **deletes its own entry** from \`cron.json\`. Omit it (the default) for anything recurring.
@@ -56,6 +61,8 @@ You can schedule yourself to run unattended. Schedules live in \`cron.json\` at 
 ## One-time jobs
 
 Anything the user frames as a single future moment — "remind me tonight at 6:50", "check on this tomorrow morning", "ping me in an hour" — is a one-time job: an ISO datetime schedule plus \`"once": true\`. Write the datetime as an absolute wall-clock time in the user's timezone; work out what "tonight" or "tomorrow" means from the current date rather than storing a relative phrase.
+
+**${tz ? `Schedules are evaluated in \`${tz}\`. Write the datetime in that zone` : 'Schedules are evaluated in the one system timezone (Settings → General)'}, and run \`date\` before you write one.** You are told today's date but not the time of day, so "in an hour" and "tonight at 6:50" are unanswerable without checking — and a datetime that lands in the past is accepted silently and simply never fires.
 
     { "name": "remind-call-dentist", "schedule": "2026-03-14T18:50:00", "once": true,
       "prompt": "Send the user a message reminding them to call the dentist." }
@@ -229,8 +236,8 @@ Skills are scanned at session boot. After writing the files, tell the user to cl
 // sections — it is NOT derivable from `tools`, so every caller must pass it (see
 // `rebuildSystemPrompt` in index.ts, which forwards it for exactly this reason).
 export function buildShockwaveHelper(
-  { tools = TOOL_CATALOG, unattended = false, source, scratchDir }:
-    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string } = {},
+  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, timezone }:
+    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; timezone?: string } = {},
 ): string {
   return [
     HELPER_MARK,
@@ -253,6 +260,6 @@ export function buildShockwaveHelper(
     EXTENDING_GRAPH,
     MARKDOWN,
     SKILLS,
-    SCHEDULED_RUNS,
+    SCHEDULED_RUNS(timezone),
   ].join('\n\n');
 }

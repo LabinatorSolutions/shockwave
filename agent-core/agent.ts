@@ -93,6 +93,8 @@ export interface RunOpts {
   baseUrl?: string; contextWindow?: number; thinkingLevel?: string;
   wsBuiltinSkills?: Record<string, any>;
   unattended?: boolean; source?: string; sourceId?: string; cronTitle?: string;
+  /** `settings.timezone` — named in the Scheduled runs prompt section. */
+  timezone?: string;
 }
 
 type Entry = {
@@ -268,7 +270,7 @@ export function createAgentRuntime(host: AgentHost) {
   }
 
   async function bootSession(chatId: string, opts: RunOpts, emitEvent: Emit): Promise<Entry> {
-    const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, wsBuiltinSkills, unattended, source, cronTitle } = opts;
+    const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, wsBuiltinSkills, unattended, source, cronTitle, timezone } = opts;
     const level = toPiThinkingLevel(thinkingLevel || 'off');
 
     const dataDir = host.dataDir(chatId);
@@ -338,15 +340,15 @@ export function createAgentRuntime(host: AgentHost) {
       // Keep the SOUL this chat was created with; rebuild the helper for THIS
       // run, so its tool list matches the side actually executing the turn.
       promptOverride = row.systemPrompt
-        ? rebuildSystemPrompt(row.systemPrompt, { unattended: !!unattended, source, scratchDir })
-        : await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir });
+        ? rebuildSystemPrompt(row.systemPrompt, { unattended: !!unattended, source, scratchDir, timezone })
+        : await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir, timezone });
     } else {
       // A brand-new chat. If the row exists we'd be silently restarting a real
       // conversation from empty — refuse instead, so a lost transcript surfaces
       // rather than quietly truncating the chat.
       if (row) throw new Error('This chat\'s transcript is missing on the server, so it cannot be continued. Start a new chat.');
       sessionManager = SessionManager.create(workspacePath, sessionsDir, { id: chatId });
-      promptOverride = await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir });
+      promptOverride = await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir, timezone });
     }
 
     const resourceLoader = new DefaultResourceLoader({ cwd: workspacePath, agentDir, systemPromptOverride: () => promptOverride });

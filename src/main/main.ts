@@ -1746,6 +1746,7 @@ ipcMain.handle('agent:send', async (evt, { chatId, text, images }) => {
         contextWindow,
         thinkingLevel,
         wsBuiltinSkills: wsData?.builtinSkills ?? {},
+        timezone: settings.timezone,   // same zone the companion's scheduler evaluates cron.json in
       },
       // Desktop emit routes to BOTH sinks: the renderer (IPC) and the companion
       // live feed, so other clients watching this chat see the turn stream.

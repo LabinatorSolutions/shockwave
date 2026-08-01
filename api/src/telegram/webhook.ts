@@ -375,6 +375,7 @@ async function runTurnInner(
       provider: ca.provider, model: ca.model, apiKey,
       baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
+      timezone: settings.timezone,   // same zone the scheduler evaluates cron.json in
     }, emit);
   } finally { clearTimeout(wd); busy.delete(chatId); }
 
