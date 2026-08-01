@@ -15,26 +15,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DATA_BASE } from './dataDirs.js';
+import { WORK_BASE, POOL_READY_BASE, chatWorkDir } from './dataDirs.js';
 import { remoteUrl } from './gitRemote.js';
 import { logger, errStr } from './log.js';
 
 const exec = promisify(execFile);
 const log = logger('git');
 
-// Checkouts live on the SAME volume as pi's scratch and the chat staging dirs
-// (`AGENT_DATA_DIR`, /data/agent in compose), beside `runs/` and `files/`.
-//
-// This used to be `CRON_WORK_DIR || os.tmpdir()/shockwave-cron`, and
-// CRON_WORK_DIR was set nowhere — not in compose, not in the Dockerfile, not in
-// install.sh. So the one thing here that is expensive to rebuild was the one
-// thing NOT on the volume: every restart and every `POST /update` wiped the
-// container's overlay layer, and the next message in every chat re-cloned.
-//
-// Deriving it from DATA_BASE rather than reading an env var of its own is
-// deliberate — there is no longer a variable to forget to set. The old name was
-// stale anyway: Telegram uses these checkouts too, and has since it shipped.
-export const WORK_BASE = path.join(DATA_BASE, 'work');
+export { WORK_BASE };
 
 // Plain remote — NO credentials. `git clone <url>` and `git remote set-url` both
 // persist whatever URL they're given into <dir>/.git/config, and <dir> is the
@@ -95,13 +83,39 @@ const NO_HOOKS = '/dev/null';
 /** What a network git call needs: the token, and the repo it is allowed to reach. */
 export interface GitAuth { pat: string; owner: string; repo: string }
 
-/** Hand a caller a checkout that was cloned ahead of time, if one is waiting.
- *  Implemented by `checkoutPool.ts`; passed to prepareCheckout by callers that
- *  are allowed to use the queue (Telegram — see the note there on why not cron). */
-export type ClaimWarmCheckout = (
-  target: { owner: string; repo: string; branch: string },
-  dest: string,
-) => Promise<boolean>;
+/**
+ * Take a checkout the queue cloned ahead of time, if one is waiting for this
+ * repo. Returns true when `dest` now holds it.
+ *
+ * The claim is a RENAME and nothing else — no network, no locks, no bookkeeping.
+ * Rename is atomic within a filesystem, so two chats claiming at the same moment
+ * cannot get the same folder: one wins, the other gets an error and takes the
+ * next or falls through to a clone. That is the whole concurrency story.
+ *
+ * It lives here rather than with the queue's scheduler so that `prepareCheckout`
+ * can call it unconditionally without importing `checkoutPool.ts`, which is
+ * built on the clone and refresh below. Stocking, refreshing and cleaning are
+ * that module's job; taking is this one's.
+ */
+export async function claimWarmCheckout(
+  owner: string, repo: string, branch: string, dest: string,
+): Promise<boolean> {
+  const prefix = `${owner}__${repo}__${branch}__`;
+  let names: string[];
+  try { names = await fs.readdir(POOL_READY_BASE); } catch { return false; } // no queue yet
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    try {
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.rename(path.join(POOL_READY_BASE, name), dest);
+      log.info({ dest }, 'claimed a warm checkout');
+      return true;
+    } catch {
+      // Taken between the listing and the rename — try the next.
+    }
+  }
+  return false;
+}
 
 /** Config overrides that must precede EVERY git call carrying the PAT.
  *
@@ -170,33 +184,6 @@ async function nothingToLose(dir: string, branch: string): Promise<boolean> {
   }
 }
 
-/** Reconnect a checkout that an older build grafted apart, once.
- *
- *  Until this was fixed, the reuse path fetched with `--depth=1`, which rewrites
- *  `.git/shallow` so the remote branch arrives as its own root commit with no
- *  link to what we already have. Git then refuses every merge with "unrelated
- *  histories", the deterministic check-in falls through to a push it cannot
- *  land, and the turn's work sits in the checkout while the user is told the
- *  save failed.
- *
- *  Dropping the flag stops NEW damage; it does not repair a folder already
- *  grafted, because the break is written into the repository. A plain fetch
- *  cannot heal it — only `--unshallow` can, verified against real git.
- *
- *  `merge-base` is the detector: a healthy shallow checkout still reports a
- *  common commit, a grafted one reports nothing. So healthy folders skip this
- *  entirely, and a repaired one never enters it again. */
-async function repairGraft(dir: string, branch: string, auth: GitAuth): Promise<void> {
-  try {
-    const { stdout } = await git(dir, ['merge-base', 'HEAD', `origin/${branch}`]);
-    if (stdout.trim()) return; // healthy
-  } catch { /* no merge base → grafted, fall through */ }
-  const { stdout: shallow } = await git(dir, ['rev-parse', '--is-shallow-repository']).catch(() => ({ stdout: 'false' }) as any);
-  if (shallow.trim() !== 'true') return; // complete repo; --unshallow would error
-  log.warn({ dir, branch }, 'checkout history is grafted (old --depth=1 fetch) — unshallowing to repair');
-  await git(dir, ['fetch', '--unshallow', 'origin', branch], auth);
-}
-
 // Prepare a checkout for a run, keyed by chatId. If the dir already exists
 // (a prior run of this chat), REUSE it. Otherwise a fresh shallow clone. The dir
 // is kept after the run (the TTL sweeper reclaims old ones) so a re-run can
@@ -211,7 +198,6 @@ async function repairGraft(dir: string, branch: string, auth: GitAuth): Promise<
 // disconnected root. That is not a subtle cost: with it, git refuses every
 // subsequent merge as "unrelated histories", so the checkout silently never
 // caught up and every push after an outside change was rejected. See
-// repairGraft above for folders already damaged that way.
 //
 // With a connected history, "is there anything to lose?" has a real answer, so
 // `reset --hard` is safe AND is the operation we want — one round trip, no merge
@@ -243,24 +229,23 @@ async function repairGraft(dir: string, branch: string, auth: GitAuth): Promise<
 export async function prepareCheckout(
   chatId: string,
   owner: string, repo: string, branch: string, pat: string,
-  opts: { claim?: ClaimWarmCheckout } = {},
 ): Promise<string> {
-  const dir = path.join(WORK_BASE, chatId);
+  const dir = chatWorkDir(chatId);
   const auth: GitAuth = { pat, owner, repo };
   let hasGit = await fs.access(path.join(dir, '.git')).then(() => true).catch(() => false);
 
-  // No folder yet, and the caller offered a way to get a warm one — take it if
-  // the queue has one. Purely an optimisation, and deliberately changes nothing
-  // else: a claimed folder is a checkout of this repo, so it drops into the
-  // reuse path below and gets the same fetch and the same guard as any other.
-  // If the queue is empty (or disabled, or the rename loses a race) hasGit stays
-  // false and the clone runs, exactly as it did before the queue existed.
+  // No folder yet — take a warm one if the queue has it. EVERY caller gets this:
+  // there is one way to obtain a checkout, not a fast path for some callers and
+  // a slow one for others, because two behaviours behind one call is a thing
+  // somebody has to remember.
   //
-  // Passed IN rather than imported so this module keeps knowing nothing about
-  // the queue — which is also what keeps the two out of an import cycle, since
-  // the queue is built on the clone and refresh below.
-  if (!hasGit && opts.claim) {
-    hasGit = await opts.claim({ owner, repo, branch }, dir).catch(() => false);
+  // Purely an optimisation, and it changes nothing downstream: a claimed folder
+  // is a checkout of this repo, so it drops into the reuse path below and gets
+  // the same fetch and the same guard as any other. Empty queue, disabled queue,
+  // wrong repo, lost rename race — `hasGit` stays false and the clone runs,
+  // exactly as before the queue existed.
+  if (!hasGit) {
+    hasGit = await claimWarmCheckout(owner, repo, branch, dir).catch(() => false);
   }
 
   if (hasGit) {
@@ -275,7 +260,6 @@ export async function prepareCheckout(
     // NO --depth here. See the note above — it is what broke every reused
     // checkout, and it saves nothing on a fetch.
     await git(dir, ['fetch', 'origin', branch], auth);
-    await repairGraft(dir, branch, auth);
     if (await nothingToLose(dir, branch)) {
       await git(dir, ['reset', '--hard', `origin/${branch}`]);
     } else {

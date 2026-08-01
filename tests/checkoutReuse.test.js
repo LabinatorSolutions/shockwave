@@ -72,7 +72,6 @@ function remoteMovesAhead({ seed, origin }, name, body) {
 function reuseCheckout(dir, branch) {
   fs.rmSync(path.join(dir, '.git', 'hooks'), { recursive: true, force: true });
   git(dir, ['fetch', '-q', 'origin', branch]);
-  repairGraft(dir, branch);
   if (nothingToLose(dir, branch)) git(dir, ['reset', '-q', '--hard', `origin/${branch}`]);
 }
 
@@ -84,15 +83,6 @@ function nothingToLose(dir, branch) {
   } catch {
     return false;
   }
-}
-
-/** Mirrors repairGraft in api/src/git.ts. */
-function repairGraft(dir, branch) {
-  try {
-    if (git(dir, ['merge-base', 'HEAD', `origin/${branch}`]).trim()) return;
-  } catch { /* no merge base → grafted */ }
-  if (git(dir, ['rev-parse', '--is-shallow-repository']).trim() !== 'true') return;
-  tryGit(dir, ['fetch', '-q', '--unshallow', 'origin', branch]);
 }
 
 /** What the OLD reuse path did: fetch --depth=1, which rewrites .git/shallow so
@@ -179,31 +169,3 @@ test('a fetch carrying --depth=1 breaks the link to what we already hold', () =>
   assert.equal(tryGit(s.work, ['merge', '--ff-only', '--no-verify', 'origin/main']), false);
 });
 
-test('a checkout damaged by an older release repairs itself and catches up', () => {
-  const s = scratch();
-  remoteMovesAhead(s, 'fromDesktop.md', 'pushed elsewhere\n');
-  grafItApart(s.work, 'main');           // what the previous release did to it
-
-  reuseCheckout(s.work, 'main');         // the current path, on a damaged folder
-
-  assert.ok(fs.existsSync(path.join(s.work, 'fromDesktop.md')),
-    'a grafted checkout must be repaired and brought up to date');
-  assert.ok(git(s.work, ['merge-base', 'HEAD', 'origin/main']).trim(),
-    'history must be reconnected, or every later merge still fails');
-});
-
-test('repairing a damaged checkout does not cost unpushed work', () => {
-  const s = scratch();
-  fs.writeFileSync(path.join(s.work, 'mine.md'), 'agent work\n');
-  git(s.work, ['add', '-A']);
-  git(s.work, ['commit', '-qm', 'unpushed turn']);
-  const head = git(s.work, ['rev-parse', 'HEAD']).trim();
-  remoteMovesAhead(s, 'theirs.md', 'someone else\n');
-  grafItApart(s.work, 'main');
-
-  reuseCheckout(s.work, 'main');
-
-  assert.equal(git(s.work, ['rev-parse', 'HEAD']).trim(), head,
-    'the repair must not move HEAD off an unpushed commit');
-  assert.ok(fs.existsSync(path.join(s.work, 'mine.md')));
-});

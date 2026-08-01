@@ -33,3 +33,25 @@ export const FILES_BASE = path.join(DATA_BASE, 'files');
 export function chatFilesDir(chatId: string): string {
   return path.join(FILES_BASE, chatId);
 }
+
+// The git checkout a chat works in, keyed by chatId. On the same volume as
+// everything above — it used to read a `CRON_WORK_DIR` env var that was set
+// nowhere, so it fell back to the container's temp dir and every restart made
+// the next message in every chat re-clone.
+export const WORK_BASE = path.join(DATA_BASE, 'work');
+export function chatWorkDir(chatId: string): string {
+  return path.join(WORK_BASE, chatId);
+}
+
+// The warm-checkout queue. A folder's LOCATION is its state and every move is a
+// rename: cloned into `setup/`, renamed to `ready/` only once complete, renamed
+// into `work/<chatId>` to claim it. Renames are atomic within a filesystem,
+// which is what lets two chats claim at once with no lock — so these MUST stay
+// under DATA_BASE with the rest. Across filesystems rename fails and the whole
+// property is gone.
+//
+// Here rather than in checkoutPool.ts so that `git.ts` can own the claim (a
+// rename) without importing the queue's scheduler, and the queue can be built on
+// git.ts's clone/refresh. Path math has no dependencies, so it breaks the cycle.
+export const POOL_SETUP_BASE = path.join(DATA_BASE, 'pool', 'setup');
+export const POOL_READY_BASE = path.join(DATA_BASE, 'pool', 'ready');

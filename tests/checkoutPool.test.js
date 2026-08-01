@@ -1,4 +1,4 @@
-// The warm-checkout queue's claim (`claimCheckout` in api/src/checkoutPool.ts).
+// The warm-checkout queue's claim (`claimWarmCheckout` in api/src/git.ts).
 //
 // The queue's whole safety story is that a folder's LOCATION is its state and
 // every move is a rename: `setup/` is unfinished, `ready/` is usable, and a
@@ -22,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const apiDir = path.join(here, '..', 'api');
 
-let claimCheckout;
+let claimWarmCheckout;
 let base; // AGENT_DATA_DIR for this run
 
 before(() => {
@@ -37,12 +37,12 @@ before(() => {
   // resolves from.
   const bundle = path.join(apiDir, 'dist', 'checkoutPool.testbundle.mjs');
   execFileSync('npx', [
-    'esbuild', 'src/checkoutPool.ts',
+    'esbuild', 'src/git.ts',
     '--bundle', '--platform=node', '--format=esm', '--target=node22',
     '--packages=external', `--outfile=${bundle}`,
   ], { cwd: apiDir, stdio: 'pipe' });
 
-  return import(pathToFileURL(bundle).href).then((m) => { claimCheckout = m.claimCheckout; });
+  return import(pathToFileURL(bundle).href).then((m) => { claimWarmCheckout = m.claimWarmCheckout; });
 });
 
 after(() => {
@@ -51,6 +51,9 @@ after(() => {
 });
 
 const TARGET = { owner: 'acme', repo: 'notes', branch: 'main' };
+
+/** The real claim, with this fixture's target. */
+const claim = (dest) => claimWarmCheckout(TARGET.owner, TARGET.repo, TARGET.branch, dest);
 const readyDir = () => path.join(base, 'pool', 'ready');
 const setupDir = () => path.join(base, 'pool', 'setup');
 const workDir = (chatId) => path.join(base, 'work', chatId);
@@ -68,7 +71,7 @@ test('a waiting checkout is claimed into the chat folder', async () => {
   const slot = plantReady(TARGET, 'the-one');
   const dest = workDir('chat-a');
 
-  assert.equal(await claimCheckout(TARGET, dest), true);
+  assert.equal(await claim(dest), true);
 
   assert.equal(fs.readFileSync(path.join(dest, 'WHICH'), 'utf8'), 'the-one');
   assert.ok(!fs.existsSync(slot.dir), 'the slot must leave ready/ — a claimed folder is no longer available');
@@ -77,7 +80,7 @@ test('a waiting checkout is claimed into the chat folder', async () => {
 test('an empty queue refuses rather than inventing something', async () => {
   // The caller's fallback is a normal clone, so "false" has to mean exactly
   // "there was nothing", never "something went wrong and here is a broken dir".
-  assert.equal(await claimCheckout(TARGET, workDir('chat-b')), false);
+  assert.equal(await claim(workDir('chat-b')), false);
   assert.ok(!fs.existsSync(workDir('chat-b')));
 });
 
@@ -85,7 +88,7 @@ test('a checkout of a different repo is never handed out', async () => {
   plantReady({ owner: 'acme', repo: 'other', branch: 'main' }, 'wrong-repo');
   plantReady({ owner: 'acme', repo: 'notes', branch: 'dev' }, 'wrong-branch');
 
-  assert.equal(await claimCheckout(TARGET, workDir('chat-c')), false,
+  assert.equal(await claim(workDir('chat-c')), false,
     'repo and branch are both part of a slot\'s identity');
   assert.ok(!fs.existsSync(workDir('chat-c')));
 });
@@ -96,7 +99,7 @@ test('an unfinished clone in setup/ is invisible to a claim', async () => {
   const name = `${TARGET.owner}__${TARGET.repo}__${TARGET.branch}__${crypto.randomUUID()}`;
   fs.mkdirSync(path.join(setupDir(), name), { recursive: true });
 
-  assert.equal(await claimCheckout(TARGET, workDir('chat-d')), false);
+  assert.equal(await claim(workDir('chat-d')), false);
 });
 
 test('two chats claiming at once get different folders, never the same one', async () => {
@@ -106,8 +109,8 @@ test('two chats claiming at once get different folders, never the same one', asy
   plantReady(TARGET, 'second');
 
   const [a, b] = await Promise.all([
-    claimCheckout(TARGET, workDir('race-a')),
-    claimCheckout(TARGET, workDir('race-b')),
+    claim(workDir('race-a')),
+    claim(workDir('race-b')),
   ]);
 
   assert.deepEqual([a, b], [true, true], 'two slots were available, so both should be served');
@@ -127,9 +130,9 @@ test('more chats than slots: the loser is told no, not given a duplicate', async
   plantReady(TARGET, 'only');
 
   const results = await Promise.all([
-    claimCheckout(TARGET, workDir('greedy-a')),
-    claimCheckout(TARGET, workDir('greedy-b')),
-    claimCheckout(TARGET, workDir('greedy-c')),
+    claim(workDir('greedy-a')),
+    claim(workDir('greedy-b')),
+    claim(workDir('greedy-c')),
   ]);
 
   assert.equal(results.filter(Boolean).length, 1, 'one slot can only serve one chat');

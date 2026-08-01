@@ -14,7 +14,6 @@ import { getDb } from '../db.js';
 import * as store from '../store.js';
 import * as feed from '../feed.js';
 import { prepareCheckout, landed, type GitAuth } from '../git.js';
-import { claimCheckout } from '../checkoutPool.js';
 import { checkInWithFixer } from '../gitFixer.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
@@ -456,10 +455,7 @@ async function prepareRun(
   // is set from it on the command line rather than read from a .git/config the
   // agent can rewrite. See guards() in git.ts.
   const auth: GitAuth = { pat, owner: ws.repoOwner, repo: ws.repoName };
-  // `claim` is what makes a NEW chat start from a folder that was cloned ahead
-  // of time instead of downloading one now. Telegram passes it and cron doesn't
-  // — see checkoutPool.ts.
-  const dir = await prepareCheckout(chatId, ws.repoOwner, ws.repoName, ws.defaultBranch, pat, { claim: claimCheckout });
+  const dir = await prepareCheckout(chatId, ws.repoOwner, ws.repoName, ws.defaultBranch, pat);
 
   const settings = await store.readSettings(db, key);
   process.env.TZ = settings.timezone || 'UTC';   // optional setting → fallback at point of use

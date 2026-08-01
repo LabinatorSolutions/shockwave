@@ -95,17 +95,12 @@ export interface CodingAgentSettings {
   // the server's git checkouts — counted from last use. Read by the companion's
   // hourly sweeper and the desktop's boot cleanup. Unset ⇒ 1.
   scratchTtlDays?: number;
-  // How many workspace checkouts the companion keeps cloned in advance, so
-  // starting a new Telegram chat doesn't begin with a download the user waits
-  // through. One is enough: a claimed folder is restocked within the minute, and
-  // two new chats inside that window is rare enough to be worth a normal clone.
-  // 0 disables the queue. Companion-side only (cron clones its own — nothing is
-  // waiting on a scheduled run). Unset ⇒ 1.
+  // How many workspace checkouts the companion keeps cloned in advance, so a new
+  // chat doesn't begin with a download somebody waits through. Every companion
+  // chat claims from it — Telegram and cron alike — which is why the default is
+  // two rather than one: two can legitimately be wanted inside a single restock
+  // tick. 0 disables it and every chat clones, as it did before. Unset ⇒ 2.
   checkoutPoolSize?: number;
-  // How old a waiting checkout may get before it is brought up to date. Only
-  // affects how much the claim's own fetch has to pull, never correctness — the
-  // claim always fetches. Unset ⇒ 60.
-  checkoutPoolRefreshMinutes?: number;
 }
 
 // OAuth connection state carried by an `oauth`-kind AgentSecret. The three

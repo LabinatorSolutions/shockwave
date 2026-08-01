@@ -305,6 +305,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caMaxRunMinutes = codingAgent?.maxRunMinutes;
   const caMaxFixAttempts = codingAgent?.maxFixAttempts;
   const caScratchTtlDays = codingAgent?.scratchTtlDays;
+  const caCheckoutPoolSize = codingAgent?.checkoutPoolSize;
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
@@ -314,6 +315,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     maxRunMinutes: caMaxRunMinutes,
     maxFixAttempts: caMaxFixAttempts,
     scratchTtlDays: caScratchTtlDays,
+    checkoutPoolSize: caCheckoutPoolSize,
     ...patch,
   });
 
@@ -330,6 +332,13 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const ttlField = useCommitField(
     caScratchTtlDays == null ? '' : String(caScratchTtlDays),
     (next) => updateCa({ scratchTtlDays: next ? Number(next) : undefined }),
+  );
+  // 0 is meaningful here (turn the queue off), so it can't use the blank-clears
+  // shorthand the others share — `next ? Number(next) : undefined` maps "0" to
+  // unset, which is the default of two, i.e. the opposite of what was typed.
+  const poolField = useCommitField(
+    caCheckoutPoolSize == null ? '' : String(caCheckoutPoolSize),
+    (next) => updateCa({ checkoutPoolSize: next === '' ? undefined : Number(next) }),
   );
   // Only the slot being typed into. The server merges rather than treating the map
   // as complete (see reconcileProviderKeys), so other providers' keys are untouched
@@ -411,6 +420,25 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
             />
           </div>
           <FieldDescription>How long files in the agent&apos;s scratch pad are kept.</FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-checkout-pool">Warm Checkouts Kept</FieldLabel>
+          <div>
+            <Input
+              id="agent-checkout-pool"
+              className={NUMBER_FIELD}
+              type="number"
+              min={0}
+              placeholder="2"
+              value={poolField.value}
+              onChange={(e) => poolField.onChange(e.target.value)}
+              onBlur={poolField.onBlur}
+            />
+          </div>
+          <FieldDescription>
+            Copies of your workspace the server keeps ready, so a new chat starts without waiting for a download. 0 turns it off.
+          </FieldDescription>
         </Field>
       </SettingsGroup>
     </SettingsSection>

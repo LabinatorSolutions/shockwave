@@ -1,5 +1,5 @@
 // A small queue of workspace checkouts, cloned ahead of time so starting a new
-// Telegram chat doesn't begin with a download the user waits through.
+// chat doesn't begin with a download somebody waits through.
 //
 // ── A folder's LOCATION is its state ────────────────────────────────────────
 //
@@ -25,17 +25,28 @@
 // that reconciles the directory to the target — so the queue can be reasoned
 // about on its own, and a turn can never be slowed down by maintenance work.
 //
-// ── Telegram only ───────────────────────────────────────────────────────────
+// ── Every companion chat claims from it ────────────────────────────────────
 //
-// Cron clones its own, exactly as before. It fires far more often than a new
-// chat starts, so letting it claim would mean the folder is usually gone by the
-// time a person needs one — and nothing is waiting on a scheduled run.
+// Telegram and cron both, because "get me a checkout" should mean one thing.
+// The taking lives in `git.ts` (it is a rename), so `prepareCheckout` calls it
+// unconditionally and no call site chooses. This module only stocks.
+//
+// Cron consuming a slot was the argument for keeping it Telegram-only — a job
+// firing at 09:00 takes the folder a person wants at 09:01. That is real but
+// small: the tick restocks every minute and cron nowhere near that often, so
+// two spares covers both. What it bought is one code path instead of a fast one
+// for some callers and a slow one for others.
+//
+// The queue holds ONE repo — whatever Telegram is pointed at. A cron job on a
+// different workspace finds no match and clones, exactly as before. Slots are
+// already keyed by owner/repo/branch, so holding several repos later is widening
+// this loop rather than redesigning it.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Cron } from 'croner';
-import { DATA_BASE } from './dataDirs.js';
+import { POOL_SETUP_BASE as SETUP, POOL_READY_BASE as READY } from './dataDirs.js';
 import { cloneFresh, refreshPristine } from './git.js';
 import type { DB } from './db.js';
 import { getDb } from './db.js';
@@ -44,17 +55,17 @@ import { logger, errStr } from './log.js';
 
 const log = logger('pool');
 
-const POOL_BASE = path.join(DATA_BASE, 'pool');
-const SETUP = path.join(POOL_BASE, 'setup');
-const READY = path.join(POOL_BASE, 'ready');
-
-/** Unset ⇒ one spare. 0 disables the queue (claims then always fall through to
- *  a clone, i.e. the behaviour before this existed). The companion stores no
- *  defaults, so this is read at the point of use. */
-const DEFAULT_SIZE = 1;
-/** How old a ready folder may get before the tick brings it up to date. Only
- *  affects how much the claim's own fetch has to pull. */
-const DEFAULT_REFRESH_MINUTES = 60;
+/** Unset ⇒ two spares. 0 disables the queue (claims then always fall through to
+ *  a clone, i.e. the behaviour before this existed). Two rather than one because
+ *  every companion chat claims — Telegram and cron both — so two can legitimately
+ *  be wanted inside a single restock tick. The companion stores no defaults, so
+ *  this is read at the point of use. */
+const DEFAULT_SIZE = 2;
+/** How old a waiting checkout may get before the tick brings it up to date.
+ *  NOT a setting: the claim always fetches, so this can only change how much
+ *  that fetch pulls, never whether the result is correct. A knob that cannot
+ *  affect an outcome is a knob to explain and get wrong. */
+const REFRESH_MS = 60 * 60_000;
 /** A clone still in `setup/` after this long is a dead one. Generous: a first
  *  clone of a large workspace is legitimately slow. */
 const SETUP_STALE_MS = 30 * 60_000;
@@ -77,30 +88,6 @@ async function listDir(dir: string): Promise<string[]> {
 
 const rm = (p: string) => fs.rm(p, { recursive: true, force: true }).catch(() => { /* best-effort */ });
 
-/**
- * Take a ready folder for this chat, if one is waiting.
- *
- * Returns true when `dest` now holds a checkout. Never throws and never blocks
- * on anything but a rename: a caller that gets false simply clones, which is
- * what it did before the queue existed.
- */
-export async function claimCheckout(t: Omit<PoolTarget, 'pat'>, dest: string): Promise<boolean> {
-  const target = { ...t, pat: '' };
-  for (const name of await listDir(READY)) {
-    if (!isFor(name, target)) continue;
-    try {
-      await fs.mkdir(path.dirname(dest), { recursive: true });
-      await fs.rename(path.join(READY, name), dest);
-      log.info({ dest }, 'claimed a warm checkout');
-      return true;
-    } catch {
-      // Someone else took it between the listing and the rename, or the rename
-      // isn't possible. Try the next one.
-    }
-  }
-  return false;
-}
-
 /** Which repo the queue should hold folders for: whatever Telegram is pointed
  *  at. Null when Telegram isn't set up, no workspace exists, or there's no PAT
  *  to clone with — in every case the answer is "hold nothing". */
@@ -116,17 +103,13 @@ async function resolveTarget(pool: DB, key: Buffer): Promise<PoolTarget | null> 
   return { owner: ws.repoOwner, repo: ws.repoName, branch: ws.defaultBranch, pat };
 }
 
-async function settings(pool: DB, key: Buffer): Promise<{ size: number; refreshMs: number }> {
+/** How many spares to hold. Unset ⇒ DEFAULT_SIZE, read at the point of use. */
+async function poolSize(pool: DB, key: Buffer): Promise<number> {
   try {
-    const ca = (await store.readSettings(getDb(pool), key))?.codingAgent ?? {};
-    const rawSize = Number(ca.checkoutPoolSize);
-    const rawRefresh = Number(ca.checkoutPoolRefreshMinutes);
-    return {
-      size: Number.isFinite(rawSize) && rawSize >= 0 ? Math.floor(rawSize) : DEFAULT_SIZE,
-      refreshMs: (Number.isFinite(rawRefresh) && rawRefresh > 0 ? rawRefresh : DEFAULT_REFRESH_MINUTES) * 60_000,
-    };
+    const raw = Number((await store.readSettings(getDb(pool), key))?.codingAgent?.checkoutPoolSize);
+    return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_SIZE;
   } catch {
-    return { size: DEFAULT_SIZE, refreshMs: DEFAULT_REFRESH_MINUTES * 60_000 };
+    return DEFAULT_SIZE; // unreadable settings must not empty the queue
   }
 }
 
@@ -139,7 +122,7 @@ export async function tick(pool: DB, key: Buffer): Promise<void> {
   ticking = true;
   try {
     const target = await resolveTarget(pool, key);
-    const { size, refreshMs } = await settings(pool, key);
+    const size = await poolSize(pool, key);
 
     // Abandoned clones. Being in setup/ at all means unfinished, so age is the
     // only question.
@@ -170,7 +153,7 @@ export async function tick(pool: DB, key: Buffer): Promise<void> {
       const p = path.join(READY, name);
       const st = await fs.stat(p).catch(() => null);
       if (!st) { ready = ready.filter((n) => n !== name); continue; }
-      if (now - st.mtimeMs < refreshMs) continue;
+      if (now - st.mtimeMs < REFRESH_MS) continue;
       try {
         await refreshPristine(p, target.owner, target.repo, target.branch, target.pat);
       } catch (e: any) {
