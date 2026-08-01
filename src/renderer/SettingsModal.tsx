@@ -28,17 +28,19 @@ import AdvancedSection from './settings/AdvancedSection.jsx';
 // page, drop a new { kind: 'item', id, label } row under the relevant header.
 //
 // "Workspaces" (the list/create/switch picker) is a GLOBAL concern, so it lives
-// under General — it's not configuration *of* a workspace. The second group
+// under Shockwave — it's not configuration *of* a workspace. The second group
 // holds per-(active-)workspace pages and is labeled with the active workspace's
 // name so it reads as scoped to it. `workspaceLabel` is passed in at render.
+//
+// "APIs" is last and holds every page that is really credentials for a third
+// party we talk to over the network (our own companion included). Companion
+// sitting at the bottom is fine for the offline gate — that pins `active` by id,
+// not by position, and the rail doesn't scroll at this height.
 function buildNav(workspaceLabel) {
   return [
-    { kind: 'header', label: 'General' },
-    { kind: 'item', id: SETTINGS_SECTIONS.COMPANION, label: 'Companion' },
+    { kind: 'header', label: 'Shockwave' },
     { kind: 'item', id: SETTINGS_SECTIONS.GENERAL, label: 'General' },
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
-    { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
-    { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
     { kind: 'item', id: SETTINGS_SECTIONS.ADVANCED, label: 'Advanced' },
     { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
     { kind: 'header', label: workspaceLabel },
@@ -49,6 +51,10 @@ function buildNav(workspaceLabel) {
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
     { kind: 'item', id: SETTINGS_SECTIONS.TELEGRAM, label: 'Telegram' },
+    { kind: 'header', label: 'APIs' },
+    { kind: 'item', id: SETTINGS_SECTIONS.COMPANION, label: 'Companion' },
+    { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
+    { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
   ];
 }
 
@@ -75,6 +81,7 @@ function NoWorkspaceNote() {
 }
 
 export default function SettingsModal({
+  open,
   initialSection,
   onClose,
   workspaces,
@@ -117,6 +124,16 @@ export default function SettingsModal({
 }) {
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
 
+  // This modal is PERMANENTLY MOUNTED and driven by `open` (see the Dialog
+  // below for why). So `active` survives between visits and the section to land
+  // on has to be re-applied on the OPEN TRANSITION — the useState initializer
+  // above runs once, at app start, and never again. Without this, every deep
+  // link (the sidebar's CloudOff → Companion, Workspaces → GitHub Sync) would
+  // land on whatever page you happened to close Settings on last time.
+  useEffect(() => {
+    if (open) setActive(initialSection || DEFAULT_SECTION);
+  }, [open, initialSection]);
+
   // The live feed is the gate. Every other page reads/writes through the STORED
   // connection, which is exactly what the feed exercises — so `companionOnline`
   // is the one signal, known synchronously (App seeds it before the modal
@@ -148,9 +165,17 @@ export default function SettingsModal({
   const workspaceLabel = activeWs ? `Workspace · ${activeWs.name}` : 'Workspace';
   const NAV = buildNav(workspaceLabel);
 
+  // `open` is a PROP, and this component is never conditionally mounted — App
+  // renders it unconditionally. Both halves of that are load-bearing. Radix's
+  // modal layer sets `pointer-events: none` on <body> while open and takes it
+  // off in its close sequence; unmounting an open Dialog skips that sequence
+  // entirely and the style sticks. The whole app then ignores every click while
+  // continuing to render and tick normally — it reads as a total freeze, and the
+  // keyboard still working is the tell. Never go back to `<Dialog open>` behind
+  // a `{isOpen && …}` mount.
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
-      {/* Height is set by the NAV, not the content pane: 17 rows (14 items + 3
+    <Dialog open={!!open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      {/* Height is set by the NAV, not the content pane: 17 rows (13 items + 4
           group headers) measure ~625px, so 620 clipped it by a hair and the left
           rail scrolled. 720 fits the rail outright with room for a few more
           sections. The rail keeps overflow-y-auto for short viewports, where

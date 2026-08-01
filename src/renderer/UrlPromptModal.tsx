@@ -18,14 +18,27 @@ import { Input } from '@/components/ui/input';
 //
 // The caller's onSubmit always receives an object so the call site can
 // destructure cleanly; in Add mode `text` is undefined.
-export default function UrlPromptModal({ onSubmit, onCancel, initialUrl, initialText }: any) {
-  const isEdit = initialText !== undefined;
-  const [url, setUrl] = useState(initialUrl ?? '');
-  const [text, setText] = useState(initialText ?? '');
+export default function UrlPromptModal({ open, onSubmit, onCancel, initialUrl, initialText }: any) {
+  // Latched at the open transition, NOT derived per-render. The caller clears
+  // its prompt state the instant this closes, so `initialText` goes undefined
+  // while the close animation is still running — deriving `isEdit` live would
+  // flip the title to "Add external link" on the way out, in front of the user.
+  const [isEdit, setIsEdit] = useState(false);
+  const [url, setUrl] = useState('');
+  const [text, setText] = useState('');
   const inputRef = useRef<any>(null);
 
+  // All of this used to run on mount, because the modal was mounted only while
+  // it was open. It is permanently mounted now and driven by `open` (see the
+  // Dialog below), so the OPEN TRANSITION seeds the fields — otherwise the
+  // clipboard read would fire once at app start and never again.
   useEffect(() => {
-    if (isEdit) {
+    if (!open) return;
+    const edit = initialText !== undefined;
+    setIsEdit(edit);
+    setUrl(initialUrl ?? '');
+    setText(initialText ?? '');
+    if (edit) {
       // Pre-fill from props; select the URL so users can quickly retype.
       requestAnimationFrame(() => inputRef.current?.select());
       return;
@@ -40,7 +53,7 @@ export default function UrlPromptModal({ onSubmit, onCancel, initialUrl, initial
         }
       }).catch(() => { /* clipboard access denied — fine */ });
     }
-  }, [isEdit]);
+  }, [open, initialUrl, initialText]);
 
   const submit = (e) => {
     e.preventDefault();
@@ -49,8 +62,11 @@ export default function UrlPromptModal({ onSubmit, onCancel, initialUrl, initial
     onSubmit({ url: trimmedUrl, text: isEdit ? text : undefined });
   };
 
+  // Controlled by `open` and never conditionally mounted — unmounting an open
+  // Radix Dialog strands `pointer-events: none` on <body> and the whole app
+  // stops accepting clicks. Same rule as SettingsModal, which spells out why.
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onCancel(); }}>
+    <Dialog open={!!open} onOpenChange={(next) => { if (!next) onCancel(); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit external link' : 'Add external link'}</DialogTitle>

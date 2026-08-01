@@ -2284,14 +2284,17 @@ export default function App() {
         </button>
       )}
 
-      {urlPromptOpts && (
-        <UrlPromptModal
-          onSubmit={handleUrlSubmit}
-          onCancel={handleUrlCancel}
-          initialUrl={urlPromptOpts.initialUrl}
-          initialText={urlPromptOpts.initialText}
-        />
-      )}
+      {/* Mounted unconditionally and driven by `open` — see UrlPromptModal. A
+          Radix Dialog that is unmounted while open never runs its close
+          sequence, so `pointer-events: none` stays on <body> and the app stops
+          responding to the mouse entirely. */}
+      <UrlPromptModal
+        open={!!urlPromptOpts}
+        onSubmit={handleUrlSubmit}
+        onCancel={handleUrlCancel}
+        initialUrl={urlPromptOpts?.initialUrl}
+        initialText={urlPromptOpts?.initialText}
+      />
 
       <ConfirmDialog
         open={!!deleteCandidates}
@@ -2398,52 +2401,54 @@ export default function App() {
         }}
       />
 
-      {settingsOpen && (
-        <SettingsModal
-          initialSection={settingsInitialSection}
-          companionOnline={companionOnline}
-          setupStatus={setup}
-          // The companion URL/key and git are the two inputs that don't ride the
-          // settings object, and Settings is the only place either can change —
-          // so re-asking on close is the whole refresh story, not a poll.
-          onClose={() => { setSettingsOpen(false); void setup.refresh(); }}
-          workspaces={workspaces}
-          activeWorkspaceId={activeWorkspaceId}
-          onWorkspaceAdded={adoptWorkspace}
-          onSwitchWorkspace={switchWorkspace}
-          onRemoveWorkspace={removeWorkspace}
-          onRenameWorkspaces={renameWorkspaces}
-          themeMode={themeMode}
-          onThemeModeChange={onThemeModeChange}
-          hideLineNumbers={hideLineNumbers}
-          onHideLineNumbersChange={onHideLineNumbersChange}
-          treePanel={treePanel}
-          onTreePanelChange={onTreePanelChange}
-          dailyNote={dailyNote}
-          onDailyNoteChange={onDailyNoteChange}
-          templates={templates}
-          onTemplatesChange={onTemplatesChange}
-          templateOptions={templateOptions}
-          builtinSkills={builtinSkills}
-          onBuiltinSkillToggle={onBuiltinSkillToggle}
-          tree={tree}
-          workspacePath={workspacePath}
-          codingAgent={codingAgentSettings}
-          onCodingAgentChange={onCodingAgentChange}
-          agentSecrets={agentSecrets}
-          onAgentSecretsChange={onAgentSecretsChange}
-          onReloadSecrets={reloadAgentSecrets}
-          transcription={transcription}
-          onTranscriptionChange={onTranscriptionChange}
-          sync={sync}
-          onSyncChange={onSyncChange}
-          timezone={timezone}
-          onTimezoneChange={onTimezoneChange}
-          onRebuildCache={rebuildLinkCache}
-          appUpdate={appUpdate}
-          saveStatus={saveStatus}
-        />
-      )}
+      {/* Mounted unconditionally and driven by `open` — see SettingsModal for
+          the full reason. Its sections still cost nothing while closed: Radix
+          doesn't render DialogContent's children until the dialog opens. */}
+      <SettingsModal
+        open={settingsOpen}
+        initialSection={settingsInitialSection}
+        companionOnline={companionOnline}
+        setupStatus={setup}
+        // The companion URL/key and git are the two inputs that don't ride the
+        // settings object, and Settings is the only place either can change —
+        // so re-asking on close is the whole refresh story, not a poll.
+        onClose={() => { setSettingsOpen(false); void setup.refresh(); }}
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspaceId}
+        onWorkspaceAdded={adoptWorkspace}
+        onSwitchWorkspace={switchWorkspace}
+        onRemoveWorkspace={removeWorkspace}
+        onRenameWorkspaces={renameWorkspaces}
+        themeMode={themeMode}
+        onThemeModeChange={onThemeModeChange}
+        hideLineNumbers={hideLineNumbers}
+        onHideLineNumbersChange={onHideLineNumbersChange}
+        treePanel={treePanel}
+        onTreePanelChange={onTreePanelChange}
+        dailyNote={dailyNote}
+        onDailyNoteChange={onDailyNoteChange}
+        templates={templates}
+        onTemplatesChange={onTemplatesChange}
+        templateOptions={templateOptions}
+        builtinSkills={builtinSkills}
+        onBuiltinSkillToggle={onBuiltinSkillToggle}
+        tree={tree}
+        workspacePath={workspacePath}
+        codingAgent={codingAgentSettings}
+        onCodingAgentChange={onCodingAgentChange}
+        agentSecrets={agentSecrets}
+        onAgentSecretsChange={onAgentSecretsChange}
+        onReloadSecrets={reloadAgentSecrets}
+        transcription={transcription}
+        onTranscriptionChange={onTranscriptionChange}
+        sync={sync}
+        onSyncChange={onSyncChange}
+        timezone={timezone}
+        onTimezoneChange={onTimezoneChange}
+        onRebuildCache={rebuildLinkCache}
+        appUpdate={appUpdate}
+        saveStatus={saveStatus}
+      />
     </div>
     </>
   );

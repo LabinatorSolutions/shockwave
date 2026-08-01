@@ -296,6 +296,38 @@ shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest 
   eleven Selects inherited the overlay; the one author who hit it patched their own
   call site instead of the default, which is why it survived.
 
+**A modal is CONTROLLED by an `open` prop and is never conditionally mounted.** Render
+`<TheModal open={isOpen} …>` unconditionally; never `{isOpen && <TheModal>}` around a
+`<Dialog open>`. Radix's `DismissableLayer` puts `pointer-events: none` on `<body>` while a
+modal is open and takes it off in its close sequence, and it tracks that with a `Set` of
+live layers plus a module-scoped `originalBodyPointerEvents` holding the value to restore.
+Unmounting an open dialog tears the dialog and everything inside it (an open `Select`, a
+`DropdownMenu`) down in ONE commit, so their cleanups race: whichever runs last writes its
+own saved value back. If that's the inner layer — which saved `"none"`, because the dialog
+had already set it — `<body>` keeps `pointer-events: none` forever.
+
+The result is the worst possible failure shape: **the app renders, animates, syncs and
+logs perfectly while ignoring every click.** It looks like a total hang, but every process
+is idle at 0% CPU and macOS doesn't mark it unresponsive. The tell is that **the keyboard
+still works** — keyboard events don't go through pointer hit-testing. If you ever see that,
+check `document.body.style.pointerEvents` first; `document.body.style.pointerEvents = ''`
+un-sticks it without a restart.
+
+Anything that used to run on mount then has to key off the open transition instead —
+`UrlPromptModal` reads the clipboard to pre-fill, and permanently mounted that would fire
+once at app start and never again. `SettingsModal` re-applies `initialSection` on open for
+the same reason, or every deep link would land on whatever page you closed Settings on last.
+
+**Radix internals that touch `document` are pinned to ONE copy** (`overrides` in
+`package.json`: `react-dismissable-layer`, `react-focus-guards`, `react-focus-scope`).
+Radix pins its own deps to exact versions, and `@radix-ui/react-popover@1.1.6` (pulled in by
+Excalidraw) held the hoisted slot at an older one — so npm nested a *separate physical copy*
+under `react-dialog`, `react-select`, `react-menu` and five others. Nine copies of a module
+whose state is global to one `document`, each with its own `Set` and its own
+`originalBodyPointerEvents`, is what let the restore write back the wrong value at all. Do
+not remove these overrides; the versions are minor bumps within the same major, and without
+them the layer bookkeeping is not actually shared.
+
 **When a setting saves — one rule, no Save buttons.** Inputs commit on blur, everything
 else on change, there are no Save buttons, and credential fields are write-only. The full
 policy — and the bugs each rule exists to prevent — is in **`settings/CLAUDE.md`**. Read it
