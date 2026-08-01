@@ -66,7 +66,7 @@ export default function TelegramSection({ workspaces, transcription, onTranscrip
                 <div className="text-[13px] font-medium">Connected{status.botUsername ? ` as @${status.botUsername}` : ''}</div>
                 <div className="text-xs text-muted-foreground">Message the bot on Telegram to run the agent.</div>
               </div>
-              <Button type="button" size="sm" variant="outline" onClick={disconnect} disabled={busy}>
+              <Button type="button" size="sm" onClick={disconnect} disabled={busy}>
                 {busy ? 'Disconnecting…' : 'Disconnect'}
               </Button>
             </div>
