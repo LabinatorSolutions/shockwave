@@ -283,7 +283,7 @@ export default function SettingsModal({
               onSwitch={(id) => { onSwitchWorkspace(id); onClose(); }}
               onRemove={onRemoveWorkspace}
               onRename={onRenameWorkspaces}
-              syncPat={sync?.pat}
+              hasSyncPat={!!sync?.hasPat}
               onOpenGitHubSettings={() => setActive(SETTINGS_SECTIONS.GITHUB)}
             />
           )}

@@ -23,8 +23,17 @@ import ErrorMessage from '../ErrorMessage.jsx';
 //
 // The PAT is still required to add one. What the old split got wrong wasn't
 // that the token lived elsewhere — it's that this page left you to find it on
-// your own. The Add button is now disabled without a token, with a link to the
+// your own. The Add button is disabled without a token, with a link to the
 // GitHub Sync section right above it.
+//
+// **It gates on `hasSyncPat`, never on the token itself.** Credential fields are
+// write-only: main strips `sync.pat` before settings cross IPC and substitutes
+// the `hasPat` flag, so the value is `undefined` in the renderer whether or not
+// one is stored. This shipped as `!syncPat?.trim()` and so was disabled for
+// everyone, permanently — with a "a GitHub token is required" note above it
+// aimed at people who already had one. Same mistake the Verify button made
+// (see "Verifying a credential" in settings/CLAUDE.md); anything asking "is
+// this credential set?" asks the presence flag.
 
 export default function WorkspacesSection({
   workspaces,
@@ -33,7 +42,10 @@ export default function WorkspacesSection({
   onSwitch,
   onRemove,
   onRename,
-  syncPat,
+  // PRESENCE, not the value. Credentials are write-only — main strips `sync.pat`
+  // before settings cross IPC and substitutes `hasPat` — so a check against the
+  // value is a check against `undefined` and this button could never enable.
+  hasSyncPat,
   onOpenGitHubSettings,
 }) {
   const [confirmRemoveId, setConfirmRemoveId] = useState<any>(null);
@@ -266,7 +278,7 @@ export default function WorkspacesSection({
               the requirement is visible without clicking into a dialog to be
               told. The old split's failure was leaving people to discover the
               token requirement on their own. */}
-          {!syncPat?.trim() && (
+          {!hasSyncPat && (
             <p className="mb-2 text-[13px] text-muted-foreground">
               A GitHub token is required.{' '}
               <button
@@ -276,7 +288,7 @@ export default function WorkspacesSection({
               >Add one in GitHub Sync settings</button>.
             </p>
           )}
-          <Button size="sm" onClick={() => setAddOpen(true)} disabled={!syncPat?.trim()}>
+          <Button size="sm" onClick={() => setAddOpen(true)} disabled={!hasSyncPat}>
             <Plus /> Add workspace
           </Button>
         </div>
