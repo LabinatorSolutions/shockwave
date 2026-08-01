@@ -1,20 +1,30 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Calendar } from '@/components/ui/calendar';
+import { dateFromISO } from './dailyNote.js';
 
 // Anchored popover wrapping the shadcn Calendar (react-day-picker under the
-// hood — it owns the calendar math: timezones, DST, locale-first-day-of-week).
+// hood — it owns the calendar math: DST, locale-first-day-of-week).
 // Closes on Esc or outside click. `anchor` is a {x, y} client-coords point
 // (from a right-click), so this positions itself manually rather than using a
 // Radix popover, which needs a DOM anchor element.
-export default function JournalDatePicker({ open, anchor, initialDate, onPick, onClose }: any) {
+//
+// `today` is a YYYY-MM-DD calendar date from App, in the user's configured
+// timezone. react-day-picker wants a `Date`, so it's converted at local midnight
+// — the calendar is a grid of labelled days, not a set of instants, and the day
+// highlighted as today must be the day the calendar button would open.
+export default function JournalDatePicker({ open, anchor, today, initialDate, onPick, onClose }: any) {
   const ref = useRef<any>(null);
-  const [month, setMonth] = useState(() => initialDate ?? new Date());
+  // Derived from primitives (an ISO string) rather than a shared Date object, so
+  // the effect below keys on a value that's stable across renders.
+  // `dateFromISO` returns null for anything malformed, hence the final fallback.
+  const shown = initialDate ?? dateFromISO(today) ?? new Date();
+  const [month, setMonth] = useState(shown);
   const [pos, setPos] = useState({ left: 0, top: 0 });
 
   useEffect(() => {
     if (!open) return;
-    setMonth(initialDate ?? new Date());
-  }, [open, initialDate]);
+    setMonth(initialDate ?? dateFromISO(today) ?? new Date());
+  }, [open, initialDate, today]);
 
   useLayoutEffect(() => {
     if (!open || !ref.current || !anchor) return;
@@ -66,7 +76,7 @@ export default function JournalDatePicker({ open, anchor, initialDate, onPick, o
         mode="single"
         month={month}
         onMonthChange={setMonth}
-        selected={initialDate ?? new Date()}
+        selected={shown}
         onSelect={(d) => { if (d) onPick(d); }}
         showOutsideDays
         captionLayout="label"

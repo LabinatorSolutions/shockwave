@@ -30,7 +30,7 @@ import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, VIEW_MODES, S
 import SortBar from './SortBar.jsx';
 import TreePanel from './TreePanel.jsx';
 import { openFileContextMenu } from './fileContextMenu.js';
-import { parseDailyNoteDate } from './dailyNote.js';
+import { parseDailyNoteDate, todayISO, isoFromDate, dateFromISO } from './dailyNote.js';
 import { collectTemplateFiles } from './templates.js';
 import { useLinkIndex } from './hooks/useLinkIndex.js';
 import { useTabs } from './hooks/useTabs.js';
@@ -1305,8 +1305,20 @@ export default function App() {
   }, [workspacePath, conflictFilterActive, onFolderAction]);
 
   // ---- journal (calendar in thin sidebar) ----
+  // THE app's answer to "what day is it", in the user's configured timezone —
+  // the calendar button, the date picker and the rail glyph all read this one
+  // value, so they can't disagree with each other or with the coding agent
+  // (which already runs with `process.env.TZ` set from the same setting).
+  //
+  // Computed per render, deliberately not memoized: it's one Intl format call,
+  // and a value cached across midnight would leave the app on yesterday. If the
+  // app sits fully idle across midnight it stays stale until any interaction
+  // triggers a render, which is what the rail glyph already accepted.
+  const todayIso = todayISO(timezone);
+
   const { journalPickerAnchor, setJournalPickerAnchor, openJournal } = useDailyNote({
     workspacePath,
+    today: todayIso,
     dailyNoteRef,
     writeNow,
     openInActiveTab,
@@ -1903,6 +1915,7 @@ export default function App() {
         onNewFolder={onNewFolder}
         onOpenJournal={() => openJournal()}
         onJournalContextMenu={(x, y) => setJournalPickerAnchor({ x, y })}
+        today={todayIso}
         onToggleGraph={onToggleGraph}
         graphMode={graphMode}
         templates={templateFiles}
@@ -1927,9 +1940,12 @@ export default function App() {
         open={!!journalPickerAnchor}
         anchor={journalPickerAnchor}
         onClose={() => setJournalPickerAnchor(null)}
+        today={todayIso}
         onPick={(date) => {
           setJournalPickerAnchor(null);
-          openJournal(date);
+          // The user clicked a box labelled with a day — that Y/M/D is the
+          // answer, so read it off the Date rather than converting an instant.
+          openJournal(isoFromDate(date));
         }}
       />
 
@@ -2458,6 +2474,7 @@ export default function App() {
         onTreePanelChange={onTreePanelChange}
         dailyNote={dailyNote}
         onDailyNoteChange={onDailyNoteChange}
+        today={todayIso}
         templates={templates}
         onTemplatesChange={onTemplatesChange}
         templateOptions={templateOptions}

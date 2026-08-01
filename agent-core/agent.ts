@@ -21,6 +21,7 @@ import { assembleSystemPrompt, rebuildSystemPrompt } from './defaults/index.js';
 import { activeToolNames } from './defaults/tools.js';
 import { makeAgentTokenTools } from './agentTokens.js';
 import { makeTranscribeTool } from './transcribe.js';
+import { makeDailyNoteTool } from './dailyNoteTool.js';
 import { makeChatSearchTool, type ChatSearchHost } from './chatSearch.js';
 import { imagesOf } from './messageImages.js';
 
@@ -364,6 +365,12 @@ export function createAgentRuntime(host: AgentHost) {
     const transcribeTools = allowed.includes('transcribe')
       ? [makeTranscribeTool(host.getTranscription, scratchDir)]
       : [];
+    // Built per session because it resolves paths inside THIS workspace. Its
+    // config is read off disk per call, so a settings change mid-chat is picked
+    // up without a reboot.
+    const dailyNoteTools = allowed.includes('daily_note')
+      ? [makeDailyNoteTool(workspacePath, timezone)]
+      : [];
     const extraTools = host.extraTools.filter((t: any) => allowed.includes(t?.name));
     for (const t of host.extraTools) {
       if (!allowed.includes(t?.name)) console.warn(`[agent] host tool "${t?.name}" is not offered on ${source ?? 'desktop'} runs — add it to TOOL_CATALOG to enable it.`);
@@ -372,7 +379,7 @@ export function createAgentRuntime(host: AgentHost) {
     const { session } = await createAgentSession({
       cwd: workspacePath, agentDir, model: modelObj, thinkingLevel: level as any,
       authStorage, modelRegistry, sessionManager, resourceLoader,
-      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...extraTools],
+      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...dailyNoteTools, ...extraTools],
       tools: allowed,
     });
 

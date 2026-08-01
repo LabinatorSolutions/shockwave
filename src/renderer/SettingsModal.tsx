@@ -110,6 +110,7 @@ export default function SettingsModal({
   onTreePanelChange,
   dailyNote,
   onDailyNoteChange,
+  today,
   templates,
   onTemplatesChange,
   templateOptions,
@@ -301,6 +302,7 @@ export default function SettingsModal({
                 onDailyNoteChange={onDailyNoteChange}
                 tree={tree}
                 workspacePath={workspacePath}
+                today={today}
                 templateOptions={templateOptions}
               />
             ) : <NoWorkspaceNote />

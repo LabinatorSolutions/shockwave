@@ -28,6 +28,10 @@ export default function DailyNoteSection({
   onDailyNoteChange,
   tree,
   workspacePath,
+  // Today's calendar date in the user's timezone, from App — the previews below
+  // show what TODAY's note would be called, so they have to use the same day the
+  // calendar button would.
+  today,
   templateOptions = [] as Array<{ name: string; value: string }>,
 }) {
   const format = dailyNote?.format || DEFAULT_DAILY_NOTE_FORMAT;
@@ -55,7 +59,7 @@ export default function DailyNoteSection({
     onDailyNoteChange({ ...dailyNote, format: next });
   });
   const previewFormat = isPreset ? format : customField.value;
-  const previewToday = useMemo(() => formatDailyNote(previewFormat), [previewFormat]);
+  const previewToday = useMemo(() => formatDailyNote(previewFormat, today), [previewFormat, today]);
 
   const onFolderChange = (next) => {
     onDailyNoteChange({ ...dailyNote, folder: next });
@@ -83,7 +87,7 @@ export default function DailyNoteSection({
           </SelectTrigger>
           <SelectContent>
             {DAILY_NOTE_FORMAT_PRESETS.map((p) => (
-              <SelectItem key={p} value={p}>{formatDailyNote(p)}</SelectItem>
+              <SelectItem key={p} value={p}>{formatDailyNote(p, today)}</SelectItem>
             ))}
             <SelectItem value={CUSTOM_VALUE}>Custom</SelectItem>
           </SelectContent>

@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react';
 import type { MutableRefObject } from 'react';
-import { formatDailyNote, resolveDailyNotePath } from '../dailyNote.js';
+import {
+  basenameIdentifiesDate, formatDailyNote, resolveDailyNotePath, shallowest,
+} from '../dailyNote.js';
 
 interface DailyNoteConfig {
   format: string;
@@ -12,6 +14,10 @@ interface DailyNoteConfig {
 
 interface UseDailyNoteOpts {
   workspacePath: string | null;
+  // Today's calendar date (YYYY-MM-DD) in the user's configured timezone.
+  // Handed in rather than read here so ONE place in the app decides what day it
+  // is — see `todayISO` in agent-core/dailyNote.js.
+  today: string;
   // Read via ref so openJournal always sees the latest format/folder without
   // being rebuilt when the setting changes.
   dailyNoteRef: MutableRefObject<DailyNoteConfig>;
@@ -29,6 +35,7 @@ interface UseDailyNoteOpts {
 // creates) the daily note for a date using the user's configured format/folder.
 export function useDailyNote({
   workspacePath,
+  today,
   dailyNoteRef,
   writeNow,
   openInActiveTab,
@@ -39,27 +46,29 @@ export function useDailyNote({
   // Anchor for the JournalDatePicker popover ({x, y} on right-click, else null).
   const [journalPickerAnchor, setJournalPickerAnchor] = useState<{ x: number; y: number } | null>(null);
 
-  // openJournal(date?) — opens (or creates) the daily note for `date` (default
-  // today) using the user's configured format + folder. If the format contains
-  // "/" the leading segments become subfolders. Existing notes are opened in
-  // place regardless of where they live (basename uniqueness is workspace-wide).
-  const openJournal = useCallback(async (date?: Date) => {
+  // openJournal(iso?) — opens (or creates) the daily note for a calendar date
+  // (YYYY-MM-DD, default today) using the user's configured format + folder. If
+  // the format contains "/" the leading segments become subfolders.
+  const openJournal = useCallback(async (iso?: string) => {
     if (!workspacePath) return;
-    const d = date ?? new Date();
+    const d = iso ?? today;
     const dn = dailyNoteRef.current;
     const formatted = formatDailyNote(dn.format, d);
     if (!formatted) {
       showError('Daily note format is invalid. Open Settings → Daily Note to fix it.');
       return;
     }
-    const { dir, name } = resolveDailyNotePath(workspacePath, dn.folder, formatted);
+    const { dir, name, absPath } = resolveDailyNotePath(workspacePath, dn.folder, formatted);
     try {
       await writeNow();
-      // Daily notes are basename-keyed; if duplicates exist, open the shallowest.
-      const dnPaths = linkIndex.cache.candidatesFor(name.toLowerCase());
-      const existing = dnPaths && dnPaths.length
-        ? dnPaths.slice().sort((a, b) => a.split('/').length - b.split('/').length || a.length - b.length)[0]
-        : null;
+      // An existing note is opened in place wherever it lives, so moving your
+      // notes or changing the folder setting doesn't start a second one — but
+      // only when the basename identifies the date on its own (see
+      // `basenameIdentifiesDate`; same rule as `locate` in dailyNoteTool.ts).
+      const candidates = linkIndex.cache.candidatesFor(name.toLowerCase()) || [];
+      const existing = basenameIdentifiesDate(formatted)
+        ? shallowest(candidates)
+        : candidates.find((p) => p === absPath) ?? null;
       if (existing) {
         await openInActiveTab(existing);
         return;
@@ -82,7 +91,7 @@ export function useDailyNote({
     } catch (err: any) {
       showError(err.message ?? String(err));
     }
-  }, [workspacePath, dailyNoteRef, writeNow, linkIndex, openInActiveTab, fileOps, showError]);
+  }, [workspacePath, today, dailyNoteRef, writeNow, linkIndex, openInActiveTab, fileOps, showError]);
 
   return { journalPickerAnchor, setJournalPickerAnchor, openJournal };
 }

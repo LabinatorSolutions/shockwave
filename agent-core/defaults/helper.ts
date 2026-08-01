@@ -178,6 +178,42 @@ const EXTENDING_GRAPH = `# Extending the graph
 
 When you write or update content, add wiki-links wherever there's an obvious connection. You may reference a file that doesn't exist yet — \`[[New Topic]]\` is valid as an unresolved link in the editor. If the conversation calls for that file to actually exist, **create it** (only avoid a name already used in the same folder), give it a short opening paragraph, and link it.`;
 
+// Included only when `daily_note` survives the tool filter, same rule as
+// REACHING_THE_USER: a section that tells the agent to call a tool by name is
+// worse than nothing when the tool isn't there.
+//
+// The trigger list is the point of this section. "Add this to my journal" is a
+// destination, not a description, and without the mapping the agent writes a
+// sensible-looking new file instead — which is the same failure "send me" had
+// before REACHING_THE_USER existed.
+//
+// `hasOpenFile` is desktop-only; off it, there is no UI to show a file in.
+const DAILY_NOTES = (hasOpenFile: boolean) => `# Daily notes (the journal)
+
+The user keeps a **daily note** — one file per day, the workspace's journal. The app has a calendar button that opens today's; \`daily_note\` resolves the same file.
+
+Its name comes from a format string the user chose and its folder from a second setting, both per workspace (\`.shockwave/workspace.json\`, under \`dailyNote\` — readable and editable like any other file, and the user changes it in Settings → Daily Notes). Slashes in the format are folder boundaries, so \`YYYY/MM/DD\` files notes under year and month folders.
+
+**Never construct a daily note's filename yourself.** Call \`daily_note\` — it applies both settings and tells you whether the file already exists. A guessed name doesn't fail loudly; it quietly creates a second note beside the real one, and the user finds out days later.
+
+## When the user means the daily note
+
+**"Journal", "daily note", "diary", "today's note", "log this", "add this to today's"** — all mean today's daily note. Take them as a destination: resolve it with \`create: true\` and add to it.
+
+**"Save this" / "write this down" / "keep this"** with no destination named means the daily note too. But if the conversation is already about a particular file — you just edited it, or the user pointed you at it — that file is what they mean. Prefer the obvious subject over the journal, and ask if there genuinely isn't one.
+
+**"What did I write yesterday / on the 12th / last Monday"** is the read direction: work out the calendar date, call \`daily_note\` with \`date\` and **no** \`create\`, and read it. Don't create a file for a day the user is only asking about — an empty note dated last Monday is worse than an honest "nothing there".
+
+## Writing into it
+
+**Add to the note; never replace it.** Read it first and append, or edit the section you're adding to. A daily note usually already has the user's own writing in it, and it is the one file where overwriting costs the most.
+
+**Record what the user said WORD FOR WORD. Never summarize, condense, paraphrase, tidy up the grammar, or "clean up" a dictated ramble.** This is the user's journal, not your notes about it — they are capturing their own thinking, and the exact wording is the thing being kept. A four-sentence thought does not become one better sentence. If they dictated it, the transcript is the entry. You may add structure *around* the entry (a heading, a bullet, a link) but not inside their words. When they explicitly ask you to write a summary, that request is itself the content — write the summary they asked for, and don't apply this rule to it.
+
+**Stamp every entry with the time.** Head it with the local time, e.g. \`**2:45 PM**\`, so the day reads in order and they can see when a thought landed. **Run \`date\` to get it — you are told today's date but not the time of day, so any time you write without checking is invented.** One \`date\` call covers a whole turn.
+
+Match what's already in the file: if the day's entries are bullets under a heading, add a bullet in that shape; if the note already has a timestamp convention, follow that one instead of introducing a second.${hasOpenFile ? '\n\nAfter you write to it, call `open_file` so the user can see it.' : ''}`;
+
 const MARKDOWN = `# Markdown supported
 
 Shockwave renders **CommonMark only** (no GFM), with these specifics:
@@ -258,6 +294,9 @@ export function buildShockwaveHelper(
     DUPLICATE_BASENAMES,
     LINK_GRAPH,
     EXTENDING_GRAPH,
+    ...(tools.some((t) => t.name === 'daily_note')
+      ? [DAILY_NOTES(tools.some((t) => t.name === 'open_file'))]
+      : []),
     MARKDOWN,
     SKILLS,
     SCHEDULED_RUNS(timezone),

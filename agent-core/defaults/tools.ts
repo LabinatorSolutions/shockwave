@@ -64,6 +64,9 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   // Speech to text. Every source: a recording in the workspace is as likely to
   // need reading on the desktop as one sent over Telegram.
   { name: 'transcribe', origin: 'custom', desc: 'Transcribe an audio or video file into text with timestamps and speaker labels. Writes a transcript file and returns its path. Use whenever you need to know what was said in a recording.' },
+  // Every source: "add this to my journal" is as likely over Telegram as in the
+  // app, and a scheduled run that writes a daily summary needs it too.
+  { name: 'daily_note', origin: 'custom', desc: "Find the user's daily note (journal) for a date — today by default — and create it from their template if asked. Returns the workspace-relative path. Use this instead of guessing a filename: the name and folder come from per-workspace settings." },
   // The agent's memory of earlier conversations in this workspace.
   { name: 'search_chats', origin: 'custom', desc: 'Search earlier chats in this workspace — what the user told you before, what was decided, what you already tried. Pass `query` to search, `chatId` + `around` to read more of one, or nothing to list recent chats. Results carry dates; prefer recent ones when they disagree.' },
 ];

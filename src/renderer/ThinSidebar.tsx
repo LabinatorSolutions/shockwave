@@ -22,6 +22,7 @@ export default function ThinSidebar({
   onNewFolder,
   onOpenJournal,
   onJournalContextMenu,
+  today = '',
   onToggleGraph,
   graphMode,
   templates = [] as Array<{ name: string; path: string }>,
@@ -30,11 +31,10 @@ export default function ThinSidebar({
   cronBadge = 'none' as 'none' | 'on' | 'error',
   disabled,
 }) {
-  // Day-of-month is read on render — no timer. The icon refreshes whenever the
-  // parent re-renders (which happens constantly during user activity). If the
-  // app sits fully idle across midnight, the day stays stale until any
-  // interaction triggers a render. Acceptable for a glyph.
-  const todayDay = new Date().getDate();
+  // `today` is a YYYY-MM-DD calendar date from App, in the user's configured
+  // timezone — the same value the calendar button opens, so the number on the
+  // glyph can't disagree with the note you get when you click it.
+  const todayDay = Number(today.slice(8, 10)) || new Date().getDate();
 
   return (
     <div className="flex flex-col items-center gap-[3px] border-r border-border bg-chrome pt-3">
