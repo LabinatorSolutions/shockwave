@@ -33,6 +33,10 @@ function leadingWidth(line) {
   return w;
 }
 
+// A list-item line: optional indent, then a bullet ([-*+]) or ordered (1. / 1))
+// marker. Task items (- [ ]) match too via the bullet branch.
+const CONTEXT_BULLET_RE = /^[ \t]*([-*+]|\d+[.)])(\s|$)/;
+
 function collectContext(lines, startIdx, max = 20) {
   const baseIndent = leadingWidth(lines[startIdx]);
   const ctx = [];
@@ -43,9 +47,24 @@ function collectContext(lines, startIdx, max = 20) {
       pendingBlanks.push(line);
       continue;
     }
-    if (leadingWidth(line) <= baseIndent) break;
-    ctx.push(...pendingBlanks, line);
-    pendingBlanks.length = 0;
+    if (leadingWidth(line) > baseIndent) {
+      // Indented continuation — blanks inside it are kept.
+      ctx.push(...pendingBlanks, line);
+      pendingBlanks.length = 0;
+      continue;
+    }
+    // A list item at the link line's own indent belongs (the bullets that
+    // follow a line, flat-list style), but a blank line ends that list —
+    // markdown-wise the next bullet is a new block.
+    if (
+      pendingBlanks.length === 0 &&
+      leadingWidth(line) === baseIndent &&
+      CONTEXT_BULLET_RE.test(line)
+    ) {
+      ctx.push(line);
+      continue;
+    }
+    break;
   }
   return ctx;
 }

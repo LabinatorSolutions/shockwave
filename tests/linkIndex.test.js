@@ -37,6 +37,31 @@ test('parseLinks ignores empty target', () => {
   assert.equal(links.length, 0);
 });
 
+test('context: indented lines qualify, blanks inside kept', () => {
+  const links = parseLinks('[[X]]\n\tchild\n\n\tafter blank\nnot context\n');
+  assert.deepEqual(links[0].contextLines, ['\tchild', '', '\tafter blank']);
+});
+
+test('context: same-indent bullets under a paragraph qualify', () => {
+  const links = parseLinks('para [[X]]\n- a\n1. b\nplain stops it\n');
+  assert.deepEqual(links[0].contextLines, ['- a', '1. b']);
+});
+
+test('context: blank line kills a same-indent bullet run', () => {
+  const links = parseLinks('para [[X]]\n- a\n\n- new list\n');
+  assert.deepEqual(links[0].contextLines, ['- a']);
+});
+
+test('context: blank between link line and bullet means no bullet context', () => {
+  const links = parseLinks('para [[X]]\n\n- unrelated\n');
+  assert.deepEqual(links[0].contextLines, []);
+});
+
+test('context: bullet link line takes children AND same-indent siblings', () => {
+  const links = parseLinks('- [[X]]\n\t- child\n- sibling\n\n- past blank excluded\n');
+  assert.deepEqual(links[0].contextLines, ['\t- child', '- sibling']);
+});
+
 test('updateFile records outgoing and backlinks', () => {
   const idx = createLinkIndex();
   idx.updateFile('/A.md', '[[Beta]]\n', 100);

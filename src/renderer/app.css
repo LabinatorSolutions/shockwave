@@ -366,8 +366,14 @@ html, body, #root {
 .cm-bullet {
   display: inline-block;
   width: 1ch;
-  /* Wider bullet→text gap (polish spec §5) — deliberate breathing room. */
+  /* Wider bullet→text gap (polish spec §5) — deliberate breathing room.
+     hangingIndent.ts mirrors this 1ch + 6px when computing a wrapped bullet's
+     hang — change one, change both. */
   margin-right: 6px;
+  /* text-indent INHERITS, and an inline-block re-applies it to its own content:
+     on a hanging line (.cm-line's negative text-indent) the • would paint
+     outside this 1ch box, left of the line start. */
+  text-indent: 0;
   text-align: center;
   color: var(--bullet);
   font-weight: bold;

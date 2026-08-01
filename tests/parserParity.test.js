@@ -26,6 +26,11 @@ const FIXTURES = [
   '[[Trailing space ]] and [[ Leading space]]\n',
   '[[]] empty body should not match\n',
   '[ not a link \n[[real]]\n',
+  'para [[X]]\n- bullet a\n- bullet b\n',           // same-indent bullets under a paragraph
+  'para [[X]]\n\n- bullet after blank\n',            // blank kills the bullet run
+  '- [[X]]\n- sibling\n\t- child\n',                 // bullet link line: siblings + children both in
+  'para [[X]]\n1. ordered\n2) also ordered\n',       // ordered markers
+  'para [[X]]\n- a\n\n- b after blank\n',            // blank mid-list ends context
   '\\[\\[escaped]] should still match the regex (we don\'t process escapes)\n',
 ];
 

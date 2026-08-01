@@ -7,7 +7,7 @@ import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, indentUnit, L
 import { languages } from '@codemirror/language-data';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { indentGuides } from './indentGuides.js';
-import { hangingIndent } from './hangingIndent.js';
+import { hangingIndent, listMarkerGlyphs } from './hangingIndent.js';
 // Only the SYNTAX colors come from one-dark — editor chrome (backgrounds,
 // gutter, active line) is token-driven via CSS vars so dark mode matches the
 // app's warm palette (polish spec §9) instead of one-dark's cool blue-gray.
@@ -511,6 +511,9 @@ const Editor = forwardRef<any, any>(function Editor(
       markdownLinks,
       taskCheckboxes,
       bulletPoints,
+      // Tells hangingIndent the bullet marker renders as bulletPoints' glyph
+      // (1ch + 6px) rather than the raw `-`, so wrapped-bullet hang lines up.
+      listMarkerGlyphs.of(true),
       codeStyles,
       imageWidgets(
         () => getActiveFilePathRef?.current ?? null,

@@ -13,6 +13,7 @@ import { EditorView } from '@codemirror/view';
 let cachedFont = '';
 let cachedSpace = 0;
 let measureCtx: CanvasRenderingContext2D | null = null;
+const textCache = new Map<string, number>(); // per-font, cleared on font change
 
 export function spaceWidth(view: EditorView) {
   const cs = getComputedStyle(view.contentDOM);
@@ -23,8 +24,21 @@ export function spaceWidth(view: EditorView) {
     measureCtx.font = font;
     cachedFont = font;
     cachedSpace = measureCtx.measureText(' ').width;
+    textCache.clear();
   }
   return cachedSpace;
+}
+
+// Measured width of arbitrary text in the editor font. Call spaceWidth(view)
+// first (it owns the font read + cache invalidation).
+export function textWidthPx(text: string) {
+  if (!measureCtx) return 0;
+  let w = textCache.get(text);
+  if (w === undefined) {
+    w = measureCtx.measureText(text).width;
+    textCache.set(text, w);
+  }
+  return w;
 }
 
 export function tabStopPx(view: EditorView, sp: number) {

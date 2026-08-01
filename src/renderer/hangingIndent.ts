@@ -1,6 +1,6 @@
-import { Decoration, ViewPlugin, EditorView } from '@codemirror/view';
-import { RangeSetBuilder } from '@codemirror/state';
-import { spaceWidth, tabStopPx, leadingWidthPx } from './indentMetrics.js';
+import { Decoration, ViewPlugin, EditorView, WidgetType } from '@codemirror/view';
+import { RangeSetBuilder, Facet } from '@codemirror/state';
+import { spaceWidth, tabStopPx, leadingWidthPx, nextPx, textWidthPx } from './indentMetrics.js';
 
 // Hanging indent for wrapped lines.
 //
@@ -11,17 +11,37 @@ import { spaceWidth, tabStopPx, leadingWidthPx } from './indentMetrics.js';
 // the first line with a matching negative text-indent. The first line renders
 // exactly where it always did; every wrapped line hangs at the indent.
 //
-// The hang is the width of the leading whitespace ONLY — a wrapped bullet hangs
-// at its indent level, under the bullet. Deliberately NOT the width of the
-// bullet/marker too (aligning under the marker's text): CSS measures tab stops
-// from the block's content edge, which this padding moves. Whitespace-only
-// indent is always a whole number of 20px tab stops (app.css `--editor-tab-size`
-// is the one knob), so the grid shifts by whole tabs and lands identically. A
-// hang that isn't a tab multiple drags every tab on the line left instead.
+// For LIST lines the hang additionally includes the marker (`- ` / `1. `), so a
+// wrapped bullet continues under its own text — the convention in every
+// markdown editor. That wider hang collides with CSS tab rendering: tab stops
+// are measured from the content edge, which the padding moves, so any raw tab
+// on the line snaps to a shifted grid unless the hang is a whole number of tab
+// stops (whitespace-only hang always is; marker widths never are). Two guards
+// make the wider hang safe:
+//   • The line's LEADING tabs are each replaced with a fixed-width spacer
+//     widget (`cm-tab-spacer`, width = that tab's own advance), so no raw tab
+//     renders before the text. Visual layout, cursor positions, and editing are
+//     unchanged — only the tab's width stops being grid-derived.
+//   • A tab anywhere AFTER the leading whitespace (rare) disables the marker
+//     extension for that line; it falls back to the whitespace-only hang.
+// Task lines (`- [ ] …`) also fall back: their marker renders as a native
+// checkbox whose width would need a layout read CodeMirror forbids here.
 //
-// `--hang` is consumed by the `.cm-line` rule in app.css.
+// `--hang` is consumed by the `.cm-line` rule in Editor.tsx's theme.
 
 const LEADING_WS_RE = /^[ \t]*/;
+// List marker with at least one following space and some content.
+const LIST_RE = /^([ \t]*)([-*+]|\d+[.)])( +)(?=\S)/;
+const TASK_AFTER_RE = /^\[[ xX]\]/;
+
+// bulletPoints.ts (live preview only) replaces a [-*+] marker char with a 1ch
+// inline-block glyph + 6px margin-right (.cm-bullet in app.css — keep in sync).
+// The livePreview bundle provides this facet so the hang matches what's
+// actually rendered; raw mode measures the marker text itself.
+export const listMarkerGlyphs = Facet.define<boolean, boolean>({
+  combine: (values) => values.some(Boolean),
+});
+const BULLET_GLYPH_GAP_PX = 6;
 
 // One Decoration per distinct hang width — lines at the same depth share it.
 const decoCache = new Map<string, Decoration>();
@@ -35,11 +55,53 @@ function hangDeco(px: number) {
   return d;
 }
 
+// Fixed-width stand-in for one leading tab character.
+class TabSpacerWidget extends WidgetType {
+  px: number;
+  constructor(px: number) {
+    super();
+    this.px = px;
+  }
+  eq(other: TabSpacerWidget) {
+    return other.px === this.px;
+  }
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-tab-spacer';
+    span.style.display = 'inline-block';
+    span.style.width = `${this.px.toFixed(2)}px`;
+    // Inline-blocks re-apply the line's inherited negative text-indent.
+    span.style.textIndent = '0';
+    return span;
+  }
+}
+
+const spacerCache = new Map<string, Decoration>();
+function spacerDeco(px: number) {
+  const key = px.toFixed(2);
+  let d = spacerCache.get(key);
+  if (!d) {
+    d = Decoration.replace({ widget: new TabSpacerWidget(px) });
+    spacerCache.set(key, d);
+  }
+  return d;
+}
+
+// Rendered width of a list marker + its trailing spaces.
+function markerPx(marker: string, spaces: number, sp: number, glyphs: boolean) {
+  const glyph =
+    glyphs && marker.length === 1 && '-*+'.includes(marker)
+      ? textWidthPx('0') + BULLET_GLYPH_GAP_PX // .cm-bullet: 1ch wide + 6px gap
+      : textWidthPx(marker);
+  return glyph + spaces * sp;
+}
+
 function buildDecorations(view: EditorView) {
   const builder = new RangeSetBuilder<Decoration>();
   const sp = spaceWidth(view);
   if (!sp) return builder.finish();
   const tabPx = tabStopPx(view, sp);
+  const glyphs = view.state.facet(listMarkerGlyphs);
   const doc = view.state.doc;
   let lastLine = 0; // a line can straddle two visible ranges — add it once
 
@@ -51,9 +113,27 @@ function buildDecorations(view: EditorView) {
         lastLine = line.number;
         const ws = LEADING_WS_RE.exec(line.text)![0];
         // Skip blank/whitespace-only lines — nothing there to wrap.
-        if (ws && ws.length < line.text.length) {
-          const px = leadingWidthPx(ws, sp, tabPx);
+        if (ws.length < line.text.length) {
+          let px = leadingWidthPx(ws, sp, tabPx);
+          const m = LIST_RE.exec(line.text);
+          const extend =
+            m &&
+            !TASK_AFTER_RE.test(line.text.slice(m[0].length)) &&
+            line.text.indexOf('\t', ws.length) === -1;
+          if (extend) px += markerPx(m![2], m![3].length, sp, glyphs);
           if (px > 0) builder.add(line.from, line.from, hangDeco(px));
+          if (extend && ws.includes('\t')) {
+            // Replace each leading tab with its own fixed-width spacer so the
+            // non-tab-multiple hang can't shift the tab grid (see header).
+            let x = 0;
+            for (let i = 0; i < ws.length; i++) {
+              const nx = nextPx(x, ws[i], sp, tabPx);
+              if (ws[i] === '\t') {
+                builder.add(line.from + i, line.from + i + 1, spacerDeco(nx - x));
+              }
+              x = nx;
+            }
+          }
         }
       }
       pos = line.to + 1;
@@ -69,7 +149,12 @@ export const hangingIndent = ViewPlugin.fromClass(
       this.decorations = buildDecorations(view);
     }
     update(update) {
-      if (update.docChanged || update.viewportChanged || update.geometryChanged) {
+      if (
+        update.docChanged ||
+        update.viewportChanged ||
+        update.geometryChanged ||
+        update.startState.facet(listMarkerGlyphs) !== update.state.facet(listMarkerGlyphs)
+      ) {
         this.decorations = buildDecorations(update.view);
       }
     }
