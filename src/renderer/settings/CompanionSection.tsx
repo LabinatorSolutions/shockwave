@@ -8,9 +8,11 @@ import CredentialRow from './CredentialRow';
 import CompanionUpdateDialog from '../CompanionUpdateDialog.jsx';
 
 // The desktop's connection to the Shockwave companion (server URL + API key).
-// Every other settings page reads/writes through this connection, so this page
-// gates them: until the companion is reachable with a valid key, the rest are
-// disabled.
+// Every other settings page reads/writes through this connection. The modal's
+// gate on those pages is NOT driven from here — it follows the live feed
+// (`companionOnline`); this page's probe is pure diagnostics: it tells the user
+// WHAT is wrong (unreachable / bad key / certificate awaiting approval), while
+// the feed tells the app WHETHER the stored connection works.
 //
 // The URL is stored plaintext; the key is safeStorage-wrapped in main. Neither
 // crosses back to the renderer — api:read returns only { url, hasApiKey }.
@@ -37,7 +39,7 @@ type Status = 'idle' | 'checking' | 'connected' | 'failed' | 'needsApproval';
 
 interface CertInfo { host: string; approved: string | null; offered: string }
 
-export default function CompanionSection({ onReadyChange }: { onReadyChange?: (ready: boolean) => void }) {
+export default function CompanionSection() {
   const [storedUrl, setStoredUrl] = useState('');
   const [hasStoredKey, setHasStoredKey] = useState(false);
   const [status, setStatus] = useState<Status>('idle');
@@ -64,23 +66,20 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
     window.api.settings.apiCheckVersion().then(setVerCheck).catch(() => setVerCheck(null));
   };
 
-  const emitReady = useCallback((ready: boolean) => { onReadyChange?.(ready); }, [onReadyChange]);
-
   // Only the newest probe may publish. Press Connect twice, or edit a field
   // mid-probe, and a slower earlier reply must not overwrite a newer result.
   const probeReq = useRef(0);
 
   // Drop to "not connected" without probing. Called when the stored details
   // change and when a field is edited — a green line describing a URL you have
-  // since changed is a lie, and this page gates every other page.
+  // since changed is a lie.
   const disconnect = useCallback((msg: string) => {
     probeReq.current++;              // invalidate anything in flight
     setStatus('idle');
     setMessage(msg);
     setCert(null);
     setVerCheck(null); // it described the connection we just dropped
-    emitReady(false);
-  }, [emitReady]);
+  }, []);
 
   // Probe. Reports only — it cannot approve a certificate.
   const connect = useCallback(async (url: string, apiKey?: string) => {
@@ -96,23 +95,22 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
       if (r.ok) {
         // No message — the row's heading already says "Connected", and repeating
         // it rendered "Connected / Connected." one under the other.
-        setStatus('connected'); setMessage(''); setCert(null); emitReady(true);
+        setStatus('connected'); setMessage(''); setCert(null);
         // Re-read: an approval that just happened changes what's stored.
         window.api.settings.apiRead().then((c) => setApprovedFp(c.certFingerprint || '')).catch(() => {});
         refreshVersionCheck();
       } else if (r.certNeedsApproval) {
-        setStatus('needsApproval'); setMessage(''); setCert(r.certNeedsApproval); emitReady(false);
+        setStatus('needsApproval'); setMessage(''); setCert(r.certNeedsApproval);
       } else {
-        setStatus('failed'); setMessage(r.error || 'Could not reach the companion.'); setCert(null); emitReady(false);
+        setStatus('failed'); setMessage(r.error || 'Could not reach the companion.'); setCert(null);
       }
     } catch (err: any) {
       if (probeReq.current !== req) return;
       setStatus('failed');
       setMessage(err?.message || 'Connection attempt failed.');
       setCert(null);
-      emitReady(false);
     }
-  }, [disconnect, emitReady]);
+  }, [disconnect]);
 
   // On open: show what's stored and re-probe. Safe now that a probe can't
   // approve anything — it either confirms an already-approved server or reports
@@ -126,7 +124,7 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
       setHasStoredKey(!!c.hasApiKey);
       setApprovedFp(c.certFingerprint || '');
       if (c.url && c.hasApiKey) connect(c.url);
-      else { setMessage('Enter your server details, then press Connect.'); emitReady(false); }
+      else setMessage('Enter your server details, then press Connect.');
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -142,9 +140,8 @@ export default function CompanionSection({ onReadyChange }: { onReadyChange?: (r
     } catch (err: any) {
       setStatus('failed');
       setMessage(err?.message || 'Failed to save the connection.');
-      emitReady(false);
     }
-  }, [disconnect, emitReady]);
+  }, [disconnect]);
 
   const urlField = useCommitField(storedUrl, (next) => { save({ url: next.trim() }); });
 

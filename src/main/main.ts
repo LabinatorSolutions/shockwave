@@ -991,7 +991,14 @@ ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
   const key = apiKey || readApiConfig().apiKey;
   if (!url || !key) return { ok: false, error: 'URL and API key are both required.' };
   const res = await api.health(url, key);
-  if (res.ok) return { ok: true, version: res.version };
+  if (res.ok) {
+    // The probe succeeded but the feed may still be parked in its retry backoff
+    // (up to 30s), and the feed is what gates the settings pages. Kick it so the
+    // gate follows promptly. Same rule as api:write: no refresh here — the
+    // reopen is the refresh (see setCompanionOnline).
+    if (!companionOnline) { stopLiveFeed(); startLiveFeed(); }
+    return { ok: true, version: res.version };
+  }
 
   // Ask the server for its certificate DIRECTLY rather than hoping the verify
   // proc happened to park one. Chromium caches its certificate verdict per host

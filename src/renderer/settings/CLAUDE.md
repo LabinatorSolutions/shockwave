@@ -4,7 +4,7 @@ Every Settings page. `SettingsModal.tsx` (one level up) is the host; each sectio
 
 Read `src/renderer/CLAUDE.md` first for the app-wide UI conventions (Tailwind + shadcn, tokens, button hierarchy, the section/dialog templates). **This file is the settings-only policy**: when a value saves, how credentials are handled, and what each section owns.
 
-**The modal gates every non-Companion page** until the companion is confirmed reachable — an `apiReady` state forces the Companion page and disables the other nav items ("Connect to your server first"). The gate is modal-scoped; `App.tsx` has no full-app block, it just reads settings at boot.
+**The modal gates every non-Companion page on `companionOnline`** — the live feed's reachability signal, pushed from main. While it's false the Companion page is forced and the other nav items are disabled ("Connect to your server first"). The feed is the single gate because every other page reads/writes through the *stored* connection, which is exactly what the feed exercises; the Companion page's own probe (`api:test`) is diagnostics for the human — what's wrong: unreachable / bad key / cert awaiting approval — and never drives the gate. (A successful probe kicks the feed's retry in main so the gate follows without waiting out the backoff.) The gate is modal-scoped; `App.tsx` has no full-app block, it just reads settings at boot.
 
 ## When a setting saves — one rule, no Save buttons
 

@@ -115,35 +115,34 @@ export default function SettingsModal({
   setupStatus,
   companionOnline = true,
 }) {
-  // null = still checking on open; every non-Server page is disabled until the
-  // server connection is confirmed reachable.
-  const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
 
-  const gated = apiReady !== true || !companionOnline; // checking, key rejected, or feed offline
-  // When the server isn't set up, only the Server page is reachable.
+  // The live feed is the gate. Every other page reads/writes through the STORED
+  // connection, which is exactly what the feed exercises — so `companionOnline`
+  // is the one signal, known synchronously (App seeds it before the modal
+  // mounts; there is no "still checking" window). The Companion page's own
+  // probe is diagnostics for the human (WHAT is wrong), never the gate.
+  //
+  // An earlier design also gated on the probe's result (`apiReady`), which made
+  // two independent assessments of the same server: the feed could still be
+  // backing off (up to 30s) after a successful Connect, so the nav sat disabled
+  // beside a green "Connected" row. And it gated on draft edits, which is
+  // wrong — other pages talk to the stored config, not the boxes.
+  const gated = !companionOnline;
   const effectiveActive = gated && active !== SETTINGS_SECTIONS.COMPANION
     ? SETTINGS_SECTIONS.COMPANION
     : active;
 
-  // Once the check has FAILED, move `active` itself to Companion. Overriding only
-  // the DERIVED value left `active` pointing at the default section, so the
-  // instant the gate released — pressing Approve, which connects — the page
-  // jumped away from Companion to General, mid-task, with the confirmation you
-  // were reading still on screen for a fraction of a second.
-  //
-  // `apiReady === false`, NOT `gated`: gated is also true while the check is
-  // still running, and rewriting `active` then destroyed every deep link into
-  // this modal (Cron's "Cron Settings", the chat sidebar's API Secrets, …). The
-  // requested section was overwritten before the answer came back, and a
-  // successful answer had nothing left to restore — every one of them landed on
-  // Companion. While checking, the derived value alone keeps Companion on screen,
-  // which it must: CompanionSection is what runs the probe.
+  // Move `active` itself, not only the derived value: otherwise the instant the
+  // gate releases (the feed opens after Approve/Connect) the page would jump
+  // away from Companion to whatever `active` still pointed at, mid-task. Deep
+  // links survive because this only runs while gated — every target section is
+  // disabled then anyway.
   useEffect(() => {
-    if (apiReady === false && active !== SETTINGS_SECTIONS.COMPANION) {
+    if (gated && active !== SETTINGS_SECTIONS.COMPANION) {
       setActive(SETTINGS_SECTIONS.COMPANION);
     }
-  }, [apiReady, active]);
+  }, [gated, active]);
 
   const activeWs = (workspaces || []).find((w) => w.id === activeWorkspaceId);
   const workspaceLabel = activeWs ? `Workspace · ${activeWs.name}` : 'Workspace';
@@ -227,7 +226,7 @@ export default function SettingsModal({
         </nav>
         <div className="min-w-0 flex-1 overflow-y-auto">
           {effectiveActive === SETTINGS_SECTIONS.COMPANION && (
-            <CompanionSection onReadyChange={setApiReady} />
+            <CompanionSection />
           )}
           {effectiveActive === SETTINGS_SECTIONS.GENERAL && (
             <GeneralSection
