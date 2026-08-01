@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { SettingsSection, SettingsGroup } from './SectionUI';
 import { Button } from '@/components/ui/button';
 
-// Maintenance actions that don't belong to any one feature section.
+// Per-workspace maintenance actions that don't belong to any one feature section.
 //
 // "Rebuild link cache" is the UI for the `fs:rebuildLinkCache` escape hatch:
 // it discards the persisted parse cache (userData/link-cache/<hash>.json) and
@@ -10,7 +10,13 @@ import { Button } from '@/components/ui/button';
 // in-memory link index. Normally unnecessary — the cache self-validates on
 // mtime + size — but it's the recovery path if the index ever drifts from disk
 // (e.g. after an external tool rewrites files in ways the watcher missed).
-export default function AdvancedSection({ hasWorkspace, onRebuildCache }) {
+//
+// It lives under the WORKSPACE nav group, so it takes no `hasWorkspace`: the
+// modal renders `NoWorkspaceNote` in its place when none is open, the same as
+// Daily Notes / Templates / Manage Skills. Handling the empty case here as well
+// would mean this one page answered "no workspace" with a live page and a dead
+// button while its neighbours answered with a sentence.
+export default function AdvancedSection({ onRebuildCache }) {
   const [state, setState] = useState('idle'); // 'idle' | 'running' | 'done' | 'error'
   const [count, setCount] = useState(0);
 
@@ -46,13 +52,10 @@ export default function AdvancedSection({ hasWorkspace, onRebuildCache }) {
           size="sm"
           className="w-fit"
           onClick={onClick}
-          disabled={!hasWorkspace || state === 'running'}
+          disabled={state === 'running'}
         >
           {state === 'running' ? 'Rebuilding…' : 'Rebuild link cache'}
         </Button>
-        {!hasWorkspace && (
-          <p className="text-xs text-muted-foreground">Open a workspace first.</p>
-        )}
         {state === 'done' && (
           <p className="text-xs text-primary">
             Rebuilt — re-parsed {count} file{count === 1 ? '' : 's'}.

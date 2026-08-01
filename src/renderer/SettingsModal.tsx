@@ -41,12 +41,14 @@ function buildNav(workspaceLabel) {
     { kind: 'header', label: 'Shockwave' },
     { kind: 'item', id: SETTINGS_SECTIONS.GENERAL, label: 'General' },
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
-    { kind: 'item', id: SETTINGS_SECTIONS.ADVANCED, label: 'Advanced' },
     { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
     { kind: 'header', label: workspaceLabel },
     { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
     { kind: 'item', id: SETTINGS_SECTIONS.TEMPLATES, label: 'Templates' },
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACE_SKILLS, label: 'Manage Skills' },
+    // Advanced sits here, not under Shockwave: rebuilding the link cache
+    // re-parses the ACTIVE workspace and does nothing without one.
+    { kind: 'item', id: SETTINGS_SECTIONS.ADVANCED, label: 'Advanced' },
     { kind: 'header', label: 'AI Agent' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
@@ -322,6 +324,9 @@ export default function SettingsModal({
               />
             ) : <NoWorkspaceNote />
           )}
+          {effectiveActive === SETTINGS_SECTIONS.ADVANCED && (
+            workspacePath ? <AdvancedSection onRebuildCache={onRebuildCache} /> : <NoWorkspaceNote />
+          )}
           {effectiveActive === SETTINGS_SECTIONS.TRANSCRIPTION && (
             <TranscriptionSection
               transcription={transcription}
@@ -330,12 +335,6 @@ export default function SettingsModal({
           )}
           {effectiveActive === SETTINGS_SECTIONS.UPDATES && (
             <UpdatesSection appUpdate={appUpdate} />
-          )}
-          {effectiveActive === SETTINGS_SECTIONS.ADVANCED && (
-            <AdvancedSection
-              hasWorkspace={!!workspacePath}
-              onRebuildCache={onRebuildCache}
-            />
           )}
           {effectiveActive === SETTINGS_SECTIONS.AGENT_LLM && (
             <AgentChatSection
