@@ -55,6 +55,28 @@ Edits are debounced (`SAVE_DEBOUNCE_MS = 500` in `App.tsx`) via `dirtyTabIdRef` 
 
 The load effect (App.tsx) tracks the last-loaded `(tabId, path, isDark)` and skips the disk read when the same tab transitions from `null` → real path. That's how draft promotion doesn't clobber the buffer: same tab id, previous path was null → don't reload.
 
+## Files that aren't markdown
+
+`.md` is the default, not the limit. **`MediaView.tsx` owns the whole decision** — four pure predicates exported beside the component, and every consumer (the load effect, the tab strip, the file tree, quick search, the status bar) reads them rather than testing extensions itself:
+
+| Predicate | True for | What renders |
+|---|---|---|
+| `isMarkdown` | `.md` / `.markdown` / `.mdx` | CodeMirror **with** the live-preview bundle |
+| `isTextFile` | everything else in `TEXT_RE` + the `DOTFILE_TEXT_RE` allowlist | CodeMirror, **no grammar, always raw** |
+| `mediaKind` | image / video → `'image' \| 'video'` | `MediaView` (static preview) |
+| `isDrawing` | `.excalidraw` | `DrawingView` (editable canvas) |
+| `isOpenable` | any of the above | anything else is inert in the tree and filtered out of quick search |
+
+Three things follow from that split and each is load-bearing:
+
+- **Live preview is markdown-only.** Heading styles, hidden syntax markers, wiki-links, task checkboxes and image widgets all assume markdown, so `activeIsMarkdown` gates them; a `.ts` or `.yaml` file always shows raw source. Rename `Foo.md` → `Foo.txt` in the tree and it stays editable — `renameFileLiteral` forces no extension (see "In-app rename").
+- **Only `.md` joins the link index**, which is basename-keyed. So other text files need their own self-echo store: `writeNow` records their `stat.mtimeMs` in `textMtimesRef`, and drawings record theirs in `drawingMtimesRef` via `onDrawingSaved`. Both play exactly the role `linkIndex.updateFile(path, text, mtime)` plays for markdown, and the mtime discipline in root invariant #6 applies unchanged — a `Date.now()` here reloads the buffer mid-typing the same way.
+- **`DOTFILE_TEXT_RE` is an allowlist, not "any extensionless dotfile."** These rows only became reachable when the tree learned to show hidden files, and without it the two you'd most want to look at (`.gitignore`, `.ignore`) do nothing when clicked. `.DS_Store` fits the same shape and is binary, which is why the list is enumerated. **Mirrored in main** (`OPENABLE_RE` / `DOTFILE_TEXT_RE` in `main.ts`) — same parity discipline as the wiki-link parser, since main decides what the watcher ships as a reloadable text change.
+
+**The load effect skips media and drawing tabs entirely** — reading them as text is garbage, and `DrawingView` loads its own JSON from the `path` prop. `EditorStatusBar`'s word/char counts read 0 for both.
+
+`DrawingView.tsx` is the only viewer here that writes. Excalidraw is uncontrolled after init and `onChange` fires on every pointer move, so saves are debounced (500ms) — and **the pending payload is tagged with the path it belongs to**, because a tab switch reuses the same mounted component and would otherwise write one drawing's scene into another's file. The old path's pending save is flushed before the new scene loads. It exposes `reloadScene` (the watcher's external-change path) and `flush` through a ref.
+
 ## In-app rename
 
 `renameOps.ts` is the in-app rename flow. Order of operations (important):
@@ -145,6 +167,15 @@ Chats run **concurrently** — in the desktop's `agent-core` host, or on the **c
 
 **`MessageRow` is wrapped in `React.memo`** so typing in the composer doesn't re-parse every prior assistant bubble's markdown through `react-markdown`. Keep `MessageRow`'s prop surface narrow (just the message object) — adding non-memoized callbacks would defeat this.
 
+### Filtering history by where a chat came from
+
+Every chat carries a `source` (`desktop` | `telegram` | `cron` | `review` — see the `chat` table in `api/CLAUDE.md`), and the history popover offers a checkbox per source. The selection is `settings.chatSources`, and two decisions in it are deliberate:
+
+- **`null` means all**, and it is the default a fresh install gets. Not a seeded full array: a source added in a later release would then be missing from every stored list and silently hidden. A stored array is only ever an explicit narrowing.
+- **Machine-local, not synced** (`LOCAL_SETTINGS` in `src/main/api/localSettings.ts`). It's a view preference — you might want scheduled runs out of the way on a laptop and visible on a desktop — and it hides nothing that isn't still there.
+
+`CHAT_SOURCES` / `CHAT_SOURCE_LABELS` live in `constants.ts`; the filter narrows the list only, never what the store holds, so a hidden chat still streams and still shows a spinner if you unhide it mid-turn.
+
 ### Workspace change
 
 The chat sidebar is mounted with `key={workspacePath ?? 'no-workspace'}` in `App.tsx`, so switching workspaces remounts it — but the store survives, so transcripts, drafts, and running chats are all intact; the remounted sidebar simply shows the new workspace's active chat (`activeByWorkspace`). Chats running in another workspace keep streaming into the store.
@@ -233,6 +264,12 @@ Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD
 **`todayIso` in `App.tsx` is the app's single answer to "what day is it"** — computed once per render via `todayISO(timezone)` and passed to `useDailyNote`, `ThinSidebar` (the day number on the rail glyph), `JournalDatePicker` (which day is highlighted) and `DailyNoteSection` (the format previews). Before this, each of those read the machine's clock while the agent ran with `process.env.TZ` set from `settings.timezone`, so a user whose OS zone differed got a button and an agent that disagreed about today near midnight. It is deliberately **not** memoized: one `Intl` call is cheap, and a value cached across midnight leaves the app on yesterday. Anything new that needs today reads `todayIso` — never `new Date()`.
 
 `openJournal(iso?)` takes a **calendar date**, not a `Date`, for the same reason the shared module does: a date the user picked off a calendar is a labelled day, not an instant, and converting it through a zone shifts it. It opens an existing note in place wherever it lives, but only when `basenameIdentifiesDate(formatted)` — with a path-style format like `YYYY/MM/DD` the basename is a bare day number, and looking `01` up in the link index answers August 1st with July's note; there the computed path is the only trustworthy location. Otherwise `ensureDir` + `createFile`, seeded from the configured template.
+
+## Scheduled runs panel (`CronModal.tsx`)
+
+The clock in the `ThinSidebar` opens the app's **whole** cron surface: the live schedule (next/last run, per-job status) plus a manual **Run now** per job. There is no cron settings page to pair it with — the desktop stopped running the scheduler, so what's left is the companion's env (see `settings/CLAUDE.md`).
+
+**One-way by design.** `<workspace>/cron.json` is the source of truth for the jobs and their enabled flags; this panel *displays* that state and can trigger a run, and never writes definitions back. Editing jobs means editing the file (or asking the agent). Data comes from `cron:read` — the desktop composes the local `cron.json` with run status fetched from the companion — and `cron:runNow`. `cronSchedule.ts` (`describeSchedule` / `timezoneNote`) renders a cron expression as English via `cronstrue`, against `settings.timezone`.
 
 ## Quick search & sort bar
 

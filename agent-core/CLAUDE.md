@@ -10,7 +10,7 @@ Read the root `CLAUDE.md` first. Deep docs for each host: `src/main/CLAUDE.md`, 
 
 ## The host/runtime split
 
-**`AgentHost`** (interface, `agent.ts`) is all host-specific I/O, **no logic**. Each host implements it and calls **`createAgentRuntime(host)`**, which returns `{ agentSend, agentPrepare, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions }`.
+**`AgentHost`** (interface, `agent.ts`) is all host-specific I/O, **no logic**. Each host implements it and calls **`createAgentRuntime(host)`**, which returns `{ agentSend, agentPrepare, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats }`. The public names say **chat**, never session — a pi session is the private thing inside, and the root `CLAUDE.md`'s terminology rule is enforced at this boundary rather than only in prose.
 
 **`agentPrepare(opts, emit)`** boots the session without running a turn, so a host can do it while waiting on something else — the companion's Telegram path boots alongside transcribing a voice note, since booting needs none of the text. Safe to call and then `agentSend`: `booting` dedups an in-flight boot and `ensureSession` returns the cached entry. It **refuses for a chat with a turn in flight**, because the running entry would have its `emit` re-pointed at the new caller's sink — the bug that froze a reply half-written. Callers check that too; this checks it so a caller that forgets can't cause it. What the host supplies:
 
@@ -20,7 +20,8 @@ Read the root `CLAUDE.md` first. Deep docs for each host: `src/main/CLAUDE.md`, 
 - `scratchDir(chatId)` — the AGENT's own directory for the chat: working files, downloads, anything it's producing to send rather than keep, and (companion) the files the user sent it. **Named in the prompt**, so it has to be a real path — `agent.ts` creates it at session boot. Deliberately not `dataDir`: that one is pi's own working memory, and mixing the agent's files in makes the two indistinguishable. It exists because everything in the workspace is committed and synced, so without it a temp file the agent made ends up in the user's repo.
 - `getTranscription()` — `settings.transcription`, for the `transcribe` tool.
 - `dataDir(chatId)` — the pi scratch-dir root. **Desktop** returns one global `userData` dir; **companion** returns a **per-session** dir so concurrent runs don't share one `pi-agent/settings.json`.
-- Persistence (dumb I/O — the core does all mapping): `getSession`, `upsertSession`, `appendMessages` (must be idempotent by `entryId` and assign ordering itself), `setSessionTitle`, `setRunning`, `getTranscript`, `putTranscript`, optional `onError`.
+- Persistence (dumb I/O — the core does all mapping): `getChat`, `upsertChat`, `appendMessages` (must be idempotent by `entryId` and assign ordering itself), `setChatTitle`, `setRunning`, `getTranscript`, `putTranscript`, optional `onError`.
+- `chatSearch` — **optional**: `{ searchChats, readChat, recentChats }`, backing the `search_chats` tool. Omit it and the tool isn't offered at all, rather than offered and broken. Companion queries Postgres directly, desktop goes over HTTP.
 - Secret getters: `getAgentSecrets()` (decrypted metadata), `getToken(name)` (a usable credential). **Both hosts route `getToken` to the companion**, so OAuth refresh lives in one place (desktop over HTTP, companion via `mintToken` in-process).
 
 The `emit` sink is passed **per `agentSend` call**, not stored on the host — so the desktop can re-target events after a window reload. Events are stamped with `chatId` inside the runtime.
