@@ -448,8 +448,9 @@ contextBridge.exposeInMainWorld('api', {
   // that authenticates the WebSocket connection to AssemblyAI's /v3/ws.
 
   voice: {
-    /** Mint a fresh 60-second AssemblyAI streaming token using the configured key.
-     *  @returns {Promise<{ token?: string, error?: string }>} */
+    /** Mint a fresh 60-second streaming token from whichever engine is selected
+     *  (AssemblyAI or Deepgram), using that engine's configured key.
+     *  @returns {Promise<{ token?: string, provider?: string, error?: string }>} */
     getToken: () => ipcRenderer.invoke('voice:getToken'),
   },
 

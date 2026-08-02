@@ -198,7 +198,15 @@ export interface Settings {
   // `echoTelegramTranscript`: after transcribing an inbound Telegram voice note,
   // post the transcript back to the chat as `🎤 "…"` before running the turn.
   // Unset ⇒ off (the consumer reads `?? false` — see api/src/telegram/webhook.ts).
-  transcription: { provider: string; apiKey?: string; hasApiKey?: boolean; echoTelegramTranscript?: boolean };
+  /** `provider` is `'assemblyai' | 'deepgram'` and applies to EVERYTHING — the
+   *  desktop mic, Telegram voice notes, and the agent's `transcribe` tool. Each
+   *  engine keeps its own key so switching between them loses neither. */
+  transcription: {
+    provider: string;
+    apiKey?: string; hasApiKey?: boolean;
+    deepgramApiKey?: string; hasDeepgramApiKey?: boolean;
+    echoTelegramTranscript?: boolean;
+  };
   // `pat` is present in MAIN only; the renderer gets `hasPat`.
   sync: { pat?: string; hasPat?: boolean; pullIntervalSeconds: number };
   // The one unified system timezone (synced). The companion uses it for cron

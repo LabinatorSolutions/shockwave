@@ -409,7 +409,9 @@ export interface ShockwaveApi {
   };
 
   voice: {
-    getToken(): Promise<{ token?: string; error?: string }>;
+    /** `provider` names the engine the token belongs to (`assemblyai` |
+     *  `deepgram`), so the renderer knows which socket to open. */
+    getToken(): Promise<{ token?: string; provider?: string; error?: string }>;
   };
 
   app: {

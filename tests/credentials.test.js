@@ -26,7 +26,14 @@ test('every known credential is declared', () => {
   // A field missing here is a field that leaks. Pinned by name so removing one is
   // a deliberate act with a failing test, not a silent regression.
   const paths = SETTINGS_CREDENTIALS.map((c) => c.path).sort();
-  assert.deepEqual(paths, ['codingAgent.providerKeys', 'sync.pat', 'transcription.apiKey']);
+  assert.deepEqual(paths, [
+    'codingAgent.providerKeys',
+    'sync.pat',
+    // AssemblyAI's key kept the generic name it was stored under; Deepgram's is
+    // its own field so switching engines to compare them loses neither.
+    'transcription.apiKey',
+    'transcription.deepgramApiKey',
+  ]);
 
   const secretPaths = AGENT_SECRET_CREDENTIALS.map((c) => c.path).sort();
   assert.deepEqual(secretPaths, ['oauth.accessToken', 'oauth.clientSecret', 'oauth.refreshToken', 'token']);

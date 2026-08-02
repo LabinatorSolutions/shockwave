@@ -41,6 +41,7 @@ import { readApiConfig, writeApiConfig } from './api/config.js';
 // The one declaration of which settings paths are credentials — shared with the
 // companion and the renderer. Gates settings:deleteCredential.
 import { isDeletableCredential } from '../../agent-core/credentials.js';
+import { providerOf, keyFor } from '../../agent-core/transcribe.js';
 import {
   approveFingerprint, forgetFingerprint, approvedFingerprint,
   onCertNeedsApproval, readServerCert, getPendingCert, hostOf,
@@ -1128,9 +1129,14 @@ ipcMain.handle('oauth:disconnect', async (_evt, name) => {
   }
 });
 
-// Mint a short-lived AssemblyAI streaming token. The long-lived API key sits
-// encrypted in settings and never crosses to the renderer — only the 60s temp
-// token does, which is just the WebSocket session credential.
+// Mint a short-lived streaming token for whichever engine is selected. The
+// long-lived API key sits encrypted in settings and never crosses to the renderer
+// — only the 60s temp token does, which is just the WebSocket session credential.
+//
+// Both engines offer exactly this, which is what makes one handler enough:
+// AssemblyAI has `/v3/token`, Deepgram has `/v1/auth/grant` (TTL 1–3600s). The
+// PROVIDER comes back with the token because the renderer needs it to know which
+// socket to open and how to read what comes back — see `useVoiceInput.ts`.
 ipcMain.handle('voice:getToken', async () => {
   // readSettingsSafe (not readSettings) so an unreachable companion returns a
   // clean {error} result instead of rejecting the IPC — voice is optional. This is
@@ -1139,16 +1145,30 @@ ipcMain.handle('voice:getToken', async () => {
   // lie when the key is configured and the server simply isn't reachable.
   const { settings, online, reason } = await readSettingsSafe();
   if (!online) return { error: reason || "Can't reach your companion server." };
-  const apiKey = settings.transcription?.apiKey;
+  const tr = settings.transcription ?? {};
+  const provider = providerOf(tr);
+  const apiKey = keyFor(tr);
   if (!apiKey) return { error: 'Voice transcription not configured' };
   try {
+    if (provider === 'deepgram') {
+      // `ttl_seconds` matches AssemblyAI's 60 so the renderer's one cache rule
+      // (50s, below the TTL) holds whichever engine is selected.
+      const res = await fetch('https://api.deepgram.com/v1/auth/grant', {
+        method: 'POST',
+        headers: { Authorization: `Token ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ ttl_seconds: 60 }),
+      });
+      if (!res.ok) return { error: 'Failed to get voice token' };
+      const data = await res.json();
+      return { token: data.access_token, provider };
+    }
     const res = await fetch(
       'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60',
       { headers: { Authorization: apiKey } },
     );
     if (!res.ok) return { error: 'Failed to get voice token' };
     const data = await res.json();
-    return { token: data.token };
+    return { token: data.token, provider };
   } catch (err: any) {
     console.warn('[voice] token request failed:', err.message);
     return { error: 'Voice token request failed' };

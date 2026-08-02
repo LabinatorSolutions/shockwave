@@ -190,13 +190,20 @@ That split is the whole fix for images not rendering. The optimistic row in `sen
 
 ### Voice input (composer mic button)
 
-The composer's microphone button uses `voice/useVoiceInput.ts`, which streams 16kHz PCM via the Web Audio API + an inline `AudioWorklet` to AssemblyAI's real-time WebSocket. The flow:
+The composer's microphone button uses `voice/useVoiceInput.ts`, which streams 16kHz PCM via the Web Audio API + an inline `AudioWorklet` to a real-time WebSocket — **AssemblyAI's or Deepgram's**, per `settings.transcription.provider`. The flow:
 
-1. Renderer asks main for a short-lived (60s) streaming token via `voice:getToken`. The long-lived AssemblyAI API key never leaves main.
-2. `useVoiceInput` prefetches a token on mount and caches it for 50s; on click it consumes the cached token instantly and kicks off a background refresh so the next click is also instant. Without this, every click would pay the renderer→main→AssemblyAI round-trip.
+1. Renderer asks main for a short-lived (60s) streaming token via `voice:getToken`, which answers `{ token, provider }`. The long-lived API key never leaves main, and this file never reads settings — the provider arrives with the token.
+2. `useVoiceInput` prefetches a token on mount and caches it for 50s; on click it consumes the cached token instantly and kicks off a background refresh so the next click is also instant. Without this, every click would pay the renderer→main→provider round-trip.
 3. `navigator.mediaDevices.getUserMedia({audio: true})` opens the mic, fed into an `AudioContext({sampleRate: 16000})` and through an `AudioWorkletNode` running a tiny PCM-buffering processor registered inline via a Blob URL (no separate static file).
 4. The worklet posts 4096-sample Float32 chunks back to the main thread; we convert to `Int16` and send over the WebSocket, while emitting per-chunk RMS volume for the `VoiceBars` visualization (`voice/VoiceBars.tsx`).
-5. AssemblyAI returns `Turn` messages — partials (`end_of_turn: false`) call `onPartialTranscript`; finals (`end_of_turn: true`) call `onTranscript`. The composer renders partials in a faded color and commits finals into the text.
+5. The socket's messages become `onPartialTranscript` / `onTranscript`. The composer renders partials in a faded color and commits finals into the text.
+
+**The audio is identical for both engines — only the socket URL, the message shape, and the goodbye differ.** Everything from the microphone to `ws.send` is shared, which is what makes a second engine cheap. The one place they genuinely diverge is what a message MEANS, and reading it wrong is silently lossy:
+
+- **AssemblyAI** `Turn`: `transcript` is *the whole turn so far*, so each message REPLACES the last and `end_of_turn: true` is simply the final one.
+- **Deepgram** `Results`: each message covers *one segment*, so the pieces ACCUMULATE. `is_final` freezes a segment; `speech_final` says the utterance ended. A full utterance is every finalized segment since the previous `speech_final`, which is what `dgCommittedRef` holds. Applying the AssemblyAI reading here — treating one message as the whole turn — would commit only the last few words of anything you said, with nothing erroring.
+
+Cleanup also branches: AssemblyAI wants `{type:'Terminate'}`, Deepgram `{type:'CloseStream'}`. Both mean "the audio stopped, flush what you have", so `providerRef` outlives the socket long enough for teardown to pick the right one.
 
 `useVoiceInput` also returns `recheck` (= `fetchVoiceToken`) for the settings page, since the mount prefetch is mount-only. It resolves to the token result, so a caller can report *why* a mint failed rather than reducing it to a boolean — that's what Transcription's Verify does (see `settings/CLAUDE.md`). It carries a request guard: without one the last response to land won rather than the newest, and a request fired before the key was stored could resolve after a successful one and pin `voiceAvailable` false.
 

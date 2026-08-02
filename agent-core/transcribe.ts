@@ -6,8 +6,10 @@
 // segments — no other file changes, and the output format can't drift because the
 // provider never produces it.
 //
-// Which engine runs is `settings.transcription.provider`, a field that already
-// existed for the desktop microphone. There is no new setting and no new key.
+// Which engine runs is `settings.transcription.provider` — AssemblyAI or Deepgram,
+// chosen on the settings page, applying to EVERYTHING (this module, Telegram voice
+// notes, and the desktop microphone's streaming socket). Each engine stores its own
+// key, so switching to compare them doesn't destroy the one you switched away from.
 //
 // TWO SHAPES OF WORK, and they want different APIs. A RECORDING (`transcribeFile`,
 // the `transcribe` tool) can be an hour long with several people in it, so it goes
@@ -45,11 +47,38 @@ export interface Transcript {
 
 export interface TranscriptionConfig {
   provider?: string;
+  /** AssemblyAI's key. Keeps the generic name it was stored under. */
   apiKey?: string;
+  deepgramApiKey?: string;
+}
+
+/** The default when nothing is stored — every provider read goes through here. */
+export const DEFAULT_PROVIDER = 'assemblyai';
+
+export function providerOf(config: TranscriptionConfig): string {
+  return config.provider || DEFAULT_PROVIDER;
+}
+
+/**
+ * The key for whichever engine is selected.
+ *
+ * Each engine has its OWN stored key, so switching between them to compare
+ * quality doesn't destroy the one you switched away from. Callers pass the whole
+ * `settings.transcription` slice and never have to know which field applies.
+ */
+export function keyFor(config: TranscriptionConfig): string | undefined {
+  return providerOf(config) === 'deepgram' ? config.deepgramApiKey : config.apiKey;
 }
 
 /** Video containers we can pull an audio track out of before transcribing. */
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.mpeg', '.mpg', '.3gp']);
+
+/** How often the async job is checked. See the note at its call site. */
+const ASSEMBLYAI_POLL_MS = 200;
+
+/** Deepgram's flagship model, and the one every number we compared was measured on. */
+const DEEPGRAM_MODEL = 'nova-3';
+const DEEPGRAM_URL = 'https://api.deepgram.com/v1/listen';
 
 // ── Providers ────────────────────────────────────────────────────────────────
 
@@ -66,6 +95,11 @@ async function assemblyai(filePath: string, apiKey: string): Promise<Transcript>
   const result = await client.transcripts.transcribe({
     audio: filePath,
     speaker_labels: true,
+  }, {
+    // The SDK's default is 3 seconds, so a job that finished in one is still
+    // discovered on the next tick. A recording takes long enough that the extra
+    // requests are noise against the transcription itself.
+    pollingInterval: ASSEMBLYAI_POLL_MS,
   });
 
   if (result.status === 'error') throw new Error(result.error || 'the transcription failed.');
@@ -90,8 +124,75 @@ async function assemblyai(filePath: string, apiKey: string): Promise<Transcript>
   };
 }
 
+/**
+ * Deepgram's pre-recorded endpoint: audio in, JSON out, ONE request.
+ *
+ * There is no job to submit and nothing to poll — which is the whole reason this
+ * provider has no separate fast path for voice notes the way AssemblyAI does. It
+ * also sniffs the container itself, so Telegram's OGG/Opus is sent byte-for-byte
+ * and **ffmpeg never runs on this path**.
+ *
+ * `diarize` is off for a voice note (one person, and the labels would only be
+ * noise) and on for a recording, which is where knowing who spoke is the point.
+ */
+async function deepgramRequest(
+  body: Buffer,
+  apiKey: string,
+  { diarize }: { diarize: boolean },
+): Promise<Transcript> {
+  const params = new URLSearchParams({
+    model: DEEPGRAM_MODEL,
+    smart_format: 'true',
+    punctuate: 'true',
+    ...(diarize ? { diarize: 'true', utterances: 'true' } : {}),
+  });
+
+  const res = await fetch(`${DEEPGRAM_URL}?${params}`, {
+    method: 'POST',
+    headers: { Authorization: `Token ${apiKey}` },
+    body: new Uint8Array(body),
+  });
+
+  if (!res.ok) {
+    // Deepgram puts the reason in a JSON `err_msg`; fall back to the status when
+    // the body isn't JSON (a gateway error, say).
+    const detail = await res.text().catch(() => '');
+    let reason = `HTTP ${res.status}`;
+    try { reason = JSON.parse(detail).err_msg || reason; } catch { /* keep the status */ }
+    throw new Error(`Deepgram rejected the audio: ${reason}`);
+  }
+
+  const json: any = await res.json();
+  const alt = json?.results?.channels?.[0]?.alternatives?.[0];
+  const text = String(alt?.transcript ?? '').trim();
+  const durationMs = Math.round((json?.metadata?.duration ?? 0) * 1000);
+
+  // Deepgram reports seconds as floats; segments are milliseconds everywhere else.
+  const segments: Segment[] = (json?.results?.utterances ?? []).map((u: any) => ({
+    startMs: Math.round((u.start ?? 0) * 1000),
+    endMs: Math.round((u.end ?? 0) * 1000),
+    text: String(u.transcript ?? '').trim(),
+    // `speaker` is an integer here, where AssemblyAI gives a letter. Both end up
+    // as "Speaker X" so `transcriptFormat.ts` never learns the difference.
+    speaker: u.speaker === undefined || u.speaker === null ? undefined : `Speaker ${u.speaker}`,
+  })).filter((s: Segment) => s.text);
+
+  // Same fallback as AssemblyAI: undiarized or single-speaker audio yields no
+  // utterances, and a valid recording must never produce an empty transcript file.
+  if (!segments.length && text) segments.push({ startMs: 0, endMs: durationMs, text });
+
+  return { text, segments, durationMs };
+}
+
+async function deepgram(filePath: string, apiKey: string): Promise<Transcript> {
+  // Read rather than stream: undici's streaming bodies need `duplex: 'half'` and
+  // fail obscurely without it, and the AssemblyAI SDK buffers its upload too.
+  return deepgramRequest(await fs.readFile(filePath), apiKey, { diarize: true });
+}
+
 const PROVIDERS: Record<string, (filePath: string, apiKey: string) => Promise<Transcript>> = {
   assemblyai,
+  deepgram,
 };
 
 /** Extract an audio track to `outPath`. Requires ffmpeg (shipped in the companion image). */
@@ -116,10 +217,11 @@ export async function transcribeFile(
   config: TranscriptionConfig,
   workDir: string,
 ): Promise<Transcript> {
-  const provider = config.provider || 'assemblyai';
+  const provider = providerOf(config);
   const run = PROVIDERS[provider];
   if (!run) throw new Error(`"${provider}" is not a speech-to-text provider this app knows.`);
-  if (!config.apiKey) throw new Error('no-key');
+  const apiKey = keyFor(config);
+  if (!apiKey) throw new Error('no-key');
 
   let audioPath = filePath;
   let extracted: string | null = null;
@@ -130,7 +232,7 @@ export async function transcribeFile(
   }
 
   try {
-    return await run(audioPath, config.apiKey);
+    return await run(audioPath, apiKey);
   } finally {
     if (extracted) await fs.rm(extracted, { force: true }).catch(() => { /* best-effort */ });
   }
@@ -208,9 +310,13 @@ function decodeToPcm(input: Buffer): Promise<Buffer> {
  * pools per origin), which is why warming here helps a call made anywhere else.
  */
 export async function warmTranscription(config: TranscriptionConfig): Promise<void> {
-  if (!config.apiKey) return;
-  if ((config.provider || 'assemblyai') !== 'assemblyai') return;
-  await new AssemblyAI({ apiKey: config.apiKey }).sync.warm().catch(() => false);
+  const apiKey = keyFor(config);
+  if (!apiKey) return;
+  // Deepgram needs none of this: its request goes to the same origin Node has
+  // already pooled a connection to if anything else has called it, and there is
+  // no SDK-level session to open. Nothing to warm, so nothing to do.
+  if (providerOf(config) !== 'assemblyai') return;
+  await new AssemblyAI({ apiKey }).sync.warm().catch(() => false);
 }
 
 /** The sync endpoint: audio in, text out, one HTTP request, nothing to poll. */
@@ -241,14 +347,27 @@ export async function transcribeVoice(
   config: TranscriptionConfig,
   durationSeconds?: number,
 ): Promise<string> {
-  if (!config.apiKey) throw new Error('no-key');
+  const apiKey = keyFor(config);
+  if (!apiKey) throw new Error('no-key');
 
-  const provider = config.provider || 'assemblyai';
+  const provider = providerOf(config);
   const shortEnough = durationSeconds === undefined || durationSeconds <= SYNC_MAX_SECONDS;
+
+  // Deepgram has ONE endpoint for everything, so there is no fast path to choose
+  // and no ceiling to check — and it takes the OGG/Opus Telegram sent as-is, so
+  // this path never touches ffmpeg. A failure here falls through to the job route
+  // below like any other, which for Deepgram is the same endpoint via a temp file.
+  if (provider === 'deepgram') {
+    try {
+      return (await deepgramRequest(audio, apiKey, { diarize: false })).text;
+    } catch (e: any) {
+      console.warn(`[transcribe] deepgram voice request failed, falling back: ${e?.message ?? e}`);
+    }
+  }
 
   if (provider === 'assemblyai' && shortEnough) {
     try {
-      return await assemblyaiSync(audio, config.apiKey);
+      return await assemblyaiSync(audio, apiKey);
     } catch (e: any) {
       // Loud, because the fallback is 3s slower and silence here would make a
       // permanently broken fast path indistinguishable from a working one.
@@ -323,14 +442,18 @@ export function makeTranscribeTool(
         return fail(`There is no file at ${filePath}.`);
       }
 
+      const config = await getConfig();
       let result: Transcript;
       try {
-        result = await transcribeFile(filePath, await getConfig(), scratchDir);
+        result = await transcribeFile(filePath, config, scratchDir);
       } catch (e: any) {
         if (e?.message === 'no-key') {
+          // Name the engine that's actually selected — sending someone to add an
+          // AssemblyAI key when Settings is set to Deepgram is worse than silence.
+          const name = providerOf(config) === 'deepgram' ? 'Deepgram' : 'AssemblyAI';
           return fail(
             'Speech-to-text is not set up, so I can\'t transcribe that. '
-            + 'Tell the user to add an AssemblyAI key in the desktop app under Settings → Transcription.',
+            + `Tell the user to add a ${name} key in the desktop app under Settings → Transcription.`,
           );
         }
         return fail(`I couldn't transcribe that: ${e?.message ?? e}`);

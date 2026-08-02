@@ -23,9 +23,14 @@
  * `wildcard` — the path ends in a map keyed by something open-ended (provider
  *              slug), so the leaf name isn't known up front.
  */
+// `transcription.apiKey` is AssemblyAI's and keeps that name — renaming it would
+// mean migrating every stored row for no gain. Deepgram gets its own field rather
+// than sharing one, so switching engines to compare them doesn't destroy the key
+// you switched away from; the settings page shows only the active engine's.
 export const SETTINGS_CREDENTIALS = [
   { path: 'codingAgent.providerKeys', flag: 'hasProviderKey', wildcard: true },
   { path: 'transcription.apiKey', flag: 'hasApiKey' },
+  { path: 'transcription.deepgramApiKey', flag: 'hasDeepgramApiKey' },
   { path: 'sync.pat', flag: 'hasPat' },
 ];
 

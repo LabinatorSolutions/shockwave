@@ -3,8 +3,11 @@ import { useVoiceInput } from '../voice/useVoiceInput.js';
 import { useCommitField } from './useCommitField';
 import { VoiceBars } from '../voice/VoiceBars.jsx';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
-import { Field, FieldLabel } from '@/components/ui/field';
+import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import { removeCredential } from './credentialField';
 import CredentialRow from './CredentialRow';
 import ErrorMessage from '../ErrorMessage.jsx';
@@ -29,13 +32,42 @@ import ErrorMessage from '../ErrorMessage.jsx';
 // transcription. The mint was always happening (it's what un-greys the Test
 // button); the only thing that was missing is that its answer was thrown away
 // into a boolean and its error string swallowed.
-export default function TranscriptionSection({ transcription, onTranscriptionChange }) {
-  const hasApiKey = !!transcription?.hasApiKey;
+// The engines, and everything that differs between them in one place so nothing
+// downstream has to branch on a string literal.
+const ENGINES = {
+  assemblyai: {
+    label: 'AssemblyAI',
+    keyPath: 'transcription.apiKey',
+    keyField: 'apiKey',
+    flag: 'hasApiKey',
+    signupUrl: 'https://www.assemblyai.com/dashboard/signup',
+    signupHost: 'assemblyai.com',
+  },
+  deepgram: {
+    label: 'Deepgram',
+    keyPath: 'transcription.deepgramApiKey',
+    keyField: 'deepgramApiKey',
+    flag: 'hasDeepgramApiKey',
+    signupUrl: 'https://console.deepgram.com/signup',
+    signupHost: 'deepgram.com',
+  },
+};
 
-  // No `apiKey` here — main strips it, so including it would send '' and delete
-  // the stored key on any unrelated change.
+export default function TranscriptionSection({ transcription, onTranscriptionChange }) {
+  const provider = ENGINES[transcription?.provider] ? transcription.provider : 'assemblyai';
+  const engine = ENGINES[provider];
+  const hasApiKey = !!transcription?.[engine.flag];
+
+  // Spread the whole slice: this setter REPLACES the renderer's copy, so a bare
+  // patch would drop the sibling presence flags and make a stored key read as
+  // absent until main's next `settings:changed` push. The diff in settingsDiff.ts
+  // is what stops the unchanged fields actually being written.
+  //
+  // No key VALUE is ever spread in — main strips those, so including one would
+  // send '' and delete the stored key on any unrelated change.
   const update = (patch) => onTranscriptionChange?.({
-    provider: 'assemblyai',
+    ...transcription,
+    provider,
     ...patch,
   });
 
@@ -86,9 +118,25 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
   // only fires for something actually typed.
   const keyField = useCommitField('', (next) => {
     if (!next) return;
-    savingRef.current = Promise.resolve(update({ apiKey: next }));
+    savingRef.current = Promise.resolve(update({ [engine.keyField]: next }));
     runVerifyRef.current?.();
   });
+
+  // Switching engines changes what every control on this page refers to, so the
+  // verify row must drop — a green "key accepted" from AssemblyAI sitting under
+  // Deepgram's empty field would be a straight lie. The draft is cleared for the
+  // same reason: half a key typed for one engine is not a key for the other.
+  const onProviderChange = (next: string) => {
+    if (next === provider) return;
+    verifyReq.current++;
+    setVerifyState({ status: 'idle' });
+    keyField.onChange('');
+    update({ provider: next });
+    // Re-ask with the new engine's key so Test microphone enables or greys out to
+    // match. Bare `recheck`, not `runVerify` — landing on a page-load-shaped red
+    // error just for changing a dropdown is noise, not a verdict.
+    recheckRef.current?.();
+  };
 
   // A green check beside a key that has since been edited would be actively
   // misleading, so typing drops the row back to idle and invalidates whatever
@@ -109,7 +157,7 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
   const onRemoveKey = async () => {
     setRemoving(true);
     try {
-      const r = await removeCredential('transcription.apiKey');
+      const r = await removeCredential(engine.keyPath);
       verifyReq.current++;
       if (!r?.ok) setVerifyState({ status: 'error', error: r?.error || 'Could not remove the key.' });
       else setVerifyState({ status: 'idle' });
@@ -160,19 +208,41 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
       title="Transcription"
       description={(
         <>
-          Voice input uses AssemblyAI streaming transcription. Get a key from{' '}
+          Speech to text for the microphone, Telegram voice notes, and the agent's
+          transcribe tool. Get a key from{' '}
           <a
             href="#"
             className="text-primary underline underline-offset-2 hover:opacity-80"
-            onClick={(e) => { e.preventDefault(); window.api.openExternal('https://www.assemblyai.com/dashboard/signup'); }}
-          >assemblyai.com</a>
-          . The key is encrypted on this machine using your OS keychain.
+            onClick={(e) => { e.preventDefault(); window.api.openExternal(engine.signupUrl); }}
+          >{engine.signupHost}</a>
+          . Keys are encrypted at rest on your companion server.
         </>
       )}
     >
       <SettingsGroup>
         <Field>
-          <FieldLabel htmlFor="transcription-key">AssemblyAI API key</FieldLabel>
+          <FieldLabel htmlFor="transcription-provider">Engine</FieldLabel>
+          <Select value={provider} onValueChange={onProviderChange}>
+            <SelectTrigger id="transcription-provider" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="assemblyai">AssemblyAI</SelectItem>
+              <SelectItem value="deepgram">Deepgram</SelectItem>
+            </SelectContent>
+          </Select>
+          <FieldDescription>
+            Applies everywhere. Each engine keeps its own key, so switching back
+            doesn't mean pasting it again.
+          </FieldDescription>
+        </Field>
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      <SettingsGroup>
+        <Field>
+          <FieldLabel htmlFor="transcription-key">{engine.label} API key</FieldLabel>
           <CredentialRow
             id="transcription-key"
             saved={hasApiKey}
@@ -204,7 +274,7 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
             }
           />
           {verifyState.status === 'ok' && (
-            <p className="text-xs text-success">✓ Key accepted by AssemblyAI</p>
+            <p className="text-xs text-success">✓ Key accepted by {engine.label}</p>
           )}
           {verifyState.status === 'error' && <ErrorMessage>{verifyState.error}</ErrorMessage>}
         </Field>
@@ -235,7 +305,7 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
             <span>{buttonLabel}</span>
           </Button>
           {!hasApiKey && (
-            <p className="text-xs text-muted-foreground">Enter your AssemblyAI key first.</p>
+            <p className="text-xs text-muted-foreground">Enter your {engine.label} key first.</p>
           )}
           {/* Only while the verify row has said nothing. `voiceAvailable` is
               false both while the mount prefetch is in flight AND after it

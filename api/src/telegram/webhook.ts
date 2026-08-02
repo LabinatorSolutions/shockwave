@@ -18,7 +18,7 @@ import { checkInWithFixer } from '../gitFixer.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
-import { transcribeAudio, warmTranscription } from './transcribe.js';
+import { transcribeAudio, warmTranscription, providerOf } from './transcribe.js';
 import { cacheAttachment, composeMessage, MAX_INBOUND_BYTES, type CachedAttachment } from './attachments.js';
 import { getCatalogModel } from '../../../agent-core/modelCatalog.js';
 import { chatFilesDir } from '../dataDirs.js';
@@ -369,16 +369,19 @@ async function resolveInput(
     // bytes. Both are round trips and neither needs the other, so the handshake
     // costs nothing instead of ~150ms on the critical path. Best-effort — it
     // resolves to nothing useful and never rejects.
-    const warming = warmTranscription({ provider: tr?.provider, apiKey: tr?.apiKey });
+    const warming = warmTranscription(tr ?? {});
     const audio = await client.downloadFile(voice.file_id);
     await warming;
     // `voice.duration` is Telegram's own, in seconds — it decides whether this
     // fits the sync API's two-minute ceiling.
-    const transcript = await transcribeAudio(tr?.apiKey, audio, tr?.provider, voice.duration)
+    const transcript = await transcribeAudio(tr, audio, voice.duration)
       .catch(async (e) => { await react(); throw e; });
     if (transcript === null) {
       await react();
-      await client.sendMessage(dm, '🎤 Voice transcription is not set up — add an AssemblyAI key in the desktop app under Transcription.');
+      // Name the engine Settings is actually set to, or this sends someone to add
+      // a key for a provider they aren't using.
+      const name = providerOf(tr ?? {}) === 'deepgram' ? 'Deepgram' : 'AssemblyAI';
+      await client.sendMessage(dm, `🎤 Voice transcription is not set up — add a ${name} key in the desktop app under Transcription.`);
       return null;
     }
     if (!transcript) {

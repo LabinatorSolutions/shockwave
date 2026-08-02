@@ -322,6 +322,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     const tr: Transcription = {
       provider: disk.transcription?.provider || 'assemblyai',
       hasApiKey: !!disk.transcription?.hasApiKey,
+      hasDeepgramApiKey: !!disk.transcription?.hasDeepgramApiKey,
       echoTelegramTranscript: !!disk.transcription?.echoTelegramTranscript,
     };
     const sy: SyncSettings = {

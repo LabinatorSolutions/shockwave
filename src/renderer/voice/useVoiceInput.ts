@@ -29,12 +29,19 @@ class PcmProcessor extends AudioWorkletProcessor {
 registerProcessor('pcm-processor', PcmProcessor);
 `;
 
-// Reusable voice input hook using AssemblyAI real-time transcription.
+// Reusable voice input hook for real-time transcription, over AssemblyAI or
+// Deepgram — whichever `transcription.provider` names. Main resolves that and
+// returns it alongside the token, so this file never reads settings.
 //
-// Performance: prefetches a token on mount and caches it for 50s (server TTL is
-// 60s). On click, consumes the cached token instantly and kicks off a
-// background refresh so the next click is also instant. Without this, every
-// click would pay the renderer→main→AssemblyAI round-trip.
+// THE AUDIO IS IDENTICAL for both: 16 kHz mono PCM s16le, which is what the
+// worklet below already produces. Only the socket URL, the shape of what comes
+// back, and the goodbye message differ — everything between the microphone and
+// `ws.send` is shared, and that is why supporting two engines costs so little.
+//
+// Performance: prefetches a token on mount and caches it for 50s (both engines
+// mint 60s tokens). On click, consumes the cached token instantly and kicks off
+// a background refresh so the next click is also instant. Without this, every
+// click would pay the renderer→main→provider round-trip.
 export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onError, onVolumeChange }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -50,6 +57,14 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
   const tokenRef = useRef<any>(null);
   const tokenTimeRef = useRef(0);
   const TOKEN_MAX_AGE = 50_000;
+
+  // Which engine the live socket belongs to. Read by cleanup (the two want
+  // different goodbye messages) and by the message handler.
+  const providerRef = useRef<string>('assemblyai');
+  // Deepgram only: finalized segments since the last end-of-utterance. Its
+  // `Results` messages each cover a SEGMENT rather than the turn so far, so a
+  // full utterance is the finalized ones concatenated — see the handler below.
+  const dgCommittedRef = useRef('');
 
   // Callers pass `getToken` as an inline arrow, so it's a new function every
   // render. Held in a ref instead of a dep: as a dep it made fetchVoiceToken new
@@ -80,7 +95,12 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     if (!result.error) {
       // Cache the token even when stale — it's still valid, and dropping it
       // would just cost the next click a round-trip.
-      tokenRef.current = result.token;
+      //
+      // The PROVIDER is cached WITH it, never re-derived. A token is minted
+      // against one engine and is meaningless to the other, so the two have to
+      // travel together — caching the token alone let the mount prefetch hand a
+      // Deepgram token to the AssemblyAI branch on the very first click.
+      tokenRef.current = { token: result.token, provider: result.provider };
       tokenTimeRef.current = Date.now();
       if (!stale) setVoiceAvailable(true);
     } else if (!stale) {
@@ -95,10 +115,10 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
 
   const getReadyToken = useCallback(async () => {
     if (tokenRef.current && Date.now() - tokenTimeRef.current < TOKEN_MAX_AGE) {
-      const token = tokenRef.current;
+      const cached = tokenRef.current;
       tokenRef.current = null;
       fetchVoiceToken();
-      return { token };
+      return cached;
     }
     return fetchVoiceToken();
   }, [fetchVoiceToken]);
@@ -125,7 +145,11 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     }
     if (wsRef.current) {
       if (wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'Terminate' }));
+        // Both engines want to be told the audio has stopped so they can flush
+        // whatever is half-transcribed; they just spell it differently.
+        wsRef.current.send(JSON.stringify({
+          type: providerRef.current === 'deepgram' ? 'CloseStream' : 'Terminate',
+        }));
       }
       wsRef.current.close();
       wsRef.current = null;
@@ -163,9 +187,21 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       await audioCtx.audioWorklet.addModule(workletUrl);
       URL.revokeObjectURL(workletUrl);
 
-      const ws = new WebSocket(
-        `wss://streaming.assemblyai.com/v3/ws?token=${result.token}&sample_rate=16000&encoding=pcm_s16le`,
-      );
+      const provider = result.provider === 'deepgram' ? 'deepgram' : 'assemblyai';
+      providerRef.current = provider;
+      dgCommittedRef.current = '';
+
+      // Deepgram takes the token as a query param on purpose: a browser
+      // WebSocket cannot set an Authorization header, and the documented
+      // alternative (Sec-WebSocket-Protocol) is the fallback for environments
+      // that can't do even this.
+      const url = provider === 'deepgram'
+        ? 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16'
+          + '&sample_rate=16000&channels=1&interim_results=true&smart_format=true'
+          + `&punctuate=true&access_token=${result.token}`
+        : `wss://streaming.assemblyai.com/v3/ws?token=${result.token}&sample_rate=16000&encoding=pcm_s16le`;
+
+      const ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
 
@@ -199,6 +235,9 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+
+          // AssemblyAI: `transcript` is the whole turn so far, so each message
+          // REPLACES what came before and end_of_turn is simply the last one.
           if (data.type === 'Turn') {
             const text = data.transcript?.trim();
             if (data.end_of_turn) {
@@ -206,6 +245,34 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
               onPartialTranscript?.('');
             } else {
               onPartialTranscript?.(text || '');
+            }
+            return;
+          }
+
+          // Deepgram: each `Results` covers a SEGMENT, so the pieces ACCUMULATE.
+          // `is_final` freezes a segment, `speech_final` says the utterance ended
+          // — so a full utterance is every finalized segment since the last one.
+          // Treating each message as the whole turn (the AssemblyAI reading)
+          // would commit only the last few words of anything you said.
+          if (data.type === 'Results') {
+            const text = String(data.channel?.alternatives?.[0]?.transcript ?? '').trim();
+            if (data.is_final) {
+              if (text) {
+                dgCommittedRef.current = dgCommittedRef.current ? `${dgCommittedRef.current} ${text}` : text;
+              }
+              if (data.speech_final) {
+                const whole = dgCommittedRef.current.trim();
+                dgCommittedRef.current = '';
+                if (whole) onTranscript(whole);
+                onPartialTranscript?.('');
+              } else {
+                // Frozen but the utterance is still going — show it as partial so
+                // the words stay on screen until speech_final commits them.
+                onPartialTranscript?.(dgCommittedRef.current);
+              }
+            } else {
+              const live = dgCommittedRef.current ? `${dgCommittedRef.current} ${text}` : text;
+              onPartialTranscript?.(live);
             }
           }
         } catch {

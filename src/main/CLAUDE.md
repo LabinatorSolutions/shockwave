@@ -354,7 +354,11 @@ Turning off only the first moves the download decision to the user while leaving
 
 ## Voice transcription IPC
 
-`voice:getToken` mints a short-lived (60s) AssemblyAI streaming token. The long-lived API key (`settings.transcription.apiKey`) never leaves main — the renderer requests a fresh streaming token on each WebSocket connection. The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/CLAUDE.md`.
+`voice:getToken` mints a short-lived (60s) streaming token from whichever engine `settings.transcription.provider` names — AssemblyAI's `/v3/token` or Deepgram's `/v1/auth/grant`. **One handler covers both because both offer exactly this**, which is the whole reason the desktop can switch engines without weakening anything: the long-lived key never leaves main, and only the session credential crosses to the renderer.
+
+It returns **`{ token, provider }`**. The provider has to come back with the token — the renderer needs it to pick the socket URL and to read what comes back, and inferring it from a second settings read would be a second answer that can disagree with the one the token was minted against. `keyFor` (`agent-core/transcribe.ts`) resolves which of the two stored keys applies, so main never branches on the provider string itself.
+
+The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/CLAUDE.md`.
 
 ## IPC surface
 
