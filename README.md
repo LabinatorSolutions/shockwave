@@ -131,53 +131,38 @@ Job status (next run, last run, manual run-now) is in **Settings → Cron** in t
 
 Every notes app has a chat sidebar now. This one has a server.
 
-Your workspace is a git repo. An agent holds a copy of it on a machine you own — so the work keeps going after you shut the laptop.
+Your workspace is a git repo. An agent holds a copy on a machine you own — so the work keeps going after you shut the laptop.
 
-### ⏰ Work that happens while you're gone
+### 🧠 Notes that link to each other
 
-- **A `cron.json` in your repo** — "every morning at 6, read yesterday and update TODO."
-- **Runs on your server, not your laptop** — the lid stays shut, the job still fires.
-- **Committed and pushed when it finishes** — you open the app to work already done.
-- **Text the bot from anywhere** — the job starts before you sit down.
-- **Send a voice note** — say it walking, read it at your desk.
-- **`/btw` asks how it's going** — check on a running job without interrupting it.
-- **One-time jobs delete themselves** — "remind me Thursday" leaves nothing behind.
+- **Files link with `[[brackets]]`**: one click to what's related.
+- **Rename anything**: every link follows. You never fix one.
+- **Plain `.md` in a folder**: copy it and you have everything.
 
-### 🤖 An agent with its hands on the files
+### 🤖 An agent that edits them
 
-- **It edits, you don't paste** — ask for the change, the file changes.
-- **It remembers every past chat** — "what did we decide about pricing" finds the answer.
-- **It fetches the page** — real web search and a real browser, not a guess.
-- **It works in your Gmail and Drive** — connect the account once.
-- **It draws diagrams you can drag** — Excalidraw files, editable after.
-- **You teach it once** — drop in a skill folder and it does that job your way from then on.
-- **You talk, it types** — the mic writes the prompt.
+- **It edits, you don't paste**: no copying answers back into the file.
+- **It reads the whole workspace**: you don't hunt for the file first.
+- **Your key, your model**: swap it the day a better one ships.
 
-### 🧠 Notes that hold themselves together
+### 🧬 It only needs telling once
 
-- **`[[Brackets]]` link the files** — one click to the related note, no folder digging.
-- **Rename anything** — every link pointing there follows. You never fix one.
-- **Each file lists what points at it** — the thread you forgot you started finds you.
-- **Same name in two folders** — `acme/Meeting` and `globex/Meeting` both work.
-- **A graph of the workspace** — the files nothing links to show up alone.
-- **Plain `.md` in a folder** — copy the folder and you have everything.
+- **Stop re-explaining yourself**: what you told it in June still holds in October.
+- **Correct it once**: the fix sticks instead of coming back next week.
+- **Not a black box**: memory is a file. Wrong line, delete it.
 
-### 🔄 Sync nobody can switch off
+### ⏰ Work while you're gone
 
-- **Your own GitHub repo** — free, because the repo is already yours.
-- **Every 10 seconds, quietly** — two machines agree without you thinking about it.
-- **Conflicts settled in the app** — keep yours or take theirs. No terminal.
-- **Every sync is a commit** — go back to any day.
-- **A new laptop, a folder, a minute** — everything's there.
+- **It doesn't die with the terminal**: it runs on your server.
+- **Jobs on a schedule**: open the app to work already done.
+- **Text or talk from anywhere**: it starts before you sit down.
 
-### 🖥 The server the rest of it runs on
+### 🔄 Sync that costs nothing
 
-- **One line on a $5 box** — it prints a URL and a key, and you're done.
-- **Every machine sees the same thing** — chats, settings, workspaces. Nothing to export.
-- **You host it, so you hold it** — no company sits between you and your notes.
-- **Upgrades from a button in the app** — no SSH.
-- **Comes back on its own** — it restarts itself when it hangs.
+- **Your own GitHub repo**: no subscription, ever.
+- **Conflicts settled in-app**: keep yours or take theirs. No terminal.
+- **One line on a $5 box**: your server, nobody in the middle.
 
 ### Why not Obsidian and Claude Code?
 
-You can. Two apps, two windows, and you paste between them. But the agent stops when you close the terminal. It can't fire at 6 a.m., can't answer a text, and can't work on a repo you aren't sitting in front of. That's the difference — not the sidebar.
+You can. Two apps, two windows, and you paste between them. But the agent stops when you close the terminal — it can't fire at 6 a.m., can't answer a text, and can't work on a repo you aren't sitting in front of.
