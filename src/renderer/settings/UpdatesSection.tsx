@@ -36,7 +36,9 @@ export default function UpdatesSection({ appUpdate }) {
   if (checking) {
     result = 'Checking…';
   } else if (phase === 'downloading') {
-    result = `Downloading version ${latest}… ${status.percent}%`;
+    // No percent here — the button is already counting it, and two live numbers
+    // one above the other read as two different things happening.
+    result = `Downloading version ${latest}…`;
   } else if (phase === 'ready') {
     result = `Version ${latest} is downloaded. It installs when you restart.`;
   } else if (phase === 'available') {
