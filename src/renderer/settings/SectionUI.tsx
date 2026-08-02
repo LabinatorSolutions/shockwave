@@ -28,10 +28,21 @@ export function SettingsSection({ title, description, children, wide = false }: 
   );
 }
 
-export function SettingsGroup({ title, children, className }: any) {
+// A group may carry a `description` — one line explaining the fields BELOW it,
+// for the case where the group is the unit that makes sense and the individual
+// fields don't. Memory is the worked example: an interval and two character
+// budgets mean nothing apart, and repeating "MEMORY.md is loaded into every
+// prompt" under each of the three is how field descriptions grow into paragraphs.
+// Say the shared half once, here, and leave each field its own difference.
+export function SettingsGroup({ title, description, children, className }: any) {
   return (
     <div className={className}>
-      {title && <div className="mb-2.5 text-xs font-semibold text-foreground">{title}</div>}
+      {title && (
+        <div className={cn('text-xs font-semibold text-foreground', description ? 'mb-1' : 'mb-2.5')}>
+          {title}
+        </div>
+      )}
+      {description && <p className="mb-3 text-[13px] text-muted-foreground">{description}</p>}
       <div className="flex flex-col gap-3">{children}</div>
     </div>
   );

@@ -382,7 +382,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   return (
     <SettingsSection
       title="Agent Chat"
-      description="The chat sidebar agent can read, edit, and run commands inside your active workspace. API keys are encrypted on this machine using your OS keychain."
+      description="The agent in the chat sidebar reads, edits, and runs commands inside your active workspace. API keys are encrypted at rest on your companion server."
     >
       <SettingsGroup title="LLM">
         <ProviderModelKey
@@ -401,96 +401,13 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
 
       <SettingsDivider />
 
-      <SettingsGroup>
-        <Field>
-          <FieldLabel htmlFor="agent-max-run">Agent Run Max Minutes</FieldLabel>
-          <div>
-            <Input
-              id="agent-max-run"
-              className={NUMBER_FIELD}
-              type="number"
-              min={1}
-              placeholder="30"
-              value={maxRunField.value}
-              onChange={(e) => maxRunField.onChange(e.target.value)}
-              onBlur={maxRunField.onBlur}
-            />
-          </div>
-          <FieldDescription>Aborts a Telegram or scheduled run that overruns.</FieldDescription>
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="agent-fix-attempts">Git Fixer Max Attempts</FieldLabel>
-          <div>
-            <Input
-              id="agent-fix-attempts"
-              className={NUMBER_FIELD}
-              type="number"
-              min={1}
-              placeholder="3"
-              value={fixAttemptsField.value}
-              onChange={(e) => fixAttemptsField.onChange(e.target.value)}
-              onBlur={fixAttemptsField.onBlur}
-            />
-          </div>
-          <FieldDescription>How many times the git-fixer retries a merge it can&apos;t resolve.</FieldDescription>
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="agent-scratch-ttl">Scratch Pad Max Days</FieldLabel>
-          <div>
-            <Input
-              id="agent-scratch-ttl"
-              className={NUMBER_FIELD}
-              type="number"
-              min={1}
-              placeholder="7"
-              value={ttlField.value}
-              onChange={(e) => ttlField.onChange(e.target.value)}
-              onBlur={ttlField.onBlur}
-            />
-          </div>
-          <FieldDescription>How long files in the agent&apos;s scratch pad are kept. Pinned chats keep theirs indefinitely.</FieldDescription>
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="agent-checkout-pool">Warm Checkouts Kept</FieldLabel>
-          <div>
-            <Input
-              id="agent-checkout-pool"
-              className={NUMBER_FIELD}
-              type="number"
-              min={0}
-              placeholder="2"
-              value={poolField.value}
-              onChange={(e) => poolField.onChange(e.target.value)}
-              onBlur={poolField.onBlur}
-            />
-          </div>
-          <FieldDescription>
-            Copies of your workspace the server keeps ready, so a new chat starts without waiting for a download. 0 turns it off.
-          </FieldDescription>
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="agent-review-interval">Review Interval</FieldLabel>
-          <div>
-            <Input
-              id="agent-review-interval"
-              className={NUMBER_FIELD}
-              type="number"
-              min={0}
-              placeholder="10"
-              value={reviewField.value}
-              onChange={(e) => reviewField.onChange(e.target.value)}
-              onBlur={reviewField.onBlur}
-            />
-          </div>
-          <FieldDescription>
-            Tool calls a chat must reach before the agent reviews it and updates its own skills. Counted across the app, Telegram and scheduled runs. 0 turns it off.
-          </FieldDescription>
-        </Field>
-
+      {/* Memory and self-improvement are ADJACENT but never merged: separate
+          triggers, separate counters, separate prompts, and describing either in
+          terms of the other is what makes people think one number controls both. */}
+      <SettingsGroup
+        title="Memory"
+        description="The agent keeps two files at your workspace root — MEMORY.md (how to work here) and USER.md (who you are) — and loads both into every chat."
+      >
         <Field>
           <FieldLabel htmlFor="agent-memory-interval">Memory Interval</FieldLabel>
           <div>
@@ -505,8 +422,8 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
               onBlur={memoryField.onBlur}
             />
           </div>
-          <FieldDescription>
-            Your messages a chat must reach before the agent looks it over for things worth remembering about you, and writes them to MEMORY.md and USER.md in the workspace. Counted across the app, Telegram and scheduled runs. 0 turns it off.
+          <FieldDescription className="text-xs">
+            Your messages in a chat, anywhere it runs, before the agent looks it over for anything worth keeping. 0 turns it off.
           </FieldDescription>
         </Field>
 
@@ -524,8 +441,8 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
               onBlur={memoryLimitField.onBlur}
             />
           </div>
-          <FieldDescription>
-            How much MEMORY.md may hold. The limit is what keeps it curated — at capacity the agent must consolidate before it can save anything new. All of it is in every prompt.
+          <FieldDescription className="text-xs">
+            Budget for MEMORY.md. Being full is what forces the agent to consolidate rather than accumulate.
           </FieldDescription>
         </Field>
 
@@ -543,9 +460,119 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
               onBlur={userLimitField.onBlur}
             />
           </div>
-          <FieldDescription>
-            The same for USER.md — what the agent knows about you.
+          <FieldDescription className="text-xs">Budget for USER.md.</FieldDescription>
+        </Field>
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      <SettingsGroup
+        title="Self-improvement"
+        description="After enough work in one chat, the agent opens a run of its own to review that conversation and update the skills it works from."
+      >
+        <Field>
+          <FieldLabel htmlFor="agent-review-interval">Review Interval</FieldLabel>
+          <div>
+            <Input
+              id="agent-review-interval"
+              className={NUMBER_FIELD}
+              type="number"
+              min={0}
+              placeholder="10"
+              value={reviewField.value}
+              onChange={(e) => reviewField.onChange(e.target.value)}
+              onBlur={reviewField.onBlur}
+            />
+          </div>
+          <FieldDescription className="text-xs">
+            Tool calls in a chat, anywhere it runs, before that review starts. 0 turns it off.
           </FieldDescription>
+        </Field>
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      <SettingsGroup
+        title="Unattended runs"
+        description="Turns the server takes without you: Telegram messages, scheduled runs, and the agent's own review and memory runs."
+      >
+        <Field>
+          <FieldLabel htmlFor="agent-max-run">Agent Run Max Minutes</FieldLabel>
+          <div>
+            <Input
+              id="agent-max-run"
+              className={NUMBER_FIELD}
+              type="number"
+              min={1}
+              placeholder="30"
+              value={maxRunField.value}
+              onChange={(e) => maxRunField.onChange(e.target.value)}
+              onBlur={maxRunField.onBlur}
+            />
+          </div>
+          <FieldDescription className="text-xs">Aborts a run that overruns.</FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-fix-attempts">Git Fixer Max Attempts</FieldLabel>
+          <div>
+            <Input
+              id="agent-fix-attempts"
+              className={NUMBER_FIELD}
+              type="number"
+              min={1}
+              placeholder="3"
+              value={fixAttemptsField.value}
+              onChange={(e) => fixAttemptsField.onChange(e.target.value)}
+              onBlur={fixAttemptsField.onBlur}
+            />
+          </div>
+          <FieldDescription className="text-xs">Retries before the fixer gives up on a merge it can&apos;t resolve.</FieldDescription>
+        </Field>
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      {/* Scratch days sits here rather than under "Unattended runs" because the
+          desktop's own boot sweep reads it too — it is not a server-only knob. */}
+      <SettingsGroup
+        title="Working files"
+        description="Copies of your workspace the server runs turns in, and the files the agent writes while working."
+      >
+        <Field>
+          <FieldLabel htmlFor="agent-checkout-pool">Warm Checkouts Kept</FieldLabel>
+          <div>
+            <Input
+              id="agent-checkout-pool"
+              className={NUMBER_FIELD}
+              type="number"
+              min={0}
+              placeholder="2"
+              value={poolField.value}
+              onChange={(e) => poolField.onChange(e.target.value)}
+              onBlur={poolField.onBlur}
+            />
+          </div>
+          <FieldDescription className="text-xs">
+            Cloned in advance, so a new chat starts without waiting for a download. 0 turns it off.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-scratch-ttl">Scratch Pad Max Days</FieldLabel>
+          <div>
+            <Input
+              id="agent-scratch-ttl"
+              className={NUMBER_FIELD}
+              type="number"
+              min={1}
+              placeholder="7"
+              value={ttlField.value}
+              onChange={(e) => ttlField.onChange(e.target.value)}
+              onBlur={ttlField.onBlur}
+            />
+          </div>
+          <FieldDescription className="text-xs">How long scratch files are kept. Pinned chats keep theirs indefinitely.</FieldDescription>
         </Field>
       </SettingsGroup>
     </SettingsSection>

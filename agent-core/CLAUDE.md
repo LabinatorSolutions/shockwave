@@ -84,11 +84,25 @@ The `emit` sink is passed **per `agentSend` call**, not stored on the host — s
 
 ## System prompt
 
-`assembleSystemPrompt(workspacePath, { unattended, source })` returns `SOUL + helper`:
+`assembleSystemPrompt(workspacePath, { unattended, source, scratchDir, timezone, memory })` returns `SOUL + helper`:
 - **SOUL** = the workspace's `SOUL.md` (cwd root), else `DEFAULT_SOUL` in memory (never written). `SOUL.md` is a normal file the user edits — there is no settings UI for it.
-- **helper** = `buildShockwaveHelper({ tools: toolsForSource(source), unattended })` — the app operating manual, sections as named consts, the tool list interpolated in.
+- **helper** = `buildShockwaveHelper({ tools: toolsForSource(source), unattended, … })` — the app operating manual, sections as named consts, the tool list interpolated in, and the rendered memory blocks last.
 
-The result is passed to pi as `systemPromptOverride`, replacing pi's built-in prompt. **pi then appends on its own at boot**: discovered `AGENTS.md`/`CLAUDE.md` (cwd→root), the enabled skills list, and `Current date`. So the final order is SOUL → helper → context files → skills → date, and agent-core deliberately does not add the last three.
+The result is passed to pi as `systemPromptOverride`, replacing pi's built-in prompt. **pi then appends on its own at boot**: discovered `AGENTS.md`/`CLAUDE.md` (cwd→root), the enabled skills list, and `Current date`. So the final order is SOUL → helper → memory blocks → context files → skills → date, and agent-core deliberately does not add the last three.
+
+**Almost every section is conditional, and none of the conditions is a setting.** Each asks one question — *does this run hold that tool?* — which `source` decides: desktop/Telegram/cron get the whole catalog, a review run five tools, a memory run one. So a normal chat has everything; the gaps appear only on the two background runs. Naming a tool the run does not have is the rule (`tests/helperPrompt.test.js`), and it applies to a section that *teaches* a tool as much as to a list that names one:
+
+| section | gated on |
+|---|---|
+| Unattended run | `unattended` (cron, review, memory) |
+| Reaching the user | `send_message` |
+| Sending the user a file | `source` is Telegram or cron |
+| Using the link graph | `grep` — it hands over a pattern to run |
+| Daily notes | `daily_note` |
+| **Memory** | **`memory`** |
+| Creating skills | `manage_skill` — authoring guidance for a run that cannot author |
+
+The memory **blocks** are the exception that proves it: they are NOT gated on the tool, only on there being content. A review run cannot write memory but still gets the facts, because knowing the user makes for better skills. Instruction gated, content not.
 
 **SOUL is frozen per chat; the helper is rebuilt every run.** The stored `systemPrompt` opens with `HELPER_MARK` at the helper's first line, and the resume branch runs `rebuildSystemPrompt(row.systemPrompt, { unattended, source })` — keep everything before the mark, regenerate everything after. The tool list is why: a chat created from Telegram and continued on the desktop would otherwise advertise its creator's tools, while the allowlist pi enforces is recomputed at every boot. SOUL stays frozen so a mid-conversation `SOUL.md` edit can't rewrite the agent's identity. A prompt stored before the mark existed has no seam and is used verbatim.
 

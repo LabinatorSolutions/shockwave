@@ -1647,7 +1647,7 @@ ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
 // half, for workspaces that predate a file being added to the manifest.
 //
 // `listFiles` lets the UI say what's missing before the user commits to writing
-// anything. `ensureFiles` with overwrite writes all four unconditionally — the
+// anything. `ensureFiles` with overwrite writes the whole manifest unconditionally — the
 // renderer confirms that first, since git only makes it recoverable for what's
 // already committed.
 ipcMain.handle('workspace:listFiles', async (_evt, { workspacePath }) => {

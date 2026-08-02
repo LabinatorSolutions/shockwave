@@ -12,7 +12,7 @@
 //
 // NOT on clone / adopt / set-up-here (`ensureCheckout`). Cloning means adopting
 // someone else's repo, and the sync engine commits and pushes on its next tick —
-// so scaffolding there would push four files into a repo the user may not own
+// so scaffolding there would push our whole manifest into a repo the user may not own
 // and may share. `.gitignore` is the sharpest: adding one changes git's behavior
 // for every collaborator. Clone stays untouched; the manual action is how you
 // opt in.
@@ -89,11 +89,15 @@ export const DEFAULT_FILES: DefaultFile[] = [
 // tuned SOUL.md or hand-maintained .gitignore survives. Every automatic caller
 // uses this.
 //
-// `overwrite: true` replaces all four with the current defaults. Only the
-// explicit "Reset to defaults" action passes it, and the renderer confirms
-// first: the workspace is a git repo so a reset is recoverable, but only for
-// what's already COMMITTED — an edit made since the last sync tick has no git
-// copy to come back from.
+// `overwrite: true` replaces every file in the manifest with the current
+// defaults. Only the explicit "Reset to defaults" action passes it, and the
+// renderer confirms first: the workspace is a git repo so a reset is
+// recoverable, but only for what's already COMMITTED — an edit made since the
+// last sync tick has no git copy to come back from.
+//
+// That confirmation names MEMORY.md and USER.md specifically, because overwrite
+// EMPTIES them. Everything else in the manifest is text the user wrote and could
+// write again; those two are everything the agent has learned.
 export async function ensureWorkspaceFiles(
   workspacePath: string,
   { overwrite = false }: { overwrite?: boolean } = {},
