@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Cron } from 'croner';
 import { WORK_BASE } from './git.js';
 import { RUNS_BASE, FILES_BASE } from './dataDirs.js';
-import type { DB } from './db.js';
+import type { PgPool } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import { logger } from './log.js';
@@ -21,7 +21,7 @@ const log = logger('sweeper');
 // defaults, so an unset row must never look configured.
 const DEFAULT_TTL_DAYS = 1;
 
-async function ttlMs(pool: DB, key: Buffer): Promise<number> {
+async function ttlMs(pool: PgPool, key: Buffer): Promise<number> {
   let days = DEFAULT_TTL_DAYS;
   try {
     days = Number((await store.readSettings(getDb(pool), key))?.codingAgent?.scratchTtlDays) || DEFAULT_TTL_DAYS;
@@ -45,7 +45,7 @@ async function sweepBase(base: string, cutoff: number): Promise<number> {
   return removed;
 }
 
-export async function sweepOnce(pool: DB, key: Buffer): Promise<void> {
+export async function sweepOnce(pool: PgPool, key: Buffer): Promise<void> {
   const ms = await ttlMs(pool, key);
   const cutoff = Date.now() - ms;
   // The agent's scratch pad ages out on the same clock as the checkouts. What is
@@ -57,7 +57,7 @@ export async function sweepOnce(pool: DB, key: Buffer): Promise<void> {
   if (a + b + c) log.info({ checkouts: a, piScratch: b, scratchPads: c, ttlDays: ms / 86_400_000 }, 'swept stale run dirs');
 }
 
-export function initSweeper(pool: DB, key: Buffer): void {
+export function initSweeper(pool: PgPool, key: Buffer): void {
   const run = () => sweepOnce(pool, key).catch((e) => log.error({ err: e?.message }, 'run-dir sweep failed'));
   run();
   new Cron('0 * * * *', run);

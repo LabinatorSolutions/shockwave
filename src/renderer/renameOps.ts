@@ -1,5 +1,5 @@
-import { LINK_RE, parseTarget } from './linkIndex.js';
-import { resolveLinkTarget, shortestUniqueLinkFor } from './linkResolver.js';
+import { LINK_RE, parseTarget } from './linkIndex.ts';
+import { resolveLinkTarget, shortestUniqueLinkFor } from './linkResolver.ts';
 
 function baseKeyOf(p) {
   const name = p.slice(p.lastIndexOf('/') + 1);
@@ -35,9 +35,9 @@ function swapBaseSegment(pathPart, newBaseName) {
 // finalPath) are handled via `resolveSrc`.
 export async function rewriteReferences({ api, cache, sources, candidatesFor, workspacePath, oldPath, finalPath, oldBaseName, newBaseName }) {
   const oldBaseLower = oldBaseName.toLowerCase();
-  const srcSet = new Set(sources);
+  const srcSet = new Set<string>(sources);
   srcSet.add(finalPath);
-  const rewritten = [];
+  const rewritten: string[] = [];
   for (const src of srcSet) {
     let content;
     try { content = await api.readFile(src); } catch { continue; }
@@ -68,8 +68,8 @@ export async function rewriteReferencesForMove({ api, cache, sources, candidates
   if (bucket.length <= 1) return [];
   const postCandidatesFor = (b) => (b === base ? bucket.map((p) => (p === oldPath ? newPath : p)) : candidatesFor(b));
 
-  const rewritten = [];
-  for (const src of new Set(sources)) {
+  const rewritten: string[] = [];
+  for (const src of new Set<string>(sources)) {
     if (src === oldPath || src === newPath) continue;
     let content;
     try { content = await api.readFile(src); } catch { continue; }

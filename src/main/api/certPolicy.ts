@@ -1,6 +1,6 @@
 // PURE certificate-approval policy. No electron, no fs — plain `.js` so
-// `node --test` can exercise it directly, the same split as `keys.js` (pure) vs
-// `settingsStore.ts` (stateful), and `workspaceFolder.js` vs `sync.ts`.
+// `node --test` can exercise it directly, the same split as `keys.ts` (pure) vs
+// `settingsStore.ts` (stateful), and `workspaceFolder.ts` vs `sync.ts`.
 //
 // `net.ts` owns the Electron wiring (the session, the verify callback, the stored
 // pin) and calls in here for the one decision that matters. That decision is what

@@ -1,5 +1,19 @@
 export const LINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 
+// These two shapes are the parser's whole output contract, and `src/main/
+// linkParser.ts` declares them identically — the parity test asserts the two
+// parsers agree byte for byte, so the types have to say the same thing too.
+/** A wiki-link target split into path segments + basename, both lowercased. */
+export type ParsedTarget = { segments: string[]; basename: string };
+/** One `[[…]]` occurrence, as `parseLinks` emits it. */
+export type ParsedLink = {
+  target: string;
+  targetParsed: ParsedTarget;
+  lineNumber: number;
+  lineText: string;
+  contextLines: string[] | null;
+};
+
 // Parse a raw [[…]] body into path segments + basename. Drops a |alias and a
 // #heading, strips a trailing .md, lowercases. "folder/Foo" → {segments:
 // ['folder'], basename:'foo'}; "Foo" → {segments:[], basename:'foo'}. The
@@ -17,7 +31,7 @@ export function parseTarget(raw) {
 }
 
 // The link-index key for a target: its basename, path prefix dropped. Two files
-// may share a basename; the resolver (linkResolver.js) disambiguates by path.
+// may share a basename; the resolver (linkResolver.ts) disambiguates by path.
 export function normalizeTarget(raw) {
   return parseTarget(raw).basename;
 }
@@ -46,8 +60,8 @@ const CONTEXT_BULLET_RE = /^[ \t]*([-*+]|\d+[.)])(\s|$)/;
 
 function collectContext(lines, startIdx, max = 20) {
   const baseIndent = leadingWidth(lines[startIdx]);
-  const ctx = [];
-  const pendingBlanks = [];
+  const ctx: string[] = [];
+  const pendingBlanks: string[] = [];
   for (let j = startIdx + 1; j < lines.length && ctx.length < max; j++) {
     const line = lines[j];
     if (line.trim() === '') {
@@ -77,7 +91,7 @@ function collectContext(lines, startIdx, max = 20) {
 }
 
 export function parseLinks(content) {
-  const out = [];
+  const out: ParsedLink[] = [];
   if (!content) return out;
   const lines = content.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -85,7 +99,7 @@ export function parseLinks(content) {
     LINK_RE.lastIndex = 0;
     let m;
     let foundOnThisLine = false;
-    let contextForThisLine = null;
+    let contextForThisLine: string[] | null = null;
     while ((m = LINK_RE.exec(line)) !== null) {
       const parsed = parseTarget(m[1]);
       if (!parsed.basename) continue;
@@ -144,7 +158,7 @@ export function createLinkIndex() {
       removeEntries(path, oldTargets);
     }
     const parsed = parseLinks(content);
-    const newTargets = [];
+    const newTargets: string[] = [];
     for (const { target, targetParsed, lineNumber, lineText, contextLines } of parsed) {
       newTargets.push(target);
       addEntry(target, targetParsed, path, lineNumber, lineText, contextLines);
@@ -182,7 +196,7 @@ export function createLinkIndex() {
   function applyParsedLinks(path, parsed, mtime) {
     const oldTargets = outgoingByFile.get(path);
     if (oldTargets && oldTargets.length > 0) removeEntries(path, oldTargets);
-    const newTargets = [];
+    const newTargets: string[] = [];
     for (const { target, targetParsed, lineNumber, lineText, contextLines } of parsed) {
       newTargets.push(target);
       addEntry(target, targetParsed, path, lineNumber, lineText, contextLines);

@@ -13,7 +13,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { classifyFolder, parseGithubUrl, cloneUrlFor, repoMismatch } from '../src/main/workspaceFolder.js';
+import { classifyFolder, parseGithubUrl, cloneUrlFor, repoMismatch } from '../src/main/workspaceFolder.ts';
 
 async function tmpDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'shockwave-ws-'));

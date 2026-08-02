@@ -1,4 +1,4 @@
-// The file-delivery parser (agent-core/mediaTags.js) — what decides that a path
+// The file-delivery parser (agent-core/mediaTags.ts) — what decides that a path
 // the agent typed becomes a file in the user's Telegram.
 //
 // Why this is tested: every rule here exists because getting it wrong sends the
@@ -24,7 +24,7 @@ import os from 'node:os';
 import {
   extractMedia, extractLocalFiles, validateDeliveryPath, filterDeliveryPaths,
   deliveryKind, maskProtectedSpans, maskJsonStringMedia,
-} from '../agent-core/mediaTags.js';
+} from '../agent-core/mediaTags.ts';
 
 // realpath: on macOS the temp dir is under a symlinked /var, and the validator
 // resolves before comparing, so the expected values must be resolved too.

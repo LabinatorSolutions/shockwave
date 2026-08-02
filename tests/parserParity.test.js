@@ -1,5 +1,5 @@
 // CLAUDE.md spells this out: the parser has two copies, one in the renderer
-// (src/linkIndex.js) and one in main (electron/linkParser.js). They MUST stay
+// (src/linkIndex.ts) and one in main (electron/linkParser.ts). They MUST stay
 // in lockstep — the watcher uses the main copy, the in-memory index uses the
 // renderer copy, and any drift causes silent corruption.
 //
@@ -7,8 +7,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLinks as rendererParse, normalizeTarget as rendererNorm } from '../src/renderer/linkIndex.js';
-import { parseLinks as mainParse, normalizeTarget as mainNorm } from '../src/main/linkParser.js';
+import { parseLinks as rendererParse, normalizeTarget as rendererNorm } from '../src/renderer/linkIndex.ts';
+import { parseLinks as mainParse, normalizeTarget as mainNorm } from '../src/main/linkParser.ts';
 
 const FIXTURES = [
   '',

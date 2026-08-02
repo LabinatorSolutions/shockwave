@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import { createAgentRuntime } from '../../agent-core/agent.js';
 import type { AgentHost } from '../../agent-core/agent.js';
 import { initModelCatalog } from '../../agent-core/modelCatalog.js';
-import type { DB } from './db.js';
+import type { PgPool } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import { mintToken } from './oauth.js';
@@ -26,7 +26,7 @@ const alog = logger('agent');
 // server agent has the SAME skills as the desktop; falls back to an empty dir.
 const BUILTIN_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(DATA_BASE, 'builtins');
 
-export function makeCompanionRuntime(pool: DB, key: Buffer) {
+export function makeCompanionRuntime(pool: PgPool, key: Buffer) {
   const db = getDb(pool);
   // Ensure the builtins dir exists (shipped one, or empty fallback) + seed the
   // model-catalog disk cache, same as the desktop does at startup.

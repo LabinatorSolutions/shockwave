@@ -18,11 +18,11 @@ import {
   isLocalKey, readLocalSettings, patchLocalSettings, getWorkspaceLocal, pruneWorkspaceLocal,
 } from './api/localSettings.js';
 // WHICH fields are credentials is declared once, in agent-core — the only code
-// bundled into both this build and the companion's. See agent-core/credentials.js.
+// bundled into both this build and the companion's. See agent-core/credentials.ts.
 import {
   SETTINGS_CREDENTIALS, AGENT_SECRET_CREDENTIALS,
   getPath, deletePath, setPathCopy, isSet,
-} from '../../agent-core/credentials.js';
+} from '../../agent-core/credentials.ts';
 
 // The ONLY defaults the desktop holds — for machine-local settings, which live in
 // a userData file and never touch the DB. DB settings have NO desktop defaults:

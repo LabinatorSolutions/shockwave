@@ -12,7 +12,7 @@ import type { TelegramClient } from './client.js';
 import { splitMessage } from './client.js';
 import {
   extractMedia, extractLocalFiles, filterDeliveryPaths, deliveryKind,
-} from '../../../agent-core/mediaTags.js';
+} from '../../../agent-core/mediaTags.ts';
 
 const TOOL_EMOJI: Record<string, string> = {
   bash: '⚙️', read: '📖', write: '✍️', edit: '✏️', grep: '🔎', find: '🔎', ls: '📂',

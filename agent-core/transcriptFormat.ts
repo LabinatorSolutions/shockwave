@@ -4,7 +4,7 @@
 // readable. Kept separate and pure so swapping the speech engine can't change the
 // output format, and so the formats can be tested without a network call.
 //
-// Plain `.js` for the same reason as `credentials.js` — `node --test` loads it
+// Plain `.js` for the same reason as `credentials.ts` — `node --test` loads it
 // directly and both TypeScript builds import it without ceremony.
 //
 // A segment is `{ startMs, endMs, text, speaker? }`. That is the whole contract a
@@ -47,7 +47,7 @@ export function toVtt(segments) {
  * playback and unreadable as a document.
  */
 export function toText(segments) {
-  const paras = [];
+  const paras: Array<{ speaker: any; parts: string[] }> = [];
   for (const seg of segments || []) {
     const text = String(seg.text ?? '').trim();
     if (!text) continue;

@@ -23,6 +23,24 @@ const KIND_METHOD: Record<SendKind, { method: string; field: string }> = {
   document: { method: 'sendDocument', field: 'document' },
 };
 
+/**
+ * Telegram's response envelope. Every Bot API method answers in this shape —
+ * `ok` plus either `result` or `description`, and `parameters.retry_after` on a
+ * 429. `res.json()` is typed `unknown`, so this is what the three call sites
+ * assert it to rather than each reaching into an untyped value.
+ */
+type TgResponse = {
+  ok?: boolean;
+  result?: any;
+  description?: string;
+  parameters?: { retry_after?: number };
+};
+
+/** `res.json()` with the envelope applied, falling back to `{}` on a non-JSON body. */
+async function readEnvelope(res: Response): Promise<TgResponse> {
+  return (await res.json().catch(() => ({}))) as TgResponse;
+}
+
 export class TelegramClient {
   constructor(private token: string) {}
 
@@ -34,7 +52,7 @@ export class TelegramClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const json = await res.json().catch(() => ({}));
+      const json = await readEnvelope(res);
       if (res.ok && json.ok) return json.result;
       if (res.status === 429 && attempt === 0) {
         const wait = ((json.parameters?.retry_after ?? 1) * 1000) + 200;
@@ -59,7 +77,7 @@ export class TelegramClient {
     form.set('drop_pending_updates', 'true');
     form.set('certificate', new Blob([certificatePem], { type: 'application/x-pem-file' }), 'cert.pem');
     const res = await fetch(`https://api.telegram.org/bot${this.token}/setWebhook`, { method: 'POST', body: form });
-    const json = await res.json().catch(() => ({}));
+    const json = await readEnvelope(res);
     if (!(res.ok && json.ok)) throw new Error(`telegram setWebhook failed: ${json.description || res.status}`);
     return json.result;
   }
@@ -119,7 +137,7 @@ export class TelegramClient {
     if (kind === 'document') form.set('filename', name);
 
     const res = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
-    const json = await res.json().catch(() => ({}));
+    const json = await readEnvelope(res);
     if (!(res.ok && json.ok)) throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
     return json.result;
   }

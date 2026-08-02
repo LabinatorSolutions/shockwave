@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setupStatus, anyIncomplete } from '../src/renderer/setupStatus.js';
+import { setupStatus, anyIncomplete } from '../src/renderer/setupStatus.ts';
 
 const COMPLETE = {
   companionUrl: 'https://example.com',

@@ -1,8 +1,16 @@
 {
-  // Incremental TypeScript: .ts/.tsx are type-checked, the existing .js/.jsx
-  // majority is seen for module resolution only (allowJs + checkJs:false).
   // esbuild (via electron-vite) does the actual building and strips types
   // WITHOUT checking them — `npm run typecheck` (tsc --noEmit) is the real gate.
+  //
+  // `checkJs` is ON, and it is what closes the hole rather than policing it.
+  // There used to be 21 unchecked `.js` files here — the parser, the rename
+  // logic, the credential declaration — and they were unchecked not by neglect
+  // but because the test suite loads them: `node --test` runs source directly
+  // and Node resolves `./foo.js` literally, so a file under test could not be
+  // renamed without breaking its own test. That's fixed by spelling those
+  // imports `.ts` (see `allowImportingTsExtensions` below), so there is no
+  // longer a reason for an unchecked module to exist. With this on, a new `.js`
+  // is checked like everything else instead of being invisible.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -11,7 +19,7 @@
     "types": ["node"],
     "jsx": "react-jsx",
     "allowJs": true,
-    "checkJs": false,
+    "checkJs": true,
     "noEmit": true,
     "strict": true,
     // Migration posture: keep strict's real bug-catching (null-safety, type
@@ -20,6 +28,17 @@
     // typed by hand. Ratchet this to true later for full coverage.
     "noImplicitAny": false,
     "skipLibCheck": true,
+    // A module the TEST SUITE loads must spell its own imports `.ts`. `npm test`
+    // runs `node --test` straight off the source with no build step, and Node
+    // resolves a specifier literally — it has no `extensionAlias`, so `./foo.js`
+    // does NOT find `foo.ts` the way Vite and esbuild do. Node strips types
+    // natively (22.18+), so the only thing standing between a tested module and
+    // being TypeScript is how its import is spelled.
+    //
+    // Everything else keeps the `.js` spelling described above — both bundlers
+    // resolve it, and rewriting every importer in the app would be churn for
+    // nothing. Safe to enable only because this config is `noEmit`.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,

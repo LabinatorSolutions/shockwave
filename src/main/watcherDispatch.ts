@@ -7,7 +7,7 @@
 // updates. main.ts wires it to the real watcher and the real pending/tree
 // state; the correlator tests wire it to a tmp dir. BOTH import this module so
 // main and the tests exercise identical logic — same parity discipline as
-// `linkParser.js`. Keep it pure: reads only, no writes.
+// `linkParser.ts`. Keep it pure: reads only, no writes.
 //
 // Behaviors that differ from the old chokidar path and are handled here:
 //   - Atomic save (temp-write + rename-over-existing) arrives as `create` of an

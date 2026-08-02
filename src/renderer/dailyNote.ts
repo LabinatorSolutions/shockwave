@@ -1,4 +1,4 @@
-// Daily-note naming lives in `agent-core/dailyNote.js` — the app and the coding
+// Daily-note naming lives in `agent-core/dailyNote.ts` — the app and the coding
 // agent both resolve daily notes, and two copies of these rules would drift into
 // each side opening a different file. This module is the renderer's door onto it.
 //
@@ -18,4 +18,4 @@ export {
   resolveDailyNotePath,
   basenameIdentifiesDate,
   shallowest,
-} from '../../agent-core/dailyNote.js';
+} from '../../agent-core/dailyNote.ts';

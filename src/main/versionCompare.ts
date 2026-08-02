@@ -1,6 +1,6 @@
 // PURE version comparison for the companion-upgrade flow (plain .js, no
 // electron import — unit-tested under node --test, same pattern as
-// workspaceRow.js).
+// workspaceRow.ts).
 //
 // Desktop versions come from app.getVersion() ('1.0.21'); companion versions
 // from GET /health ('v1.0.21' from a published image, 'dev' for local builds).

@@ -43,7 +43,7 @@ import { session as electronSession } from 'electron';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { readApiConfig, writeApiConfig } from './config.js';
-// The decision itself is pure and unit-tested — see certPolicy.js. This file is
+// The decision itself is pure and unit-tested — see certPolicy.ts. This file is
 // only the Electron wiring around it.
 import { decideCert, toDisplayFingerprint, pendingApplies, mayApprove, DECISION } from './certPolicy.js';
 
@@ -194,7 +194,7 @@ export function clearPendingCert(): void { pendingApproval = null; }
 
 // The last certificate main actually READ off a server and put in front of the
 // user. Approving is only allowed to pin this exact value, for this exact host —
-// see mayApprove in certPolicy.js for why the UI showing it isn't enough.
+// see mayApprove in certPolicy.ts for why the UI showing it isn't enough.
 let lastShown: SeenCert | null = null;
 
 /** What main last displayed for approval, if anything. */
@@ -257,7 +257,7 @@ function getCompanionSession(): Electron.Session {
     if (decision === DECISION.ACCEPT) return cb(CB_ACCEPT);
 
     // Hold the connection so the API key never leaves, remember what was offered,
-    // and let the UI ask. Nothing is approved here — see certPolicy.js for why
+    // and let the UI ask. Nothing is approved here — see certPolicy.ts for why
     // there is no automatic path.
     pendingApproval = { host: req.hostname, offered, approved: approved || null, at: Date.now() };
     try { announce?.(pendingApproval); } catch { /* window gone */ }

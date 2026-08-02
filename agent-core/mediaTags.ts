@@ -11,7 +11,7 @@
 // `validateDeliveryPath` takes the roots as an argument rather than knowing them.
 //
 // Plain `.js` so `node --test` loads it directly and both TypeScript builds
-// import it without ceremony, same as `credentials.js` and `linkParser.js`.
+// import it without ceremony, same as `credentials.ts` and `linkParser.ts`.
 //
 // Ported from hermes-agent (`gateway/platforms/base.py`), including the parts
 // that look like paranoia. Each one is load-bearing:
@@ -88,7 +88,7 @@ function blank(chars, start, end) {
  */
 export function maskProtectedSpans(content) {
   const chars = Array.from(content);
-  const spans = [];
+  const spans: Array<[number, number]> = [];
 
   for (const m of content.matchAll(/```[^\n]*\n[\s\S]*?```/g)) spans.push([m.index, m.index + m[0].length]);
   for (const m of content.matchAll(/`[^`\n]+`/g)) {
@@ -142,7 +142,7 @@ export function extractMedia(content) {
 
   // Locate tags in a masked copy so examples never match, then read the real text.
   const scan = maskJsonStringMedia(maskProtectedSpans(src));
-  const media = [];
+  const media: Array<{ path: string; isVoice: boolean }> = [];
   for (const m of scan.matchAll(mediaTagRe())) {
     const p = unquote(m.groups?.path);
     if (p) media.push({ path: p, isVoice });
@@ -153,7 +153,7 @@ export function extractMedia(content) {
     // Masking only LOCATES the spans — protected regions must stay verbatim in
     // the delivered text, so the cut happens on the unmasked copy.
     const maskedCleaned = maskJsonStringMedia(maskProtectedSpans(cleaned));
-    const spans = [];
+    const spans: Array<[number, number]> = [];
     for (const m of maskedCleaned.matchAll(mediaTagRe())) spans.push([m.index, m.index + m[0].length]);
     if (spans.length) {
       const chars = Array.from(cleaned);
@@ -174,16 +174,16 @@ export function extractMedia(content) {
  * the path slightly wrong), so `onMissing` lets the caller log it rather than
  * have it vanish without a trace.
  */
-export async function extractLocalFiles(content, onMissing) {
+export async function extractLocalFiles(content, onMissing?: (raw: string) => void) {
   const src = String(content ?? '');
 
   // Ignore paths that are being shown rather than sent.
-  const codeSpans = [];
+  const codeSpans: Array<[number, number]> = [];
   for (const m of src.matchAll(/```[^\n]*\n[\s\S]*?```/g)) codeSpans.push([m.index, m.index + m[0].length]);
   for (const m of src.matchAll(/`[^`\n]+`/g)) codeSpans.push([m.index, m.index + m[0].length]);
   const inCode = (pos) => codeSpans.some(([s, e]) => pos >= s && pos < e);
 
-  const found = [];
+  const found: Array<[string, string]> = [];
   for (const m of src.matchAll(barePathRe())) {
     if (inCode(m.index)) continue;
     const expanded = expandHome(m[0]);
@@ -192,7 +192,7 @@ export async function extractLocalFiles(content, onMissing) {
   }
 
   const seen = new Set();
-  const unique = [];
+  const unique: Array<[string, string]> = [];
   for (const [raw, exp] of found) {
     if (seen.has(exp)) continue;
     seen.add(exp);
@@ -250,8 +250,8 @@ export async function validateDeliveryPath(candidate, allowedRoots) {
  * Drop items whose path falls outside the allowed roots, normalizing the rest.
  * Takes and returns `{ path, … }` objects so the `isVoice` flag rides along.
  */
-export async function filterDeliveryPaths(items, allowedRoots, onRejected) {
-  const out = [];
+export async function filterDeliveryPaths(items, allowedRoots, onRejected?: (path: string) => void) {
+  const out: Array<Record<string, any>> = [];
   for (const item of items || []) {
     const safe = await validateDeliveryPath(item.path, allowedRoots);
     if (safe) out.push({ ...item, path: safe });
@@ -274,7 +274,7 @@ const AUDIO_EXTS = new Set(['.mp3', '.m4a']);
  * become a voice bubble just because of its format. `forceDocument` sends images
  * as files so Telegram doesn't recompress them.
  */
-export function deliveryKind(filePath, opts = {}) {
+export function deliveryKind(filePath, opts: { isVoice?: boolean; forceDocument?: boolean } = {}) {
   const ext = path.extname(String(filePath ?? '')).toLowerCase();
   if (VOICE_EXTS.has(ext)) return opts.isVoice ? 'voice' : 'document';
   if (AUDIO_EXTS.has(ext)) return 'audio';

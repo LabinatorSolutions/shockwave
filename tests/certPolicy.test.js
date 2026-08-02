@@ -1,4 +1,4 @@
-// The companion certificate-approval decision (src/main/api/certPolicy.js).
+// The companion certificate-approval decision (src/main/api/certPolicy.ts).
 //
 // Why this is tested: every companion request carries the bearer API key, and
 // GET /settings returns the whole DECRYPTED secret store — provider keys, the
@@ -16,7 +16,7 @@ import {
   pendingApplies,
   mayApprove,
   DECISION,
-} from '../src/main/api/certPolicy.js';
+} from '../src/main/api/certPolicy.ts';
 
 const APPROVED = 'AA:BB:CC:DD';
 const OTHER = '11:22:33:44';

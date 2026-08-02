@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { projectWorkspaceRow } from '../src/main/workspaceRow.js';
+import { projectWorkspaceRow } from '../src/main/workspaceRow.ts';
 
 // The DB column is `sync_disabled` (0 = syncing) because an absent or zero row
 // should mean normal behaviour. Everything above the projection sees

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVersion, classifyVersions } from '../src/main/versionCompare.js';
+import { parseVersion, classifyVersions } from '../src/main/versionCompare.ts';
 
 test('parseVersion accepts plain and v-prefixed x.y.z', () => {
   assert.deepEqual(parseVersion('1.0.21'), [1, 0, 21]);

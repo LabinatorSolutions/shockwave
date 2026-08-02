@@ -109,7 +109,7 @@ const nextId = () => `m${++idCounter}`;
 // This MUST stay identical to `textOf` in `agent-core/agent.ts` — that one builds
 // the stored row, this one builds the bubble, and `message_end` below makes the
 // two equal by running the same join over the same object. Same parity discipline
-// as `linkParser.js` vs `linkIndex.js`.
+// as `linkParser.ts` vs `linkIndex.ts`.
 function textOfContent(content: any): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {

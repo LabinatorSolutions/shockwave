@@ -1,4 +1,4 @@
-// The credential boundary (agent-core/credentials.js) — the one declaration of
+// The credential boundary (agent-core/credentials.ts) — the one declaration of
 // WHICH settings fields are credentials, and the path helpers the two consumers
 // share.
 //
@@ -18,7 +18,7 @@ import {
   SETTINGS_CREDENTIALS, AGENT_SECRET_CREDENTIALS,
   settingsCredentialPatterns, agentSecretFields, oauthOwnedFields,
   getPath, deletePath, setPathCopy, isSet, isDeletableCredential,
-} from '../agent-core/credentials.js';
+} from '../agent-core/credentials.ts';
 
 // ── the list itself ──────────────────────────────────────────────────────────
 

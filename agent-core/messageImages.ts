@@ -12,8 +12,8 @@
 // same `content` array. One function covers both clients.
 //
 // Plain `.js` so `node --test` loads it directly and both TypeScript builds
-// import it without ceremony — same arrangement as `mediaTags.js` and
-// `credentials.js` beside it.
+// import it without ceremony — same arrangement as `mediaTags.ts` and
+// `credentials.ts` beside it.
 
 /**
  * The image parts of a pi message, in the shape a `ChatRow` carries.
@@ -27,7 +27,7 @@
  */
 export function imagesOf(content) {
   if (!Array.isArray(content)) return undefined;
-  const imgs = [];
+  const imgs: Array<{ mimeType: string; data: string }> = [];
   for (const c of content) {
     if (!c || c.type !== 'image') continue;
     if (typeof c.data !== 'string' || !c.data) continue;

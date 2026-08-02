@@ -1,7 +1,7 @@
 // Daily-note naming — the one definition of what a daily note is called.
 //
 // Plain `.js` so `node --test` loads it directly and both TypeScript builds
-// import it without ceremony, same as `credentials.js` and `linkParser.js`. It
+// import it without ceremony, same as `credentials.ts` and `linkParser.ts`. It
 // lives in `agent-core` because that is the only code bundled into BOTH builds,
 // and both sides need it: the renderer opens today's note from the calendar
 // button, the agent's `daily_note` tool resolves the same file. Two copies of
@@ -148,7 +148,7 @@ export function resolveDailyNotePath(workspacePath, folder, formatted) {
   const name = segments.pop() || formatted;
   const subdirs = segments.join('/');
 
-  const relParts = [];
+  const relParts: string[] = [];
   if (cleanFolder) relParts.push(cleanFolder);
   if (subdirs) relParts.push(subdirs);
   const relDir = relParts.join('/');

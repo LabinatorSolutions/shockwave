@@ -1,4 +1,4 @@
-// Inbound Telegram attachments (api/src/telegram/attachmentPolicy.js) — what a
+// Inbound Telegram attachments (api/src/telegram/attachmentPolicy.ts) — what a
 // file the user sent IS, and what the agent gets told about it.
 //
 // Why this is tested: a Telegram photo arrives with no filename and no mime type,
@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 import {
   describeAttachment, looksLikeImage, sniffImageMime, safeName, classify,
   composeMessage, imageNote, documentNote, MAX_INBOUND_BYTES,
-} from '../api/src/telegram/attachmentPolicy.js';
+} from '../api/src/telegram/attachmentPolicy.ts';
 
 const png = (n = 20) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(n)]);
 const jpg = () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(20)]);

@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRenameCorrelator } from '../src/main/renameCorrelator.js';
+import { createRenameCorrelator } from '../src/main/renameCorrelator.ts';
 
 function setup(opts = {}) {
   const emitted = [];

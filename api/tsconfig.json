@@ -1,0 +1,38 @@
+{
+  // The companion's type gate. esbuild (`npm run build`) bundles this tree
+  // WITHOUT checking it, exactly like electron-vite does on the desktop side —
+  // so without this file nothing ever type-checked `api/`, and a wrong
+  // annotation shipped happily. `npm run typecheck` here is the real check.
+  //
+  // The root tsconfig deliberately does not cover this: its `include` is
+  // `src/**`, nothing under `src/` imports `api/`, and so tsc never reached a
+  // single file here. `agent-core` IS pulled in below, because this tree
+  // compiles it into the server bundle and it must be checked against the
+  // companion's own dependency versions, not only the desktop's.
+  //
+  // Same permissive posture as the root: strict on for the real bug-catching,
+  // `noImplicitAny` off so the existing `any` params don't all need annotating
+  // at once.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    // See the root tsconfig's note: a module the test suite loads spells its own
+    // imports `.ts`, because `node --test` resolves specifiers literally.
+    // `keys.ts` follows the same spelling for uniformity within that set.
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts", "../agent-core/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

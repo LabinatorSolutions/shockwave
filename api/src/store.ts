@@ -9,7 +9,7 @@ import {
   isSettingsSecretKey, SETTINGS_SECRET_OWNER, AGENT_SECRET_FIELDS, isOAuthOwnedField,
   flattenInto, setPath, typeOf, encodeValue, decodeValue,
   isPlainObject, splitAgentSecret, joinAgentSecret,
-} from './keys.js';
+} from './keys.ts';
 import {
   workspace, setting, agentSecret, secretValue, chatTable, message, cronState, telegramAccount,
   attachment,

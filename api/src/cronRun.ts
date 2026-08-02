@@ -5,7 +5,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { DB } from './db.js';
+import type { PgPool } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
@@ -15,7 +15,7 @@ import { chatFilesDir } from './dataDirs.js';
 import { sendTelegramFile } from './telegram/sendTool.js';
 import {
   extractMedia, extractLocalFiles, filterDeliveryPaths, deliveryKind,
-} from '../../agent-core/mediaTags.js';
+} from '../../agent-core/mediaTags.ts';
 import { logger, errStr } from './log.js';
 
 const log = logger('cron');
@@ -39,7 +39,7 @@ async function dropJob(dir: string, jobName: string): Promise<void> {
 }
 
 export async function runCronJob(
-  pool: DB, key: Buffer, runtime: any,
+  pool: PgPool, key: Buffer, runtime: any,
   workspaceId: string, jobName: string, chatId: string,
 ): Promise<CronRunResult> {
   const db = getDb(pool);
@@ -164,7 +164,7 @@ export async function runCronJob(
  * cleaned — so a path written as `MEDIA:/x.pdf` is not also found as a bare
  * `/x.pdf` and delivered twice.
  */
-async function deliverCronFiles(pool: DB, key: Buffer, turnText: string, roots: string[]): Promise<void> {
+async function deliverCronFiles(pool: PgPool, key: Buffer, turnText: string, roots: string[]): Promise<void> {
   if (!turnText.trim()) return;
   const tagged = extractMedia(turnText);
   const bare = await extractLocalFiles(tagged.cleaned);

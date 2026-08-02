@@ -4,7 +4,7 @@ import {
   DEFAULT_DAILY_NOTE_FORMAT,
   DAILY_NOTE_FORMAT_HELP_URL,
   formatDailyNote,
-} from '../dailyNote.js';
+} from '../dailyNote.ts';
 import FolderCombobox from './FolderCombobox.jsx';
 import { SettingsSection } from './SectionUI';
 import { useCommitField } from './useCommitField';

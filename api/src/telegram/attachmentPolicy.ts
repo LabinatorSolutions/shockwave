@@ -1,6 +1,6 @@
 // What an inbound attachment IS, and what we tell the agent about it. Pure —
 // no filesystem, no db, no Telegram — so it can be unit-tested directly, same
-// arrangement as `gitRemote.js` beside `git.ts` and `keys.js` beside `store.ts`.
+// arrangement as `gitRemote.ts` beside `git.ts` and `keys.ts` beside `store.ts`.
 // `attachments.ts` adds the two lines that touch disk.
 //
 // The note wording is the load-bearing part and is copied from hermes-agent
@@ -113,7 +113,10 @@ export function classify(ext, mime, defaultKind) {
  * bot, not what they chose to send, and silently dropping an upload because of
  * its extension is worse than handing the agent something it must inspect.
  */
-export function describeAttachment(data, { filename = '', mimeType = '', defaultKind, unique = '' } = {}) {
+export function describeAttachment(
+  data,
+  { filename = '', mimeType = '', defaultKind = undefined as string | undefined, unique = '' } = {},
+) {
   const ext = path.extname(filename).toLowerCase();
   const kind = classify(ext, mimeType, defaultKind);
   if (kind === 'image' && !looksLikeImage(data)) return null;
@@ -134,7 +137,8 @@ export function describeAttachment(data, { filename = '', mimeType = '', default
     || IMAGE_EXT_MIME[fallbackExt] || VIDEO_EXT_MIME[fallbackExt]
     || (kind === 'audio' ? `audio/${fallbackExt.slice(1)}` : 'application/octet-stream');
 
-  const out = { kind, mimeType: resolvedMime, fileName, displayName };
+  const out: { kind: string; mimeType: any; fileName: string; displayName: string; inlineText?: string } =
+    { kind, mimeType: resolvedMime, fileName, displayName };
 
   if ((TEXT_INLINE_EXTS.has(ext) || resolvedMime.startsWith('text/')) && data.length <= MAX_TEXT_INLINE_BYTES) {
     try { out.inlineText = new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { /* not text after all */ }
@@ -188,8 +192,8 @@ export function imageNote(a, visible) {
 
 /** Notes, then any inlined file contents, then what the user actually typed. */
 export function composeMessage(attachments, userText, visionAvailable) {
-  const notes = [];
-  const inlined = [];
+  const notes: string[] = [];
+  const inlined: string[] = [];
 
   for (const a of attachments || []) {
     if (a.kind === 'image') notes.push(imageNote(a, visionAvailable));

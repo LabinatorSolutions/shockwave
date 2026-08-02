@@ -16,7 +16,7 @@ export function useSetupStatus({ sync, codingAgent }: { sync?: any; codingAgent?
   const [probe, setProbe] = useState<any>({
     companionUrl: '',
     companionHasKey: false,
-    // Unknown reads as installed — see the comment in setupStatus.js. A badge
+    // Unknown reads as installed — see the comment in setupStatus.ts. A badge
     // that appears for the first 200ms of every launch is noise, not a signal.
     gitInstalled: true,
   });

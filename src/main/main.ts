@@ -1052,7 +1052,7 @@ ipcMain.handle('api:upgradeCompanion', async () => {
 // server and show. Without that check this stored whatever string arrived, so the
 // link between the fingerprint on screen and the fingerprint saved was UI
 // convention — the same shape of unenforced policy as the certificate check that
-// used to "trust anyway". See mayApprove in certPolicy.js.
+// used to "trust anyway". See mayApprove in certPolicy.ts.
 ipcMain.handle('api:approveCert', (_evt, { fingerprint }) => {
   if (typeof fingerprint !== 'string' || !fingerprint) return { ok: false, error: 'No fingerprint provided.' };
   if (!approveFingerprint(fingerprint)) {
@@ -2309,7 +2309,7 @@ function isIgnoredWatchPath(p) {
 }
 
 // @parcel/watcher hands the callback a batch of events. The mapping from that
-// batch to correlator/pending-state updates lives in `watcherDispatch.js` so
+// batch to correlator/pending-state updates lives in `watcherDispatch.ts` so
 // main and the correlator tests exercise identical logic.
 async function onParcelEvents(err, events) {
   if (err) {

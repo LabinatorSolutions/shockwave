@@ -10,7 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { imagesOf } from '../agent-core/messageImages.js';
+import { imagesOf } from '../agent-core/messageImages.ts';
 
 const img = (over = {}) => ({ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png', ...over });
 const txt = (text = 'hi') => ({ type: 'text', text });

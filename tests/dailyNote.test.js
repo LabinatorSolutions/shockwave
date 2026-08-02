@@ -1,5 +1,5 @@
 // Daily-note naming — the rules the app's calendar button and the agent's
-// `daily_note` tool both resolve through (agent-core/dailyNote.js).
+// `daily_note` tool both resolve through (agent-core/dailyNote.ts).
 //
 // Worth pinning because the failure is silent: a naming change that makes the
 // two sides disagree doesn't throw, it quietly produces a second note beside the
@@ -19,7 +19,7 @@ import {
   resolveDailyNotePath,
   basenameIdentifiesDate,
   shallowest,
-} from '../agent-core/dailyNote.js';
+} from '../agent-core/dailyNote.ts';
 
 const WS = '/ws';
 

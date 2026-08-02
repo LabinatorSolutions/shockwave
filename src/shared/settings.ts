@@ -106,7 +106,7 @@ export interface CodingAgentSettings {
 // OAuth connection state carried by an `oauth`-kind AgentSecret. The three
 // secret-bearing fields (clientSecret, accessToken, refreshToken) are encrypted
 // at rest like `token` — they live in `secret_value`, keyed by this entry's
-// name; see AGENT_SECRET_FIELDS in the companion's api/src/keys.js. The lifecycle
+// name; see AGENT_SECRET_FIELDS in the companion's api/src/keys.ts. The lifecycle
 // fields (accessToken/refreshToken/expiresAt/status/accountEmail) are written
 // ONLY by oauth.ts via patchAgentSecretOAuth; a bulk settings save cannot author
 // them (OAUTH_OWNED_FIELDS / OAUTH_OWNED_COLUMNS), which is what stops a stale

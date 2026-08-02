@@ -8,6 +8,7 @@
     "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/server.js",
     "start": "node dist/server.js",
     "dev": "npm run build && node dist/server.js",
+    "typecheck": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate"
   },

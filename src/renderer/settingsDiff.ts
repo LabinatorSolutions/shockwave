@@ -1,13 +1,13 @@
 // WHICH fields are credentials is declared once, in agent-core — see
-// agent-core/credentials.js. Duplicating it here is how a mismatch leaks a key to
+// agent-core/credentials.ts. Duplicating it here is how a mismatch leaks a key to
 // the screen or deletes one on save.
 import {
   SETTINGS_CREDENTIALS, AGENT_SECRET_CREDENTIALS,
   getPath, deletePath, setPathCopy, isSet,
-} from '../../agent-core/credentials.js';
+} from '../../agent-core/credentials.ts';
 
 // PURE patch-diffing for settings saves. Plain `.js` (no React, no window) so
-// `node --test` can exercise it directly — same split as linkResolver.js.
+// `node --test` can exercise it directly — same split as linkResolver.ts.
 //
 // Settings are stored one row per leaf key. Per-field setters necessarily build
 // whole sub-objects (`{...current.sync, pullIntervalSeconds}`), which means they

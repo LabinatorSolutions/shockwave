@@ -1,4 +1,4 @@
-// Patch-diffing for settings saves (src/renderer/settingsDiff.js).
+// Patch-diffing for settings saves (src/renderer/settingsDiff.ts).
 //
 // The stakes: settings are stored one row per leaf key, but per-field setters
 // build whole sub-objects, so they read every sibling — credentials included —
@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPatch, changedLeaves } from '../src/renderer/settingsDiff.js';
+import { buildPatch, changedLeaves } from '../src/renderer/settingsDiff.ts';
 
 test('a changed leaf is sent alone, siblings are not', () => {
   const prev = { sync: { pat: 'ghp_secret', pullIntervalSeconds: 10, disabledWorkspaceIds: [] } };

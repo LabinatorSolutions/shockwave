@@ -40,7 +40,7 @@ export function cloneUrlFor(owner, repo) {
 // `git`. That matters there because the child holds GITHUB_PAT; here no credential
 // is ever in the environment, so a substituted binary would learn nothing. Keeping
 // it dependency-free is what lets `node --test` load this module directly.
-function git(cwd, args) {
+function git(cwd, args): Promise<{ ok: boolean; stdout: string }> {
   return new Promise((resolve) => {
     let stdout = '';
     // No try/catch around spawn: it doesn't throw synchronously for a missing
@@ -72,7 +72,7 @@ export async function classifyFolder(workspacePath, runGit = git) {
   try {
     entries = await fs.readdir(workspacePath);
   } catch (err) {
-    return { state: 'occupied', error: `Can't read that folder: ${err.message}` };
+    return { state: 'occupied', error: `Can't read that folder: ${(err as Error).message}` };
   }
   const real = entries.filter((e) => e !== '.DS_Store' && !e.startsWith('.'));
   const hasGit = entries.includes('.git');

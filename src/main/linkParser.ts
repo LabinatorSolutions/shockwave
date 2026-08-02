@@ -1,8 +1,21 @@
-// ESM mirror of src/renderer/linkIndex.js's parser pieces.
+// ESM mirror of src/renderer/linkIndex.ts's parser pieces.
 // Keep LINK_RE / parseTarget / normalizeTarget / parseLinks in sync if either
 // file changes (tests/parserParity.test.js enforces byte-identical output).
 
 const LINK_RE = /\[\[([^\]\n]+?)\]\]/g;
+
+// Declared identically in src/renderer/linkIndex.ts — the parity rule above
+// covers the types too, since they describe the output being compared.
+/** A wiki-link target split into path segments + basename, both lowercased. */
+export type ParsedTarget = { segments: string[]; basename: string };
+/** One `[[…]]` occurrence, as `parseLinks` emits it. */
+export type ParsedLink = {
+  target: string;
+  targetParsed: ParsedTarget;
+  lineNumber: number;
+  lineText: string;
+  contextLines: string[] | null;
+};
 
 // Parse a raw [[…]] body into path segments + basename. Drops a |alias and a
 // #heading, strips a trailing .md, lowercases. "folder/Foo" → {segments:
@@ -39,8 +52,8 @@ const CONTEXT_BULLET_RE = /^[ \t]*([-*+]|\d+[.)])(\s|$)/;
 
 function collectContext(lines, startIdx, max = 20) {
   const baseIndent = leadingWidth(lines[startIdx]);
-  const ctx = [];
-  const pendingBlanks = [];
+  const ctx: string[] = [];
+  const pendingBlanks: string[] = [];
   for (let j = startIdx + 1; j < lines.length && ctx.length < max; j++) {
     const line = lines[j];
     if (line.trim() === '') {
@@ -70,7 +83,7 @@ function collectContext(lines, startIdx, max = 20) {
 }
 
 function parseLinks(content) {
-  const out = [];
+  const out: ParsedLink[] = [];
   if (!content) return out;
   const lines = content.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -78,7 +91,7 @@ function parseLinks(content) {
     LINK_RE.lastIndex = 0;
     let m;
     let foundOnThisLine = false;
-    let contextForThisLine = null;
+    let contextForThisLine: string[] | null = null;
     while ((m = LINK_RE.exec(line)) !== null) {
       const parsed = parseTarget(m[1]);
       if (!parsed.basename) continue;

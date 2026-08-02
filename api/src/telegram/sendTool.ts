@@ -6,12 +6,12 @@
 
 import { TelegramClient, splitMessage, type SendKind } from './client.js';
 import * as store from '../store.js';
-import type { DB } from '../db.js';
+import type { PgPool } from '../db.js';
 import { getDb } from '../db.js';
 
 export type SendResult = { ok: true } | { ok: false; error: string };
 
-export async function sendTelegramMessage(pool: DB, key: Buffer, text: string): Promise<SendResult> {
+export async function sendTelegramMessage(pool: PgPool, key: Buffer, text: string): Promise<SendResult> {
   try {
     const db = getDb(pool);
     const acc = await store.getTelegramAccount(db);
@@ -37,7 +37,7 @@ export async function sendTelegramMessage(pool: DB, key: Buffer, text: string): 
  * knows how to reach Telegram.
  */
 export async function sendTelegramFile(
-  pool: DB, key: Buffer, filePath: string, kind: SendKind, caption?: string,
+  pool: PgPool, key: Buffer, filePath: string, kind: SendKind, caption?: string,
 ): Promise<SendResult> {
   try {
     const db = getDb(pool);

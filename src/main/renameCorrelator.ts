@@ -89,7 +89,7 @@ export function createRenameCorrelator({ emit, graceMs = 800, now = Date.now }) 
     // synthesize the unlinks (which then pair by inode against the new dir's
     // adds and surface as per-file renames).
     knownUnder(prefix) {
-      const out = [];
+      const out: string[] = [];
       for (const p of identityByPath.keys()) {
         if (p.startsWith(prefix)) out.push(p);
       }
@@ -104,7 +104,9 @@ export function createRenameCorrelator({ emit, graceMs = 800, now = Date.now }) 
         emit({ type: 'unlink', path });
         return;
       }
-      const entry = {
+      // `timer` is assigned on the next line; annotating keeps it from inferring
+      // `null` and rejecting the handle.
+      const entry: { oldPath: string; ino: any; hash: any; expiresAt: number; timer: NodeJS.Timeout | null } = {
         oldPath: path,
         ino: id.ino,
         hash: id.hash,

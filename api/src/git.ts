@@ -4,7 +4,7 @@
 //
 // The PAT is NEVER in the remote URL — it goes to one child process at a time via
 // GIT_ASKPASS, and the URL in .git/config stays plain. See the note above
-// remoteUrl below, and gitRemote.js.
+// remoteUrl below, and gitRemote.ts.
 //
 // Conflict recovery via a bounded git-fixer AGENT is a separate step: this module
 // is the deterministic happy path + one mechanical merge retry, and reports
@@ -33,7 +33,7 @@ export { WORK_BASE };
 // desktop already uses (src/main/sync.ts) — so the PAT lives in one child
 // process's environment and never touches disk.
 //
-// The builder is pure and unit-tested (gitRemote.js), so the "no credentials in
+// The builder is pure and unit-tested (gitRemote.ts), so the "no credentials in
 // the URL" property is pinned by a test rather than by this comment.
 
 // ── Carrying the PAT safely into a working copy the agent controls ──────────

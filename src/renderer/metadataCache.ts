@@ -15,8 +15,8 @@
 // incrementally as files are added/removed/renamed and hidden behind
 // getFirstLinkpathDest — exactly like Obsidian, where plugins never see it.
 
-import { parseLinks } from './linkIndex.js';
-import { resolveLinkTarget, shortestUniqueLinkFor as shortestUnique } from './linkResolver.js';
+import { parseLinks } from './linkIndex.ts';
+import { resolveLinkTarget, shortestUniqueLinkFor as shortestUnique } from './linkResolver.ts';
 
 function baseKey(path) {
   const name = path.slice(path.lastIndexOf('/') + 1);

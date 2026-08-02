@@ -1,8 +1,8 @@
 // Unit tests for the pure link resolver (resolveLinkTarget + shortestUniqueLinkFor).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLinkTarget, shortestUniqueLinkFor } from '../src/renderer/linkResolver.js';
-import { parseTarget } from '../src/renderer/linkIndex.js';
+import { resolveLinkTarget, shortestUniqueLinkFor } from '../src/renderer/linkResolver.ts';
+import { parseTarget } from '../src/renderer/linkIndex.ts';
 
 const WS = '/ws';
 const abs = (rel) => `${WS}/${rel}`;

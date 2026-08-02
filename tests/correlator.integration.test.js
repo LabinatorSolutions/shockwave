@@ -13,8 +13,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { createRenameCorrelator } from '../src/main/renameCorrelator.js';
-import { createWatcherDispatch } from '../src/main/watcherDispatch.js';
+import { createRenameCorrelator } from '../src/main/renameCorrelator.ts';
+import { createWatcherDispatch } from '../src/main/watcherDispatch.ts';
 
 // Injected dispatch deps. main.ts supplies pathResolver.ts's versions; these are
 // equivalent (pathResolver is .ts and can't be imported under the node runner).

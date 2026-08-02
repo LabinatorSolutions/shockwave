@@ -1,7 +1,7 @@
 // Speech to text, and the `transcribe` tool built on it.
 //
 // One seam, two halves. A PROVIDER turns audio into timestamped segments; that is
-// the whole contract, and `transcriptFormat.js` turns segments into SRT/VTT/text.
+// the whole contract, and `transcriptFormat.ts` turns segments into SRT/VTT/text.
 // Swapping AssemblyAI for something else means writing one function that returns
 // segments — no other file changes, and the output format can't drift because the
 // provider never produces it.

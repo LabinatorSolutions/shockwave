@@ -48,7 +48,7 @@ import path from 'node:path';
 import { Cron } from 'croner';
 import { POOL_SETUP_BASE as SETUP, POOL_READY_BASE as READY } from './dataDirs.js';
 import { cloneFresh, refreshPristine } from './git.js';
-import type { DB } from './db.js';
+import type { PgPool } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
 import { logger, errStr } from './log.js';
@@ -91,7 +91,7 @@ const rm = (p: string) => fs.rm(p, { recursive: true, force: true }).catch(() =>
 /** Which repo the queue should hold folders for: whatever Telegram is pointed
  *  at. Null when Telegram isn't set up, no workspace exists, or there's no PAT
  *  to clone with — in every case the answer is "hold nothing". */
-async function resolveTarget(pool: DB, key: Buffer): Promise<PoolTarget | null> {
+async function resolveTarget(pool: PgPool, key: Buffer): Promise<PoolTarget | null> {
   const db = getDb(pool);
   const acc = await store.getTelegramAccount(db);
   if (!acc?.enabled) return null;
@@ -104,7 +104,7 @@ async function resolveTarget(pool: DB, key: Buffer): Promise<PoolTarget | null> 
 }
 
 /** How many spares to hold. Unset ⇒ DEFAULT_SIZE, read at the point of use. */
-async function poolSize(pool: DB, key: Buffer): Promise<number> {
+async function poolSize(pool: PgPool, key: Buffer): Promise<number> {
   try {
     const raw = Number((await store.readSettings(getDb(pool), key))?.codingAgent?.checkoutPoolSize);
     return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_SIZE;
@@ -117,7 +117,7 @@ async function poolSize(pool: DB, key: Buffer): Promise<number> {
  * Reconcile the queue to what it should be. Everything that isn't claiming
  * happens here, and nothing outside calls it.
  */
-export async function tick(pool: DB, key: Buffer): Promise<void> {
+export async function tick(pool: PgPool, key: Buffer): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
@@ -187,7 +187,7 @@ export async function tick(pool: DB, key: Buffer): Promise<void> {
   }
 }
 
-export function initCheckoutPool(pool: DB, key: Buffer): void {
+export function initCheckoutPool(pool: PgPool, key: Buffer): void {
   // Anything in setup/ predates this process, so by definition its clone died.
   void rm(SETUP);
   const run = () => { void tick(pool, key); };

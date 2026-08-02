@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import type { MutableRefObject } from 'react';
 import {
   basenameIdentifiesDate, formatDailyNote, resolveDailyNotePath, shallowest,
-} from '../dailyNote.js';
+} from '../dailyNote.ts';
 
 interface DailyNoteConfig {
   format: string;
@@ -16,7 +16,7 @@ interface UseDailyNoteOpts {
   workspacePath: string | null;
   // Today's calendar date (YYYY-MM-DD) in the user's configured timezone.
   // Handed in rather than read here so ONE place in the app decides what day it
-  // is — see `todayISO` in agent-core/dailyNote.js.
+  // is — see `todayISO` in agent-core/dailyNote.ts.
   today: string;
   // Read via ref so openJournal always sees the latest format/folder without
   // being rebuilt when the setting changes.

@@ -24,7 +24,7 @@ function relNoExtLower(absPath, workspacePath) {
 }
 
 function pickShortest(paths) {
-  let best = null;
+  let best: string | null = null;
   for (const p of paths) {
     if (best === null) { best = p; continue; }
     const dp = p.split('/').length, db = best.split('/').length;

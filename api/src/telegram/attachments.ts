@@ -1,6 +1,6 @@
 // Saving a file the user sent. Everything about WHAT the file is — its type, its
 // name on disk, whether it can be inlined, and the note the agent reads — lives
-// in the pure `attachmentPolicy.js` beside this. All that is left here is the
+// in the pure `attachmentPolicy.ts` beside this. All that is left here is the
 // write itself, and the containment check that goes with it.
 
 import fs from 'node:fs/promises';

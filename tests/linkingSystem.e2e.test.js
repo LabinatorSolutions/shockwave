@@ -20,11 +20,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { createRenameCorrelator } from '../src/main/renameCorrelator.js';
-import { createWatcherDispatch } from '../src/main/watcherDispatch.js';
-import { parseLinks } from '../src/main/linkParser.js';
-import { createMetadataCache } from '../src/renderer/metadataCache.js';
-import { rewriteReferences, captureRewriteContext } from '../src/renderer/renameOps.js';
+import { createRenameCorrelator } from '../src/main/renameCorrelator.ts';
+import { createWatcherDispatch } from '../src/main/watcherDispatch.ts';
+import { parseLinks } from '../src/main/linkParser.ts';
+import { createMetadataCache } from '../src/renderer/metadataCache.ts';
+import { rewriteReferences, captureRewriteContext } from '../src/renderer/renameOps.ts';
 
 const baseOf = (p) => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/i, '').toLowerCase();
 

@@ -1,4 +1,4 @@
-// Transcript formatting (agent-core/transcriptFormat.js) — timestamped speech
+// Transcript formatting (agent-core/transcriptFormat.ts) — timestamped speech
 // turned into a file you can read.
 //
 // Why this is tested: the format is the whole deliverable. A subtitle file with
@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { toSrt, toVtt, toText, formatTranscript, extensionFor } from '../agent-core/transcriptFormat.js';
+import { toSrt, toVtt, toText, formatTranscript, extensionFor } from '../agent-core/transcriptFormat.ts';
 
 const segments = [
   { startMs: 0, endMs: 2500, text: 'Morning.', speaker: 'Speaker A' },

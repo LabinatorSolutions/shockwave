@@ -9,14 +9,14 @@
 // value routed there cannot be stored in the clear; the lists below decide only
 // WHERE a value goes, not whether it happens to get encrypted.
 
-// WHICH fields are credentials is declared ONCE, in agent-core/credentials.js —
+// WHICH fields are credentials is declared ONCE, in agent-core/credentials.ts —
 // the only code bundled into both this build and the desktop's. It used to be
 // written out here, again in main's strip-before-the-renderer, and again in the
 // renderer's don't-send-it-back guard: three copies of one fact, where a mismatch
 // leaks a key to the screen or deletes it on save.
 import {
   settingsCredentialPatterns, agentSecretFields, oauthOwnedFields,
-} from '../../agent-core/credentials.js';
+} from '../../agent-core/credentials.ts';
 
 // Standalone credentials, owned by 'settings' in secret_value. The settings key
 // IS the field. Anything matching these is stripped out of the settings tree on
@@ -109,7 +109,7 @@ export function splitAgentSecret(entry) {
   // impossible to stop sending credentials to the screen.
   //
   // Absent = leave it alone. Present-and-empty = delete. Two different things.
-  const secrets = {};
+  const secrets: Record<string, string> = {};
   if ('token' in entry) secrets.token = entry.token ?? '';
   if (o) {
     if ('clientSecret' in o) secrets['oauth.clientSecret'] = o.clientSecret ?? '';
@@ -124,7 +124,7 @@ export function splitAgentSecret(entry) {
 // `oauth` is present only when the row carries OAuth config, matching the old
 // behavior where non-OAuth entries had no `oauth` key at all.
 export function joinAgentSecret(row, secrets) {
-  const out = {
+  const out: Record<string, any> = {
     name: row.name,
     description: row.description ?? '',
     token: secrets.token ?? '',

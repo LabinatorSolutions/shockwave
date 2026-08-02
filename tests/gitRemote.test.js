@@ -1,4 +1,4 @@
-// The companion's git remote URL (api/src/gitRemote.js).
+// The companion's git remote URL (api/src/gitRemote.ts).
 //
 // Why this is tested: the GitHub PAT used to be embedded in this URL. `git clone`
 // and `git remote set-url` both persist whatever they're given into
@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { remoteUrl, hasEmbeddedCredentials } from '../api/src/gitRemote.js';
+import { remoteUrl, hasEmbeddedCredentials } from '../api/src/gitRemote.ts';
 
 test('the remote URL carries no credentials', () => {
   const url = remoteUrl('acme', 'notes');

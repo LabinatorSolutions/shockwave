@@ -1,8 +1,8 @@
 // `daily_note` — resolve (and optionally create) the user's daily note.
 //
 // The filesystem half of the daily-note feature. The naming rules live in the
-// pure, renderer-safe `dailyNote.js`; this file is the I/O around them, the same
-// split as `transcriptFormat.js` beside `transcribe.ts`.
+// pure, renderer-safe `dailyNote.ts`; this file is the I/O around them, the same
+// split as `transcriptFormat.ts` beside `transcribe.ts`.
 //
 // WHY A TOOL AND NOT A PROMPT INSTRUCTION. The note's name comes from a format
 // string the user chose (`YYYY.MM.DD`, `YYYY/MM/YYYY-MM-DD`, …) stored per
@@ -27,7 +27,7 @@ import {
   resolveDailyNotePath,
   shallowest,
   todayISO,
-} from './dailyNote.js';
+} from './dailyNote.ts';
 
 export interface DailyNoteConfig {
   format: string;

@@ -1,5 +1,5 @@
 // PURE git-remote URL policy. No child_process, no fs — plain `.js` so
-// `node --test` can exercise it directly, the same split as `keys.js` (pure) vs
+// `node --test` can exercise it directly, the same split as `keys.ts` (pure) vs
 // `store.ts` (stateful).
 //
 // This exists because of one specific bug: the PAT used to be embedded in the

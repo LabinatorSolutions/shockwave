@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type express from 'express';
-import type { DB } from '../db.js';
+import type { PgPool, Db } from '../db.js';
 import { getDb } from '../db.js';
 import * as store from '../store.js';
 import * as feed from '../feed.js';
@@ -53,7 +53,7 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 
 // ── Setup (called by the desktop Settings tab via companion endpoints) ────────
 
-export async function connect(pool: DB, key: Buffer, opts: { botToken: string; authorizedTgUserId: number; publicUrl: string; certificatePem?: string }) {
+export async function connect(pool: PgPool, key: Buffer, opts: { botToken: string; authorizedTgUserId: number; publicUrl: string; certificatePem?: string }) {
   const client = new TelegramClient(opts.botToken);
   const me = await client.getMe(); // validates the token
   const secret = crypto.randomBytes(32).toString('hex');
@@ -68,7 +68,7 @@ export async function connect(pool: DB, key: Buffer, opts: { botToken: string; a
   return { botUsername: me?.username ?? null, webhookUrl };
 }
 
-export async function disconnect(pool: DB, key: Buffer) {
+export async function disconnect(pool: PgPool, key: Buffer) {
   const db = getDb(pool);
   const token = await store.getTelegramSecret(db, key, 'botToken').catch(() => '');
   if (token) { try { await new TelegramClient(token).deleteWebhook(); } catch { /* best-effort */ } }
@@ -79,7 +79,7 @@ export async function disconnect(pool: DB, key: Buffer) {
 // connect: the list lives in code, so a bot connected before a command existed
 // would otherwise keep showing the old menu forever — which is exactly what
 // happened when /chats, /workspaces and /btw were added.
-export async function syncCommands(pool: DB, key: Buffer, log?: any) {
+export async function syncCommands(pool: PgPool, key: Buffer, log?: any) {
   const db = getDb(pool);
   const acc = await store.getTelegramAccount(db);
   if (!acc?.enabled) return;
@@ -93,7 +93,7 @@ export async function syncCommands(pool: DB, key: Buffer, log?: any) {
   }
 }
 
-export async function status(pool: DB) {
+export async function status(pool: PgPool) {
   const db = getDb(pool);
   const acc = await store.getTelegramAccount(db);
   // Report the STORED selection — null when nothing is chosen — so the settings
@@ -108,7 +108,7 @@ export async function status(pool: DB) {
 
 // ── Webhook ───────────────────────────────────────────────────────────────────
 
-export async function handleWebhook(pool: DB, key: Buffer, runtime: any, req: express.Request, res: express.Response, log: any) {
+export async function handleWebhook(pool: PgPool, key: Buffer, runtime: any, req: express.Request, res: express.Response, log: any) {
   const db = getDb(pool);
   const acc = await store.getTelegramAccount(db);
   if (!acc || !acc.enabled) { res.sendStatus(200); return; }
@@ -143,7 +143,7 @@ export async function handleWebhook(pool: DB, key: Buffer, runtime: any, req: ex
   runTurnLogged(pool, key, runtime, acc, [msg], log);
 }
 
-function runTurnLogged(pool: DB, key: Buffer, runtime: any, acc: any, msgs: any[], log: any) {
+function runTurnLogged(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: any[], log: any) {
   runTurn(pool, key, runtime, acc, msgs).catch((e: any) => log?.error({ err: e?.message }, 'telegram turn failed'));
 }
 
@@ -154,7 +154,9 @@ const ALBUM_WAIT_MS = 800;
 const albums = new Map<string, { msgs: any[]; timer: NodeJS.Timeout }>();
 
 function queueAlbum(groupId: string, msg: any, run: (msgs: any[]) => void) {
-  const entry = albums.get(groupId) ?? { msgs: [], timer: null as any };
+  // `msgs: []` on its own infers `never[]` and nothing may be pushed into it —
+  // the annotation is what makes the fresh entry match the map's value type.
+  const entry: { msgs: any[]; timer: NodeJS.Timeout } = albums.get(groupId) ?? { msgs: [], timer: null as any };
   entry.msgs.push(msg);
   clearTimeout(entry.timer);
   entry.timer = setTimeout(() => {
@@ -169,7 +171,7 @@ function queueAlbum(groupId: string, msg: any, run: (msgs: any[]) => void) {
 // place that reports — it loads its own bot token, so even a failure while
 // loading the token for the turn itself still gets reported. We rethrow so the
 // caller logs it server-side too.
-async function runTurn(pool: DB, key: Buffer, runtime: any, acc: any, msgs: any[]) {
+async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: any[]) {
   const db = getDb(pool);
   const dm = acc.dmChatId as number;
   const msg = msgs[0];
@@ -259,7 +261,7 @@ const TYPING_INTERVAL_MS = 4000;
  * would silently unscope the search tool for the turn that is still running.
  */
 async function relayToRunningTurn(
-  db: DB, runtime: any, client: TelegramClient, dm: number,
+  db: Db, runtime: any, client: TelegramClient, dm: number,
   chatId: string, input: ResolvedInput, msg: any,
 ) {
   const ws = await activeWorkspace(db);
@@ -335,7 +337,7 @@ export interface ResolvedInput {
  * transcribe both, so sending an mp3 made its entire transcript the prompt.
  */
 async function resolveInput(
-  db: DB, key: Buffer, client: TelegramClient, dm: number,
+  db: Db, key: Buffer, client: TelegramClient, dm: number,
   getChatId: () => Promise<string>, msgs: any[],
 ): Promise<ResolvedInput | null> {
   // The same read runTurn used to decide whether this is a command — one
@@ -473,7 +475,7 @@ const isRefusal = (r: PreparedRun | PrepareRefusal): r is PrepareRefusal => 'ref
  * pre-boot is worth most in, since resuming downloads and parses the transcript.
  */
 async function prepareRun(
-  db: DB, key: Buffer, runtime: any, dm: number, getChatId: () => Promise<string>,
+  db: Db, key: Buffer, runtime: any, dm: number, getChatId: () => Promise<string>,
 ): Promise<PreparedRun | PrepareRefusal> {
   const ws = await activeWorkspace(db);
   if (!ws) return { refusal: '⚠️ No workspaces exist yet — add one in the desktop app first.' };
@@ -512,7 +514,7 @@ async function prepareRun(
 }
 
 async function runTurnInner(
-  db: DB, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number,
+  db: Db, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number,
   input: ResolvedInput, msg: any, prepared: PreparedRun,
 ) {
   const { text, images } = input;

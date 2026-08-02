@@ -4,8 +4,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from '../src/renderer/renameOps.js';
-import { createMetadataCache } from '../src/renderer/metadataCache.js';
+import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from '../src/renderer/renameOps.ts';
+import { createMetadataCache } from '../src/renderer/metadataCache.ts';
 
 const WS = '/ws';
 
