@@ -38,6 +38,10 @@ export const listChats = (workspaceId: string, opts: { limit?: number; before?: 
   return api.get(`/chats?${p}`);
 };
 export const listPinned = (workspaceId: string) => api.get(`/chats/pinned?workspaceId=${encodeURIComponent(workspaceId)}`);
+// Ids only, every workspace — what the scratch sweep may not delete. Throws like
+// any other call when the server is unreachable, and the sweep treats that as
+// "don't sweep this launch" rather than sweeping blind.
+export const pinnedChatIds = (): Promise<string[]> => api.get('/chats/pinned-ids');
 export const searchChats = (workspaceId: string, query: string, opts: { limit?: number } = {}) => {
   const p = new URLSearchParams({ workspaceId, q: query });
   if (opts.limit) p.set('limit', String(opts.limit));

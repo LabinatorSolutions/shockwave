@@ -128,6 +128,10 @@ app.get('/chats', handle((req) => store.listChats(db, String(req.query.workspace
   before: req.query.before ? Number(req.query.before) : undefined,
 })));
 app.get('/chats/pinned', handle((req) => store.listPinned(db, String(req.query.workspaceId))));
+// Ids only, all workspaces — the desktop's scratch sweep asking what it may not
+// delete. A sibling of `/chats/pinned` rather than a flag on it: that one is the
+// sidebar's, workspace-scoped and full rows, and a sweep has neither.
+app.get('/chats/pinned-ids', handle(() => store.pinnedChatIds(db)));
 app.get('/chats/search', handle((req) => store.searchChats(db, String(req.query.workspaceId), String(req.query.q ?? ''), { limit: req.query.limit ? Number(req.query.limit) : undefined })));
 app.get('/chat/:id', handle(async (req) => ({ chat: await store.getChat(db, req.params.id), messages: await store.getMessages(db, req.params.id) })));
 // `?after=<seq>` returns only what's newer — the one read that serves a cold

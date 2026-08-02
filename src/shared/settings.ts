@@ -93,7 +93,9 @@ export interface CodingAgentSettings {
   maxFixAttempts?: number;
   // How long per-chat working directories are kept — the agent's scratch pad and
   // the server's git checkouts — counted from last use. Read by the companion's
-  // hourly sweeper and the desktop's boot cleanup. Unset ⇒ 1.
+  // hourly sweeper and the desktop's boot cleanup, both of which run the shared
+  // rule in `agent-core/scratchSweep.ts`: a PINNED chat's dirs are never swept,
+  // whatever their age. Unset ⇒ `DEFAULT_SCRATCH_TTL_DAYS` (7).
   scratchTtlDays?: number;
   // How many workspace checkouts the companion keeps cloned in advance, so a new
   // chat doesn't begin with a download somebody waits through. Every companion

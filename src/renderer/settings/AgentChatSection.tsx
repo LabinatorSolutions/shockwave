@@ -421,13 +421,13 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
               className={NUMBER_FIELD}
               type="number"
               min={1}
-              placeholder="1"
+              placeholder="7"
               value={ttlField.value}
               onChange={(e) => ttlField.onChange(e.target.value)}
               onBlur={ttlField.onBlur}
             />
           </div>
-          <FieldDescription>How long files in the agent&apos;s scratch pad are kept.</FieldDescription>
+          <FieldDescription>How long files in the agent&apos;s scratch pad are kept. Pinned chats keep theirs indefinitely.</FieldDescription>
         </Field>
 
         <Field>

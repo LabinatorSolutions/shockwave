@@ -268,6 +268,20 @@ export async function listPinned(db: Db, workspaceId: string) {
     .orderBy(desc(chatTable.updatedAt));
 }
 
+// Every pinned chat's id, across all workspaces — what the TTL sweep needs, on
+// both sides of the wire (the companion's sweeper calls this directly, the
+// desktop reaches it through `GET /chats/pinned-ids`). Not `listPinned`, which
+// is one workspace's worth of full rows for the sidebar; a sweep walks
+// directories that carry no workspace, so it has to ask about all of them.
+//
+// Tombstoned chats are excluded on purpose: a deleted chat is not coming back,
+// so its working dirs should age out even if it was pinned when it died.
+export async function pinnedChatIds(db: Db): Promise<string[]> {
+  const rows = await db.select({ chatId: chatTable.chatId }).from(chatTable)
+    .where(and(eq(chatTable.pinned, true), eq(chatTable.deleted, false)));
+  return rows.map((r) => r.chatId);
+}
+
 // Title-only search (content search can come later via tsvector).
 export async function searchChats(db: Db, workspaceId: string, query: string, opts: { limit?: number } = {}) {
   const limit = Math.min(opts.limit ?? 30, 100);

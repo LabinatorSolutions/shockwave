@@ -15,6 +15,7 @@ import { app } from 'electron';
 import { createAgentRuntime, listThinkingLevels } from '../../agent-core/agent.js';
 import type { AgentHost, RunOpts, Emit } from '../../agent-core/agent.js';
 import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
+import { sweepScratchDirs } from '../../agent-core/scratchSweep.js';
 import { getChat, upsertChat, appendMessages, setChatTitle, setRunning, getTranscript, putTranscript,
   searchChatMessages, readChatWindow, recentChats } from './api/chats.js';
 import { api } from './api/client.js';
@@ -43,30 +44,23 @@ const SCRATCH_BASE = () => path.join(app.getPath('userData'), 'agent-scratch');
 const chatScratchDir = (chatId: string) => path.join(SCRATCH_BASE(), chatId);
 
 /**
- * Delete scratch directories nobody has touched for `ttlDays`.
+ * Delete scratch directories nobody has touched for `ttlDays`, except the ones
+ * belonging to pinned chats.
  *
  * Fire-and-forget at startup, never awaited on the boot path — reclaiming disk is
  * not worth delaying the window by even the time it takes to stat a directory.
- * mtime-based like the companion's sweeper, so an actively-used chat survives and
- * an abandoned one ages out. There is no exemption for pinned chats: pinning says
- * the conversation matters, not that its temp files do.
+ * The rule is the shared one (`agent-core/scratchSweep.ts`), so this and the
+ * companion's hourly sweeper delete by the same standard: pinning a chat keeps
+ * everything that chat owns, on every machine.
+ *
+ * `pinned` comes from the companion — it is the only place that flag exists — so
+ * the caller must skip this entirely when it can't be read. Sweeping with an
+ * empty set would mean an offline launch deletes exactly what pinning promised
+ * to keep.
  */
-export function sweepAgentScratch(ttlDays: number): void {
+export function sweepAgentScratch(ttlDays: unknown, pinned: ReadonlySet<string>): void {
   void (async () => {
-    const base = SCRATCH_BASE();
-    const cutoff = Date.now() - (ttlDays > 0 ? ttlDays : 1) * 24 * 60 * 60 * 1000;
-    let entries: string[];
-    try { entries = await fs.readdir(base); } catch { return; } // nothing written yet
-    let removed = 0;
-    for (const name of entries) {
-      const dir = path.join(base, name);
-      try {
-        if ((await fs.stat(dir)).mtimeMs < cutoff) {
-          await fs.rm(dir, { recursive: true, force: true });
-          removed++;
-        }
-      } catch { /* vanished mid-sweep */ }
-    }
+    const [removed] = await sweepScratchDirs([SCRATCH_BASE()], { ttlDays, keep: pinned });
     if (removed) console.log(`[agent] swept ${removed} stale scratch dir(s)`);
   })();
 }

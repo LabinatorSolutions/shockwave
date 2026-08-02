@@ -15,7 +15,7 @@ import { initDesktopAgent, agentSend, agentAbort, agentDisposeChat, agentDispose
 // Cron execution lives entirely on the companion now; the desktop only VIEWS the
 // schedule (from local cron.json + companion run-status) and triggers a manual run.
 import { cronRead, cronRunNow } from './api/cron.js';
-import { listChats, listPinned, searchChats, getMessages, openChat as openChatApi, deleteChat, setChatTitle, setChatPinned, postEvent } from './api/chats.js';
+import { listChats, listPinned, pinnedChatIds, searchChats, getMessages, openChat as openChatApi, deleteChat, setChatTitle, setChatPinned, postEvent } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
@@ -2445,13 +2445,18 @@ initDesktopAgent({
   getTranscription: async () => (await readSettingsSafe())?.settings?.transcription ?? {},
 });
 
-// Reclaim scratch dirs from chats nobody has touched lately. Fire-and-forget:
-// boot never waits on it, and a companion that can't be reached for the setting
-// just means the default — reclaiming disk is never worth blocking startup or
-// failing over.
-void readSettingsSafe()
-  .then(({ settings }) => sweepAgentScratch(Number(settings?.codingAgent?.scratchTtlDays) || 1))
-  .catch(() => sweepAgentScratch(1));
+// Reclaim scratch dirs from chats nobody has touched lately — except pinned
+// ones, which are kept whatever their age. Fire-and-forget: boot never waits on
+// it, and reclaiming disk is never worth blocking startup.
+//
+// Both reads come from the companion, and a failure means we skip this launch
+// rather than sweep on assumptions: `pinned` exists nowhere else, so an
+// unreachable server can't be read as "nothing is pinned". The sweep runs once
+// per launch, so skipping one costs a few directories a few hours.
+void (async () => {
+  const [pinned, { settings }] = await Promise.all([pinnedChatIds(), readSettingsSafe()]);
+  sweepAgentScratch(settings?.codingAgent?.scratchTtlDays, new Set(pinned));
+})().catch((e) => console.log('[agent] skipping scratch sweep:', e?.message ?? e));
 
 // Bridge for the open-file pi extension: validate the agent's path against the
 // active workspace, then ask the renderer to open it in a new tab. Confined to
