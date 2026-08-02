@@ -9,13 +9,22 @@
 // Which engine runs is `settings.transcription.provider`, a field that already
 // existed for the desktop microphone. There is no new setting and no new key.
 //
+// TWO SHAPES OF WORK, and they want different APIs. A RECORDING (`transcribeFile`,
+// the `transcribe` tool) can be an hour long with several people in it, so it goes
+// to the async job API for timestamps and speaker labels and waits. A VOICE NOTE
+// (`transcribeVoice`) is one person, seconds long, and its transcript is thrown
+// away the moment it becomes a prompt — so it goes to the SYNC API and comes back
+// in one request. See the voice-note section below for the measurements.
+//
 // No timeout here on purpose. Telegram and cron runs are already bounded by the
 // watchdog (`codingAgent.maxRunMinutes`), and a desktop chat has the user and the
 // Stop button. A second, shorter limit inside the tool would only be able to fail
 // a transcription that was still going to succeed.
 
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { AssemblyAI } from 'assemblyai';
 import { formatTranscript, extensionFor } from './transcriptFormat.js';
@@ -124,6 +133,138 @@ export async function transcribeFile(
     return await run(audioPath, config.apiKey);
   } finally {
     if (extracted) await fs.rm(extracted, { force: true }).catch(() => { /* best-effort */ });
+  }
+}
+
+// ── Voice notes ──────────────────────────────────────────────────────────────
+//
+// A voice note is not a recording to be archived — it is the user talking, and
+// every millisecond spent on it is the user watching a ✍ and waiting. The async
+// job API is the wrong tool: it uploads, queues, and is then POLLED, and the
+// SDK's polling interval is 3 seconds, so a clip whose transcript was ready in
+// under a second is still discovered on the next tick.
+//
+// Measured end to end on a six-second clip, three runs, same audio, identical
+// transcripts: the async path took 3.46–3.55s, the sync path 0.21–0.37s. The
+// saving is roughly constant rather than proportional, because what it removes
+// is the poll tick.
+
+/** The sync API's ceiling: 2 minutes of audio, 40 MB per request. */
+const SYNC_MAX_SECONDS = 120;
+
+/** 16 kHz mono is all a speech model wants, and it keeps the upload small. */
+const PCM_SAMPLE_RATE = 16_000;
+const PCM_CHANNELS = 1;
+
+/**
+ * Decode audio to the raw PCM the sync API takes — in memory, touching no disk.
+ *
+ * It has to be PCM. The sync API does NOT accept Telegram's OGG/Opus: the SDK
+ * labels every non-PCM part `audio/wav` and the server trusts that label rather
+ * than sniffing the bytes, so an Ogg page arrives and comes back "malformed WAV:
+ * file does not start with RIFF id". Raw PCM has no container header at all, so
+ * there is nothing left to mislabel, and the SDK sends it as `audio/pcm` as soon
+ * as `sample_rate`/`channels` are set.
+ *
+ * Piped in BOTH directions on purpose. WAV written to a pipe carries a
+ * placeholder RIFF length, because ffmpeg cannot seek back to correct it — which
+ * is the same class of malformed header the server just rejected. Headerless PCM
+ * cannot have that problem. Measured at ~18ms for a six-second clip, so the
+ * transcode is noise next to the request it feeds.
+ */
+function decodeToPcm(input: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const ff = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-ac', String(PCM_CHANNELS), '-ar', String(PCM_SAMPLE_RATE),
+      '-f', 's16le', 'pipe:1',
+    ]);
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    ff.stdout.on('data', (c) => out.push(c));
+    ff.stderr.on('data', (c) => err.push(c));
+    ff.on('error', () => reject(new Error('ffmpeg is not available, so the audio could not be decoded.')));
+    ff.on('close', (code) => (code === 0
+      ? resolve(Buffer.concat(out))
+      : reject(new Error(Buffer.concat(err).toString().trim() || 'ffmpeg could not read that audio.'))));
+    // A pipe the child closed early (bad input) surfaces here, not as a throw.
+    ff.stdin.on('error', () => { /* the close handler reports the real reason */ });
+    ff.stdin.end(input);
+  });
+}
+
+/**
+ * Open the connection to the speech-to-text service before the audio is ready.
+ *
+ * The sync API is one request/response, so a cold call pays the full DNS + TCP +
+ * TLS handshake on the critical path — measured at ~150ms of the ~370ms total.
+ * Call this as soon as you know a voice note is coming and it overlaps with
+ * fetching the audio, which is a round trip of its own. Best-effort by
+ * definition: a failure here just means the next call opens its own connection.
+ *
+ * Safe to call with an unset key or a different provider — it does nothing. The
+ * pooled connection is process-global (the SDK uses the global `fetch`, so Node
+ * pools per origin), which is why warming here helps a call made anywhere else.
+ */
+export async function warmTranscription(config: TranscriptionConfig): Promise<void> {
+  if (!config.apiKey) return;
+  if ((config.provider || 'assemblyai') !== 'assemblyai') return;
+  await new AssemblyAI({ apiKey: config.apiKey }).sync.warm().catch(() => false);
+}
+
+/** The sync endpoint: audio in, text out, one HTTP request, nothing to poll. */
+async function assemblyaiSync(audio: Buffer, apiKey: string): Promise<string> {
+  const result = await new AssemblyAI({ apiKey }).sync.transcribe(await decodeToPcm(audio), {
+    sample_rate: PCM_SAMPLE_RATE,
+    channels: PCM_CHANNELS,
+  });
+  return String(result.text ?? '').trim();
+}
+
+/**
+ * Transcribe a voice note. Bytes in, words out — `''` when there was no speech.
+ * Throws `no-key` when speech-to-text isn't configured, like `transcribeFile`.
+ *
+ * `durationSeconds` is Telegram's own `voice.duration`, which is exact and free.
+ * Without it we assume the clip is short and let the request decide, since the
+ * fallback below covers being wrong.
+ *
+ * **The async path stays as the fallback, and that is the point.** Anything the
+ * fast path can't take — a clip over two minutes, a provider that isn't
+ * AssemblyAI, ffmpeg missing, the sync API erroring — goes back through the
+ * route that has always worked rather than failing the user's message. A voice
+ * note is the message, so losing one loses what the user said.
+ */
+export async function transcribeVoice(
+  audio: Buffer,
+  config: TranscriptionConfig,
+  durationSeconds?: number,
+): Promise<string> {
+  if (!config.apiKey) throw new Error('no-key');
+
+  const provider = config.provider || 'assemblyai';
+  const shortEnough = durationSeconds === undefined || durationSeconds <= SYNC_MAX_SECONDS;
+
+  if (provider === 'assemblyai' && shortEnough) {
+    try {
+      return await assemblyaiSync(audio, config.apiKey);
+    } catch (e: any) {
+      // Loud, because the fallback is 3s slower and silence here would make a
+      // permanently broken fast path indistinguishable from a working one.
+      console.warn(`[transcribe] sync path failed, falling back to the job API: ${e?.message ?? e}`);
+    }
+  }
+
+  // The job API wants a path, so this branch — and only this branch — needs a
+  // file on disk. The fast path above never writes one.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'shockwave-voice-'));
+  try {
+    const file = path.join(dir, `voice-${crypto.randomBytes(4).toString('hex')}.ogg`);
+    await fs.writeFile(file, audio);
+    return (await transcribeFile(file, config, dir)).text;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => { /* best-effort */ });
   }
 }
 

@@ -18,7 +18,7 @@ import { checkInWithFixer } from '../gitFixer.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
-import { transcribeAudio } from './transcribe.js';
+import { transcribeAudio, warmTranscription } from './transcribe.js';
 import { cacheAttachment, composeMessage, MAX_INBOUND_BYTES, type CachedAttachment } from './attachments.js';
 import { getCatalogModel } from '../../../agent-core/modelCatalog.js';
 import { chatFilesDir } from '../dataDirs.js';
@@ -365,7 +365,16 @@ async function resolveInput(
       return null;   // nothing started, so nothing to clear
     }
     await react(REACT_TRANSCRIBING);
-    const transcript = await transcribeAudio(tr?.apiKey, await client.downloadFile(voice.file_id), tr?.provider)
+    // Open the speech-to-text connection while Telegram is still handing us the
+    // bytes. Both are round trips and neither needs the other, so the handshake
+    // costs nothing instead of ~150ms on the critical path. Best-effort — it
+    // resolves to nothing useful and never rejects.
+    const warming = warmTranscription({ provider: tr?.provider, apiKey: tr?.apiKey });
+    const audio = await client.downloadFile(voice.file_id);
+    await warming;
+    // `voice.duration` is Telegram's own, in seconds — it decides whether this
+    // fits the sync API's two-minute ceiling.
+    const transcript = await transcribeAudio(tr?.apiKey, audio, tr?.provider, voice.duration)
       .catch(async (e) => { await react(); throw e; });
     if (transcript === null) {
       await react();
