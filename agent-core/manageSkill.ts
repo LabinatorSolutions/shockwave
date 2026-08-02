@@ -1,6 +1,6 @@
 // Creating and editing skills — the one validated way to write a SKILL.md.
 //
-// Ported from hermes-agent `tools/skill_manager_tool.py`. Five actions rather
+// Ported from hermes-agent `tools/manage_skillr_tool.py`. Five actions rather
 // than six: **there is no `delete`.** hermes' delete carries the heaviest
 // machinery in that file — a fail-closed consolidation guard, `absorbed_into`
 // validation, recursive-delete containment, and an archive-vs-remove branch on
@@ -167,7 +167,7 @@ async function exists(abs: string): Promise<boolean> {
  * an unattended agent must not rewrite content it only inferred from a
  * transcript — it has to have actually loaded the file this run.
  */
-export async function skillManage(
+export async function manageSkill(
   roots: SkillRoots,
   args: ManageArgs,
   hasRead?: (absPath: string) => boolean,

@@ -44,9 +44,9 @@ The `emit` sink is passed **per `agentSend` call**, not stored on the host — s
 - `modelCatalog.ts` — the models.dev catalog: fetch/cache chain, `getCatalogModels`/`getCatalogModel`, `DEV_KEY` slug map.
 - `skillLibrary.ts` — skill scanning + workspace-override resolution; writes the effective skill list into pi's settings at boot. Also names the three roots (`workspaceSkillsDir`, `agentSkillsDir`).
 - `skillValidate.ts` — what a skill has to look like before it is written: name, frontmatter, sizes, supporting-file paths. Owns the ONE frontmatter parser (`skillLibrary.ts` imports it) because this module is the one under test. Two deliberate departures from hermes, both because **pi is the loader here**: the name rule is pi's stricter one (lowercase, digits, hyphens; no leading/trailing or consecutive hyphens), and hermes' 60-character description limit is NOT ported — it exists because hermes truncates its own skill index at 57 chars, while pi's `formatSkillsForPrompt` emits the description whole.
-- `skillManage.ts` — the five actions (`create`/`edit`/`patch`/`write_file`/`remove_file`) behind `skill_manage`. **No `delete`** — hermes' delete carries a fail-closed consolidation guard, `absorbed_into` validation, rmtree containment and an archive-vs-remove branch, all of it serving a curator we do not have.
+- `manageSkill.ts` — the five actions (`create`/`edit`/`patch`/`write_file`/`remove_file`) behind `manage_skill`. **No `delete`** — hermes' delete carries a fail-closed consolidation guard, `absorbed_into` validation, rmtree containment and an archive-vs-remove branch, all of it serving a curator we do not have.
 - `fuzzyMatch.ts` — the 9-strategy patcher behind `patch`, ported from hermes `tools/fuzzy_match.py`. **Not from knack's TypeScript copy**, which predates four fixes; each is pinned by a named test in `tests/fuzzyMatch.test.js`.
-- `skillTool.ts` — the `skill_manage` pi tool, plus the `read` override that makes read-before-write possible. One factory because they share the set of files this run has loaded.
+- `skillTool.ts` — the `manage_skill` pi tool, plus the `read` override that makes read-before-write possible. One factory because they share the set of files this run has loaded.
 - `defaults/reviewPrompt.ts` — the review instruction (hermes' `_SKILL_REVIEW_PROMPT`, extracted by AST, eight documented substitutions) + rendering a stored conversation to text.
 - `defaults/index.ts` — `assembleSystemPrompt` / `rebuildSystemPrompt` + re-exports.
 - `defaults/tools.ts` — `TOOL_CATALOG` (the single source for the prompt list AND the pi allowlist), `only` scoping, `toolsForSource` / `activeToolNames`.
@@ -98,7 +98,7 @@ Catalog: builtins `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`; customs
 
 ### The review scope is an explicit list, not the catalog minus exclusions
 
-`toolsForSource('review')` returns a named set — `read`, `grep`, `find`, `ls`, `skill_manage` — rather than filtering `only`. The direction is the point: with an exclusion list, **every tool added later lands in the one run nobody is watching** unless someone remembers to exclude it. `daily_note` proved that while this was being designed.
+`toolsForSource('review')` returns a named set — `read`, `grep`, `find`, `ls`, `manage_skill` — rather than filtering `only`. The direction is the point: with an exclusion list, **every tool added later lands in the one run nobody is watching** unless someone remembers to exclude it. `daily_note` proved that while this was being designed.
 
 `write`, `edit` and `bash` are absent because with any of them the containment and read-before-write guards are decorative — the agent could edit a `SKILL.md` directly and skip every check. hermes restricts its review fork the same way and for the same reason. Also out: `send_message` (maintenance is not news), the secret tools, `transcribe`, `open_file`, `daily_note`, `search_chats`.
 
@@ -140,7 +140,7 @@ Two skill kinds, both fed to pi as **explicit absolute paths at boot** (pi never
 
 There is a **third root we do not wire**: `<workspace>/.agents/skills/`, which pi discovers by itself — its `package-manager.js` scans that path (plus `.pi/skills` and the `~` equivalents) a layer above `loadSkills`, then hands resolved absolute paths down. That is where the agent writes its own skills, and it is git-synced like everything else in the workspace.
 
-> **Ownership is a directory here, and it needs one guard to stay that way.** The three roots are physically separate, so "may the agent write this?" is answered by the path — which is what lets `skillManage.ts` replace hermes' 1100-line `skill_usage.py` telemetry sidecar. But **pi keeps exactly one skill per name and the `.agents` copy wins**, emitting a `name "dup" collision` diagnostic that nothing surfaces. So the agent can shadow a skill the user uploaded just by choosing its name, silently. `skill_manage`'s `create` therefore refuses a name that exists in **any** root, not only the one it writes to — comparing frontmatter names, since that is what pi keys on. Verified against pi directly.
+> **Ownership is a directory here, and it needs one guard to stay that way.** The three roots are physically separate, so "may the agent write this?" is answered by the path — which is what lets `manageSkill.ts` replace hermes' 1100-line `skill_usage.py` telemetry sidecar. But **pi keeps exactly one skill per name and the `.agents` copy wins**, emitting a `name "dup" collision` diagnostic that nothing surfaces. So the agent can shadow a skill the user uploaded just by choosing its name, silently. `manage_skill`'s `create` therefore refuses a name that exists in **any** root, not only the one it writes to — comparing frontmatter names, since that is what pi keys on. Verified against pi directly.
 
 ## Workspace default files (`defaults/files.ts`)
 

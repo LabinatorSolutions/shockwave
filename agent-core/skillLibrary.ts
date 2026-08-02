@@ -29,7 +29,7 @@ export function workspaceSkillsDir(workspacePath) {
 // The agent's OWN skills — the ones it writes for itself. pi discovers this
 // directory on its own (see the note at the top of this file), so unlike the two
 // above it needs no wiring into `computeEffectivePaths`; naming it here is what
-// lets `skill_manage` confine the agent's writes to it. Keeping the three roots
+// lets `manage_skill` confine the agent's writes to it. Keeping the three roots
 // physically separate is what makes ownership a path question instead of a
 // bookkeeping one.
 export function agentSkillsDir(workspacePath) {

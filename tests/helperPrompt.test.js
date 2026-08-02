@@ -38,7 +38,7 @@ test('a review run is never told about a tool it does not have', () => {
 
 test('a review run IS told about the tools it does have', () => {
   const h = helperFor('review');
-  for (const present of ['read', 'grep', 'find', 'ls', 'skill_manage']) {
+  for (const present of ['read', 'grep', 'find', 'ls', 'manage_skill']) {
     assert.ok(h.includes(`- \`${present}\``), `missing \`${present}\` from the tool list`);
   }
   assert.ok(h.includes('This is the complete set — there are no others.'));

@@ -45,14 +45,14 @@ export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review'
 // designed and would have arrived silently.
 //
 // It investigates and it curates: read/grep/find/ls to look around, and
-// `skill_manage` to write. Deliberately absent are `write`, `edit` and `bash` —
+// `manage_skill` to write. Deliberately absent are `write`, `edit` and `bash` —
 // with any of those the containment and read-before-write guards in
-// `skillManage.ts` are decorative, since the agent could edit a SKILL.md
+// `manageSkill.ts` are decorative, since the agent could edit a SKILL.md
 // directly. hermes restricts its review fork the same way and for the same
 // reason. Also absent: `send_message` (maintenance is not news), the secret
 // tools (no credentialed work), `transcribe`, `open_file`, `daily_note`,
 // `search_chats`.
-const REVIEW_TOOLS = ['read', 'grep', 'find', 'ls', 'skill_manage'];
+const REVIEW_TOOLS = ['read', 'grep', 'find', 'ls', 'manage_skill'];
 
 export interface ToolDescriptor {
   name: string;
@@ -87,7 +87,7 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   { name: 'search_chats', origin: 'custom', desc: 'Search earlier chats in this workspace — what the user told you before, what was decided, what you already tried. Pass `query` to search, `chatId` + `around` to read more of one, or nothing to list recent chats. Results carry dates; prefer recent ones when they disagree.' },
   // Every source, like hermes: one validated way to author a skill, whoever is
   // asking. The guards inside it differ by caller, not the tool.
-  { name: 'skill_manage', origin: 'custom', desc: 'Create or update one of your own skills — validated before it is written, so use it rather than editing a SKILL.md by hand. Actions: create, patch (preferred for fixes), edit, write_file, remove_file. Skills the user provided and the ones built into the app are read-only to you.' },
+  { name: 'manage_skill', origin: 'custom', desc: 'Create or update one of your own skills — validated before it is written, so use it rather than editing a SKILL.md by hand. Actions: create, patch (preferred for fixes), edit, write_file, remove_file. Skills the user provided and the ones built into the app are read-only to you.' },
 ];
 
 /** The catalog as offered to a turn running from `source`. */

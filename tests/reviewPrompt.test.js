@@ -126,7 +126,7 @@ test('the two protected roots are named, and ownership is a directory', () => {
 });
 
 test('the only tool it is told to call is one it actually has', () => {
-  assert.ok(SKILL_REVIEW_PROMPT.includes('skill_manage action=write_file'));
+  assert.ok(SKILL_REVIEW_PROMPT.includes('manage_skill action=write_file'));
 });
 
 // ── Rendering the conversation ───────────────────────────────────────────────

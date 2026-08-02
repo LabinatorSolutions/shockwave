@@ -1,7 +1,7 @@
 // What a skill has to look like before we write it — names, frontmatter, sizes,
 // and where a supporting file may live.
 //
-// Ported from hermes-agent `tools/skill_manager_tool.py` (its `_validate_*`
+// Ported from hermes-agent `tools/manage_skillr_tool.py` (its `_validate_*`
 // helpers). Two deliberate departures, both because pi is the loader here and
 // hermes' own loader is not:
 //

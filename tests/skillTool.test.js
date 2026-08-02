@@ -8,7 +8,7 @@
 //     arrive in the one run nobody watches. The test names the five, so widening
 //     the set has to be a deliberate edit here as well.
 //   * `write`, `edit` and `bash` being absent is what makes the guards in
-//     skillManage real rather than decorative: with any of them the agent could
+//     manageSkill real rather than decorative: with any of them the agent could
 //     edit a SKILL.md directly and skip every check.
 //   * The `read` override is what records a read for the read-before-write gate.
 //     pi has no skill-loading tool of ours to hang that on — skills are loaded
@@ -42,7 +42,7 @@ async function makeWorkspace() {
 test('a review run gets exactly five tools', () => {
   assert.deepEqual(
     activeToolNames('review').sort(),
-    ['find', 'grep', 'ls', 'read', 'skill_manage'],
+    ['find', 'grep', 'ls', 'manage_skill', 'read'],
   );
 });
 
@@ -60,14 +60,14 @@ test('the review list is explicit, so a NEW catalog tool is excluded by default'
   const everywhere = TOOL_CATALOG.filter((t) => !t.only).map((t) => t.name);
   const review = activeToolNames('review');
   const reachedReviewWithoutBeingListed = everywhere.filter(
-    (n) => review.includes(n) && !['read', 'grep', 'find', 'ls', 'skill_manage'].includes(n),
+    (n) => review.includes(n) && !['read', 'grep', 'find', 'ls', 'manage_skill'].includes(n),
   );
   assert.deepEqual(reachedReviewWithoutBeingListed, []);
 });
 
-test('skill_manage is offered to every source, as in hermes', () => {
+test('manage_skill is offered to every source, as in hermes', () => {
   for (const source of ['desktop', 'cron', 'telegram', 'review']) {
-    assert.ok(activeToolNames(source).includes('skill_manage'), `missing on ${source}`);
+    assert.ok(activeToolNames(source).includes('manage_skill'), `missing on ${source}`);
   }
 });
 
@@ -82,16 +82,16 @@ test('the other sources are unchanged by the review scope', () => {
 
 // ── What the factory builds ──────────────────────────────────────────────────
 
-test('an ordinary run gets skill_manage alone — no read override', async () => {
+test('an ordinary run gets manage_skill alone — no read override', async () => {
   const ws = await makeWorkspace();
   const tools = makeSkillTools({ cwd: ws.cwd, roots: ws.roots });
-  assert.deepEqual(tools.map((t) => t.name), ['skill_manage']);
+  assert.deepEqual(tools.map((t) => t.name), ['manage_skill']);
 });
 
 test('a review run also gets a read tool, and it is pi\'s own definition', async () => {
   const ws = await makeWorkspace();
   const tools = makeSkillTools({ cwd: ws.cwd, roots: ws.roots, trackReads: true });
-  assert.deepEqual(tools.map((t) => t.name).sort(), ['read', 'skill_manage']);
+  assert.deepEqual(tools.map((t) => t.name).sort(), ['manage_skill', 'read']);
   const read = tools.find((t) => t.name === 'read');
   // Same schema and description as pi's builtin — this is that tool with one
   // line added, not a reimplementation.
@@ -109,11 +109,11 @@ test('the read override returns real file contents', async () => {
   assert.match(text, /Step one\./, 'delegation to pi\'s read works');
 });
 
-test('reading a skill is what lets skill_manage patch it', async () => {
+test('reading a skill is what lets manage_skill patch it', async () => {
   const ws = await makeWorkspace();
   const tools = makeSkillTools({ cwd: ws.cwd, roots: ws.roots, trackReads: true });
   const read = tools.find((t) => t.name === 'read');
-  const manage = tools.find((t) => t.name === 'skill_manage');
+  const manage = tools.find((t) => t.name === 'manage_skill');
 
   // Before reading: refused.
   const blocked = await manage.execute('t1', {
@@ -138,7 +138,7 @@ test('an absolute read path counts the same as a relative one', async () => {
   const ws = await makeWorkspace();
   const tools = makeSkillTools({ cwd: ws.cwd, roots: ws.roots, trackReads: true });
   const read = tools.find((t) => t.name === 'read');
-  const manage = tools.find((t) => t.name === 'skill_manage');
+  const manage = tools.find((t) => t.name === 'manage_skill');
 
   await read.execute('t1', { path: path.join(ws.agentDir, 'pdf-tools', 'SKILL.md') }, undefined, undefined, {});
   const res = await manage.execute('t2', {
@@ -151,7 +151,7 @@ test('a failed read records nothing', async () => {
   const ws = await makeWorkspace();
   const tools = makeSkillTools({ cwd: ws.cwd, roots: ws.roots, trackReads: true });
   const read = tools.find((t) => t.name === 'read');
-  const manage = tools.find((t) => t.name === 'skill_manage');
+  const manage = tools.find((t) => t.name === 'manage_skill');
 
   // pi throws on a missing file rather than returning an error result — the
   // wrapper must let that through untouched and record nothing.
@@ -172,13 +172,13 @@ test('two runs do not share what each other has read', async () => {
   await runA.find((t) => t.name === 'read')
     .execute('a1', { path: '.agents/skills/pdf-tools/SKILL.md' }, undefined, undefined, {});
 
-  const res = await runB.find((t) => t.name === 'skill_manage').execute('b1', {
+  const res = await runB.find((t) => t.name === 'manage_skill').execute('b1', {
     action: 'patch', name: 'pdf-tools', old_string: 'Step one.', new_string: 'Step two.',
   });
   assert.equal(res.isError, true, "run B never read it — the set is per-session, not module-level");
 });
 
-test('skill_manage reports a refusal as a tool error, not a silent success', async () => {
+test('manage_skill reports a refusal as a tool error, not a silent success', async () => {
   const ws = await makeWorkspace();
   const [manage] = makeSkillTools({ cwd: ws.cwd, roots: ws.roots });
   const res = await manage.execute('t1', { action: 'create', name: 'BAD NAME', content: SKILL('x', 'y') });

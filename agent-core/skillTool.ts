@@ -1,8 +1,8 @@
-// The `skill_manage` pi tool, and the `read` override that makes its
+// The `manage_skill` pi tool, and the `read` override that makes its
 // read-before-write guard possible.
 //
 // Both are built by ONE factory because they share state: the set of files this
-// run has actually loaded. `skill_manage` refuses to rewrite a file that isn't
+// run has actually loaded. `manage_skill` refuses to rewrite a file that isn't
 // in it, and the `read` override is what puts things there.
 //
 // ── Why a `read` override rather than a `skill_view` tool ───────────────────
@@ -35,7 +35,7 @@ import fs from 'node:fs';
 
 import { createReadToolDefinition } from '@earendil-works/pi-coding-agent';
 
-import { skillManage, type SkillRoots } from './skillManage.ts';
+import { manageSkill, type SkillRoots } from './manageSkill.ts';
 
 /** Resolve a path the way both sides of the read-before-write comparison must:
  *  absolute, and through symlinks when they exist. */
@@ -49,7 +49,7 @@ function canonical(cwd: string, p: string): string[] {
   return out;
 }
 
-const SKILL_MANAGE_DESCRIPTION =
+const MANAGE_SKILL_DESCRIPTION =
   'Create or update a skill — your reusable, saved procedures for recurring task '
   + 'types. This validates the file before writing it, so use it rather than '
   + 'writing SKILL.md by hand.\n\n'
@@ -82,7 +82,7 @@ export interface SkillToolOptions {
 /**
  * Build the skill tools for one session.
  *
- * Returns `skill_manage` always, plus a `read` override when `trackReads` is on.
+ * Returns `manage_skill` always, plus a `read` override when `trackReads` is on.
  * Both are filtered against pi's allowlist by the caller, exactly like every
  * other custom tool.
  */
@@ -95,10 +95,10 @@ export function makeSkillTools(opts: SkillToolOptions): any[] {
   const readPaths = new Set<string>();
   const hasRead = (abs: string): boolean => canonical(cwd, abs).some((p) => readPaths.has(p));
 
-  const skillManageTool: any = {
-    name: 'skill_manage',
+  const manageSkillTool: any = {
+    name: 'manage_skill',
     label: 'Manage Skill',
-    description: SKILL_MANAGE_DESCRIPTION,
+    description: MANAGE_SKILL_DESCRIPTION,
     promptSnippet: 'Create or update one of your skills (validated).',
     parameters: {
       type: 'object',
@@ -143,7 +143,7 @@ export function makeSkillTools(opts: SkillToolOptions): any[] {
       additionalProperties: false,
     },
     async execute(_id: string, params: any) {
-      const result = await skillManage(
+      const result = await manageSkill(
         roots,
         params,
         trackReads ? hasRead : undefined,
@@ -158,7 +158,7 @@ export function makeSkillTools(opts: SkillToolOptions): any[] {
     },
   };
 
-  if (!trackReads) return [skillManageTool];
+  if (!trackReads) return [manageSkillTool];
 
   // Delegate to pi's own read tool and note what came back. Everything about
   // `read` stays exactly as pi defines it — same schema, same description, same
@@ -178,5 +178,5 @@ export function makeSkillTools(opts: SkillToolOptions): any[] {
     },
   };
 
-  return [readTool, skillManageTool];
+  return [readTool, manageSkillTool];
 }

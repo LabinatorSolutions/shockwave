@@ -376,7 +376,7 @@ export function createAgentRuntime(host: AgentHost) {
     // because a review run's read-before-write state must not be shared with
     // any other run. On a review run this also returns a `read` that wraps pi's
     // own — see skillTool.ts for why the override is where the mark lives.
-    const skillTools = allowed.includes('skill_manage')
+    const skillTools = allowed.includes('manage_skill')
       ? makeSkillTools({
         cwd: workspacePath,
         roots: {
