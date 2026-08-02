@@ -1,4 +1,4 @@
-// One self-improvement run: take a chat that has done enough work, hand the
+// One review run: take a chat that has done enough work, hand the
 // agent that conversation, and let it update its own skills.
 //
 // This is `cronRun.ts` with a different trigger. Same shape throughout — claim a
@@ -89,7 +89,7 @@ export async function runReview(
         // No user is present, and the tool set is the review one — both follow
         // from `source`, which is also part of the session cache key.
         unattended: true, source: 'review', sourceId: sourceChatId,
-        cronTitle: 'Self-improvement review',
+        cronTitle: 'Review',
       },
       (event: any) => {
         if (event?.type === 'agent_end') finalMessages = event.messages;
@@ -109,7 +109,7 @@ export async function runReview(
   // never pushed is a skill that does not exist: the sweeper reclaims the
   // directory on its TTL.
   const result = await checkInWithFixer(
-    dir, w.defaultBranch, `Shockwave self-improvement — ${stamp}`, auth,
+    dir, w.defaultBranch, `Shockwave review — ${stamp}`, auth,
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },
   );

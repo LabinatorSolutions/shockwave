@@ -1,4 +1,4 @@
-// The instruction a self-improvement run receives, and how the conversation it
+// The instruction a review run receives, and how the conversation it
 // reviews is rendered for it.
 //
 // ── Provenance ──────────────────────────────────────────────────────────────

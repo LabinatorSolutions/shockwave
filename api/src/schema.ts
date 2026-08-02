@@ -83,7 +83,7 @@ export const chatTable = pgTable('chat', {
   deleted: boolean('deleted').notNull().default(false),
   running: boolean('running').notNull().default(false),
   runningMachine: text('running_machine'),
-  // How far the self-improvement sweep has already looked: the `message.seq` it
+  // How far the review sweep has already looked: the `message.seq` it
   // had reached. Tool calls after this point are what make a chat due. Moved
   // forward when a run STARTS, not when it succeeds — otherwise a chat whose
   // review keeps failing is picked again on every tick.

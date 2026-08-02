@@ -45,7 +45,7 @@ The `emit` sink is passed **per `agentSend` call**, not stored on the host — s
 - `skillManage.ts` — the five actions (`create`/`edit`/`patch`/`write_file`/`remove_file`) behind `skill_manage`. **No `delete`** — hermes' delete carries a fail-closed consolidation guard, `absorbed_into` validation, rmtree containment and an archive-vs-remove branch, all of it serving a curator we do not have.
 - `fuzzyMatch.ts` — the 9-strategy patcher behind `patch`, ported from hermes `tools/fuzzy_match.py`. **Not from knack's TypeScript copy**, which predates four fixes; each is pinned by a named test in `tests/fuzzyMatch.test.js`.
 - `skillTool.ts` — the `skill_manage` pi tool, plus the `read` override that makes read-before-write possible. One factory because they share the set of files this run has loaded.
-- `defaults/reviewPrompt.ts` — the self-improvement instruction (hermes' `_SKILL_REVIEW_PROMPT`, extracted by AST, eight documented substitutions) + rendering a stored conversation to text.
+- `defaults/reviewPrompt.ts` — the review instruction (hermes' `_SKILL_REVIEW_PROMPT`, extracted by AST, eight documented substitutions) + rendering a stored conversation to text.
 - `defaults/index.ts` — `assembleSystemPrompt` / `rebuildSystemPrompt` + re-exports.
 - `defaults/tools.ts` — `TOOL_CATALOG` (the single source for the prompt list AND the pi allowlist), `only` scoping, `toolsForSource` / `activeToolNames`.
 - `defaults/soul.ts` — `DEFAULT_SOUL`, `AGENTS_STUB`, `readSoul`.

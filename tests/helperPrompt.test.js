@@ -5,7 +5,7 @@
 // source, and **naming a tool the run does not have is worse than saying
 // nothing**. The file already applies that rule to `send_message` (the "Reaching
 // the user" section is gated on it) — but two other places named tools
-// unconditionally, and the self-improvement run is the first source narrow
+// unconditionally, and the review run is the first source narrow
 // enough to expose them:
 //
 //   * the tool section closed with "Reach for `bash` to run programs, git, and

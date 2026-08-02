@@ -9,7 +9,7 @@
 // unset, and consumers that need a value either require it (error if unset) or
 // fall back at the point of use. The ONE exception is machine-local settings
 // (window/view state, the active workspace), which live in a userData file
-// and DO have desktop defaults — see LOCAL_DEFAULTS in src/main/settingsStore.ts.
+// and DO have desktop defaults — see LOCAL_SETTINGS in src/main/api/localSettings.ts.
 //
 // Credentials are never stored here in the clear: the companion encrypts them in
 // its `secret_value` table (see api/CLAUDE.md), keyed by owner + field.
@@ -220,12 +220,16 @@ export interface Settings {
   // DISPLAY ONLY — the watcher and the link index keep their own rule, so this
   // never changes what the app indexes, resolves wiki-links against, or reloads.
   showHiddenFiles: boolean;
-  // Whether self-improvement chats are hidden from the chat history list. They
-  // are ordinary chats and show by default — the point of running them as chats
-  // is that you can open one and read what it decided. This is a VIEW
-  // preference, which is why it is machine-local rather than synced: you might
-  // want them out of the way on a laptop and visible on a desktop. It hides
-  // nothing else — the runs still happen, and their commits still land.
-  hideReviewChats: boolean;
+  // Which chat sources the history list shows (`chat.source` — see CHAT_SOURCES
+  // in the renderer's constants). **null means all**, which is the default and
+  // what a fresh install gets; a stored array is an explicit narrowing.
+  //
+  // Null rather than a seeded full array so a source added later is visible by
+  // default — a saved list from an older build would silently hide it otherwise.
+  //
+  // A VIEW preference, so machine-local rather than synced: you might want
+  // scheduled runs out of the way on a laptop and visible on a desktop. It hides
+  // nothing else — the runs still happen and their commits still land.
+  chatSources: string[] | null;
   windowBounds: WindowBounds | null;
 }

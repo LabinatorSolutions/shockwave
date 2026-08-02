@@ -38,7 +38,7 @@ export type ToolScope = 'desktop' | 'cron' | 'telegram' | 'review';
 
 export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review'];
 
-// A self-improvement run gets an EXPLICIT list, not the catalog minus a few
+// A review run gets an EXPLICIT list, not the catalog minus a few
 // exclusions. That direction matters: with an exclusion list, every tool added
 // later lands in the one run nobody is watching unless someone remembers to
 // exclude it. `daily_note` proved the point — it was added while this was being

@@ -1,4 +1,4 @@
-// The trigger for self-improvement runs: every few minutes, look for a chat
+// The trigger for review runs: every few minutes, look for a chat
 // that has done enough work since it was last reviewed, and review it.
 //
 // ── Why this lives on the companion ─────────────────────────────────────────
@@ -47,7 +47,7 @@ const ENABLED = (process.env.REVIEW_ENABLED ?? 'true').toLowerCase() !== 'false'
  *  never look configured. hermes and knack both default to 10. */
 const DEFAULT_INTERVAL = 10;
 
-/** The threshold, or 0 meaning the user turned self-improvement off. 0 has to
+/** The threshold, or 0 meaning the user turned review off. 0 has to
  *  survive here rather than collapsing to the default — that is the difference
  *  between "not configured" and "configured off", and the same distinction the
  *  checkout-pool size makes. */
@@ -98,7 +98,7 @@ export async function sweepOnce(pool: PgPool, key: Buffer, runtime: any): Promis
 }
 
 export function initReviewSweeper(pool: PgPool, key: Buffer, runtime: any): void {
-  if (!ENABLED) { log.info('self-improvement reviews disabled (REVIEW_ENABLED=false)'); return; }
+  if (!ENABLED) { log.info('reviews disabled (REVIEW_ENABLED=false)'); return; }
   // `protect` + awaiting inside the handler is what bounds this to one run.
   new Cron(SCHEDULE, { protect: true }, async () => {
     try {
@@ -107,5 +107,5 @@ export function initReviewSweeper(pool: PgPool, key: Buffer, runtime: any): void
       log.error({ err: errStr(e) }, 'review sweep failed');
     }
   });
-  log.info({ schedule: SCHEDULE }, 'self-improvement sweeper started');
+  log.info({ schedule: SCHEDULE }, 'review sweeper started');
 }

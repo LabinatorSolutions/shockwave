@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS chat (
   -- "done and uploaded". running_machine names which client is executing.
   running         boolean NOT NULL DEFAULT false,
   running_machine text,
-  -- How far the self-improvement sweep has already looked at this chat: the
+  -- How far the review sweep has already looked at this chat: the
   -- `message.seq` it had reached. Work since then is what triggers a review, so
   -- this moves forward when a run STARTS — a run that fails must not make the
   -- same chat eligible again on the very next tick, forever.

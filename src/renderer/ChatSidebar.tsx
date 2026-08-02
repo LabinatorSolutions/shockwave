@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import { ChevronDown, ChevronRight, Sparkles, KeyRound, Pin } from 'lucide-react';
 import { PaperclipIcon, PlayIcon, StopIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon, SearchIcon, PlusIcon, TrashIcon } from './Icons.jsx';
 import { cn } from '@/lib/utils';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { CHAT_SOURCES, CHAT_SOURCE_LABELS } from './constants.js';
 import { resolveImageUrl } from './imageWidgets.js';
 import {
   classify,
@@ -392,7 +394,7 @@ function formatAgo(ms) {
 // Popover of recent + searchable chats. Anchored under the header history button.
 // Recents paginate on scroll (keyset via the last row's updatedAt); a non-empty
 // query switches to full-text search across the workspace's chats.
-function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDeleted, hideReviewChats, onHideReviewChatsChange }: any) {
+function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDeleted, chatSources, onChatSourcesChange }: any) {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -402,6 +404,10 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   const confirmDeleteRef = useRef<any>(null);
   confirmDeleteRef.current = confirmDelete;
   const rootRef = useRef<any>(null);
+  // The source menu portals outside this popover, so a click in it reads as an
+  // outside click. Same reason the delete confirmation suspends the dismiss
+  // below — without it, picking a source closes the thing you were filtering.
+  const sourceMenuOpenRef = useRef(false);
   const searching = query.trim().length > 0;
 
   // Dismiss on any click/focus outside the popover (ignoring the header toggle,
@@ -410,13 +416,13 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   // there should close the dialog, not the popover.
   useEffect(() => {
     const onDown = (e) => {
-      if (confirmDeleteRef.current) return;
+      if (confirmDeleteRef.current || sourceMenuOpenRef.current) return;
       const t = e.target;
       if (rootRef.current?.contains(t)) return;
       if (t?.closest?.('.chat-history-toggle')) return; // let the toggle handle itself
       onClose();
     };
-    const onKey = (e) => { if (e.key === 'Escape' && !confirmDeleteRef.current) onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape' && !confirmDeleteRef.current && !sourceMenuOpenRef.current) onClose(); };
     document.addEventListener('mousedown', onDown, true);
     document.addEventListener('focusin', onDown, true);
     document.addEventListener('keydown', onKey);
@@ -440,6 +446,30 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
 
   const loadPinned = useCallback(async () => {
     try { setPinnedList(await window.api.chat.listPinned()); } catch { /* best-effort */ }
+  }, []);
+
+  // Refresh while the list is open. A chat can appear without any action here —
+  // a Telegram message, a scheduled run, a review — and the
+  // popover used to be a snapshot of whenever you opened it.
+  //
+  // Two guards. It skips while SEARCHING, because that has its own debounced
+  // fetch and re-running the recents query would replace the results underneath
+  // you. And it skips once you have paged past the first page: `loadRecents()`
+  // with no cursor REPLACES the list, so refreshing there would collapse the
+  // history you just scrolled through. Somebody reading back through old chats
+  // is not waiting for new ones.
+  const pollRef = useRef<any>(null);
+  useEffect(() => {
+    pollRef.current = { searching, count: items.length, loadRecents, loadPinned };
+  });
+  useEffect(() => {
+    const t = setInterval(() => {
+      const st = pollRef.current;
+      if (!st || st.searching || st.count > 30) return;
+      st.loadRecents();
+      st.loadPinned();
+    }, 10_000);
+    return () => clearInterval(t);
   }, []);
 
   // Debounced search / initial recents + pinned.
@@ -530,30 +560,52 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
     </button>
   );
 
-  // Self-improvement runs are ordinary chats and listed like any other — being
-  // able to open one and read what it decided is the point of running them as
-  // chats. The filter is for when they are in the way, and hides nothing else:
-  // the runs still happen and their commits still land.
-  const visible = useMemo(
-    () => (hideReviewChats ? items.filter((it: any) => it?.source !== 'review') : items),
-    [items, hideReviewChats],
+  // Which sources are listed. `null` means all — the default, and what keeps a
+  // source added later visible instead of silently missing from a saved list.
+  // A row with no source is treated as `desktop`: agent-core writes
+  // `source ?? 'desktop'`, so a null is a pre-provenance chat, not an unknown
+  // kind, and hiding it under "App" unchecked would lose history invisibly.
+  const sourceOf = (it: any) => it?.source || 'desktop';
+  const allowed: Set<string> | null = useMemo(
+    () => (Array.isArray(chatSources) ? new Set(chatSources) : null),
+    [chatSources],
   );
-  const visiblePinned = useMemo(
-    () => (hideReviewChats ? pinned.filter((it: any) => it?.source !== 'review') : pinned),
-    [pinned, hideReviewChats],
-  );
-  // Counted off the UNFILTERED list, so the affordance to turn the filter ON is
-  // there when there is something to hide. Counting the difference instead is
-  // always zero while the filter is off — i.e. the control appears only once you
-  // no longer need it.
-  const reviewCount = useMemo(() => items.filter((it: any) => it?.source === 'review').length, [items]);
+  const keep = useCallback((it: any) => !allowed || allowed.has(sourceOf(it)), [allowed]);
+
+  const visible = useMemo(() => items.filter(keep), [items, keep]);
+  const visiblePinned = useMemo(() => pinned.filter(keep), [pinned, keep]);
+
+  // Counted off the UNFILTERED list so the menu can say what each source would
+  // add back. Counting the filtered one is always zero for a hidden source —
+  // i.e. the number appears only once you no longer need it.
+  const countsBySource = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const it of items) { const k = sourceOf(it); m[k] = (m[k] ?? 0) + 1; }
+    return m;
+  }, [items]);
+
+  const selected = allowed ?? new Set(CHAT_SOURCES);
+  const allSelected = !allowed || CHAT_SOURCES.every((k) => allowed.has(k));
+  const toggleSource = (key: string, on: boolean) => {
+    const next = new Set(selected);
+    if (on) next.add(key); else next.delete(key);
+    // Back to everything selected stores `null`, not the full list — see above.
+    const all = CHAT_SOURCES.every((k) => next.has(k));
+    onChatSourcesChange?.(all ? null : CHAT_SOURCES.filter((k) => next.has(k)));
+  };
+
+  const sourceSummary = CHAT_SOURCES.filter((k) => selected.has(k))
+    .map((k) => CHAT_SOURCE_LABELS[k]).join(', ') || 'Nothing';
 
   const showPinned = !searching && visiblePinned.length > 0;
   const empty = visible.length === 0 && !showPinned && !loading;
 
   return (
     <div
-      className="absolute left-2 right-2 top-12 z-30 flex max-h-96 flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-md"
+      // Anchored to the sidebar's right edge and never narrower than 26rem, so a
+      // narrow chat column doesn't squeeze the footer controls; it spills left over
+      // the editor instead. Widens with the sidebar when that is bigger.
+      className="absolute right-2 top-12 z-30 flex max-h-96 w-[26rem] min-w-[calc(100%_-_1rem)] flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-md"
       role="dialog"
       aria-label="Chat history"
       ref={rootRef}
@@ -562,12 +614,56 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         <SearchIcon size={13} />
         <input
           type="text"
-          className="w-full bg-transparent text-[12.5px] text-foreground outline-none placeholder:text-muted-2"
+          className="min-w-0 flex-1 bg-transparent text-[12.5px] text-foreground outline-none placeholder:text-muted-2"
           placeholder="Search chats…"
           value={query}
-          autoFocus
           onChange={(e) => setQuery(e.target.value)}
         />
+        {/* Sits beside the search rather than under the list: it decides what the
+            list contains, so it belongs where you set that, not after it. */}
+        <DropdownMenu onOpenChange={(o) => {
+          // Opening flips immediately; CLOSING is deferred a frame. The Escape
+          // that dismisses the menu is the same keypress the popover's own
+          // handler sees, so clearing this synchronously means one Escape closes
+          // both. Held for a tick, the first Escape closes the menu and a second
+          // closes the popover.
+          if (o) sourceMenuOpenRef.current = true;
+          else setTimeout(() => { sourceMenuOpenRef.current = false; }, 0);
+        }}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title={allSelected ? 'Showing all chats' : `Showing ${sourceSummary}`}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] hover:bg-accent hover:text-foreground',
+                allSelected ? 'text-muted-foreground' : 'bg-selected text-primary',
+              )}
+            >
+              {allSelected ? 'All chats' : sourceSummary}
+              <ChevronDown className="size-3" strokeWidth={2.2} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-52">
+            <DropdownMenuLabel className="text-[11px] font-semibold text-muted-2">Show chats from</DropdownMenuLabel>
+            {CHAT_SOURCES.map((key) => (
+              <DropdownMenuCheckboxItem
+                key={key}
+                checked={selected.has(key)}
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={(on) => toggleSource(key, !!on)}
+              >
+                <span className="flex w-full items-center justify-between gap-3">
+                  <span>{CHAT_SOURCE_LABELS[key]}</span>
+                  <span className="text-[11px] text-muted-2">{countsBySource[key] ?? 0}</span>
+                </span>
+              </DropdownMenuCheckboxItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={allSelected} onSelect={() => onChatSourcesChange?.(null)}>
+              Show all
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div className="flex-1 overflow-y-auto p-1" onScroll={onScroll}>
         {empty && (
@@ -582,20 +678,6 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         )}
         {visible.map((it) => renderRow(it, false))}
       </div>
-      {(hideReviewChats || reviewCount > 0) && (
-        <button
-          type="button"
-          className="flex items-center justify-between gap-2 border-t border-border px-3 py-1.5 text-left text-[11px] text-muted-2 hover:text-muted-foreground"
-          onClick={() => onHideReviewChatsChange?.(!hideReviewChats)}
-        >
-          <span>
-            {hideReviewChats
-              ? 'Self-improvement chats hidden'
-              : `${reviewCount} self-improvement chat${reviewCount === 1 ? '' : 's'}`}
-          </span>
-          <span className="text-muted-foreground">{hideReviewChats ? 'Show' : 'Hide'}</span>
-        </button>
-      )}
       <ConfirmDialog
         open={!!confirmDelete}
         onClose={() => setConfirmDelete(null)}
@@ -616,7 +698,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   );
 }
 
-const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets, hideReviewChats, onHideReviewChatsChange }, ref) {
+const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets, chatSources, onChatSourcesChange }, ref) {
   // All chat state (transcripts, running flags, drafts, counters) lives in
   // chatStore — OUTSIDE this component — so background chats keep streaming
   // and nothing is lost when the sidebar collapses (unmount) or the workspace
@@ -1102,8 +1184,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           onClose={() => setShowHistory(false)}
           runningIds={runningIds}
           onDeleted={onDeletedSession}
-          hideReviewChats={hideReviewChats}
-          onHideReviewChatsChange={onHideReviewChatsChange}
+          chatSources={chatSources}
+          onChatSourcesChange={onChatSourcesChange}
         />
       )}
 

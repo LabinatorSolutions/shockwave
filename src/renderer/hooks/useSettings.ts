@@ -31,7 +31,7 @@ const DEFAULT_CANONICAL: Settings = {
   treeSortOrder: TREE_SORT_ORDERS.NAME_ASC,
   bookmarkFilterActive: false,
   showHiddenFiles: false,
-  hideReviewChats: false,
+  chatSources: null,
   windowBounds: null,
 };
 
@@ -61,7 +61,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // "Show hidden files" — the eye button above the tree. Display only; the tree
   // is re-read from disk when it flips (App owns that call).
   const [showHiddenFiles, setShowHiddenFilesState] = useState(false);
-  const [hideReviewChats, setHideReviewChatsState] = useState(false);
+  const [chatSources, setChatSourcesState] = useState<string[] | null>(null);
   const [dailyNote, setDailyNote] = useState<DailyNote>({ format: 'YYYY-MM-DD', folder: '', templatePath: '' });
   const dailyNoteRef = useSyncRef(dailyNote);
   const [templates, setTemplates] = useState<Templates>({ folder: '' });
@@ -165,11 +165,13 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     persistSettings({ showHiddenFiles: next });
   }, [persistSettings]);
 
-  // Whether self-improvement chats are listed. A view preference, machine-local
-  // like the rest of this group — the runs happen either way.
-  const onHideReviewChatsChange = useCallback((next: boolean) => {
-    setHideReviewChatsState(next);
-    persistSettings({ hideReviewChats: next });
+  // Which chat sources the history list shows. A view preference, machine-local
+  // like the rest of this group — the runs happen either way. `null` is "all",
+  // and staying null rather than seeding the full list is what keeps a source
+  // added later visible by default.
+  const onChatSourcesChange = useCallback((next: string[] | null) => {
+    setChatSourcesState(next);
+    persistSettings({ chatSources: next });
   }, [persistSettings]);
 
   // Daily-note + templates are per-workspace now: they live in the active
@@ -338,7 +340,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     };
     const bfa = !!disk.bookmarkFilterActive;
     const shf = !!disk.showHiddenFiles;
-    const hrc = !!disk.hideReviewChats;
+    const cs = Array.isArray(disk.chatSources) ? disk.chatSources : null;
     const tso: TreeSortOrder = typeof disk.treeSortOrder === 'string' ? disk.treeSortOrder : TREE_SORT_ORDERS.NAME_ASC;
     const ca: CodingAgentSettings = disk.codingAgent ?? settingsRef.current.codingAgent;
     const secrets: AgentSecret[] = Array.isArray(disk.agentSecrets) ? disk.agentSecrets : [];
@@ -359,7 +361,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       treeSortOrder: tso,
       bookmarkFilterActive: bfa,
       showHiddenFiles: shf,
-      hideReviewChats: hrc,
+      chatSources: cs,
       windowBounds: disk.windowBounds ?? null,
     };
     setThemeMode(tm);
@@ -367,7 +369,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     setTreePanel(tp);
     setBookmarkFilterActiveState(bfa);
     setShowHiddenFilesState(shf);
-    setHideReviewChatsState(hrc);
+    setChatSourcesState(cs);
     setTreeSortOrder(tso);
     if (disk.codingAgent) setCodingAgentSettings(ca);
     if (Array.isArray(disk.agentSecrets)) setAgentSecrets(secrets);
@@ -378,12 +380,12 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
 
   return {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
-    hideReviewChats,
+    chatSources,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
-    onBookmarkFilterActiveChange, onShowHiddenFilesChange, onHideReviewChatsChange,
+    onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onTimezoneChange,

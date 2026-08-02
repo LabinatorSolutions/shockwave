@@ -66,3 +66,20 @@ export const TREE_SORT_LABELS = Object.freeze({
   [TREE_SORT_ORDERS.CREATED_DESC]: 'Created (new → old)',
   [TREE_SORT_ORDERS.CREATED_ASC]: 'Created (old → new)',
 });
+
+// Where a chat came from — `chat.source`, as the companion stores it. Used by the
+// chat-history source filter, which is machine-local (a view preference) and
+// defaults to all of them.
+//
+// `desktop` is also the fallback for a row with no source: `agent-core` writes
+// `source ?? 'desktop'`, so a null is a pre-provenance chat rather than an unknown
+// kind, and filtering it out of "App" would hide history for a reason the user
+// can't see.
+export const CHAT_SOURCES = Object.freeze(['desktop', 'telegram', 'cron', 'review']);
+
+export const CHAT_SOURCE_LABELS = Object.freeze({
+  desktop: 'App',
+  telegram: 'Telegram',
+  cron: 'Scheduled',
+  review: 'Reviews',
+});

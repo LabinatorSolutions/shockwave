@@ -342,7 +342,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     caCheckoutPoolSize == null ? '' : String(caCheckoutPoolSize),
     (next) => updateCa({ checkoutPoolSize: next === '' ? undefined : Number(next) }),
   );
-  // 0 is meaningful here too — it turns self-improvement off — so it takes the
+  // 0 is meaningful here too — it turns review off — so it takes the
   // same explicit-blank form as the pool size rather than the shorthand above.
   const reviewField = useCommitField(
     caReviewInterval == null ? '' : String(caReviewInterval),
@@ -450,7 +450,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
         </Field>
 
         <Field>
-          <FieldLabel htmlFor="agent-review-interval">Self-Improvement Every</FieldLabel>
+          <FieldLabel htmlFor="agent-review-interval">Review Interval</FieldLabel>
           <div>
             <Input
               id="agent-review-interval"

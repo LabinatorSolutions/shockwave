@@ -357,7 +357,7 @@ export async function setRunning(db: Db, chatId: string, machine: string | null)
     .where(eq(chatTable.chatId, chatId));
 }
 
-// ── Self-improvement sweep ───────────────────────────────────────────────────
+// ── Reviews sweep ───────────────────────────────────────────────────
 
 /**
  * Chats with at least `threshold` tool calls since they were last reviewed.

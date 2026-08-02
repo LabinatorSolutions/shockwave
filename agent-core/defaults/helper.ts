@@ -89,7 +89,7 @@ This matters most on scheduled and unattended runs, where nobody sees your reply
 If sending fails (Telegram isn't connected), say so in your reply rather than treating the task as done.`;
 
 // The closing paragraph is about choosing BETWEEN tools, so it only makes sense
-// when `bash` is one of the choices. A run without it (a self-improvement run)
+// when `bash` is one of the choices. A run without it (a review run)
 // was being told to "reach for bash" for anything the other tools don't cover —
 // naming a tool it does not have, which is the same failure `REACHING_THE_USER`
 // is gated against below, and it reads as though the run is unrestricted.

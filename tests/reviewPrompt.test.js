@@ -1,4 +1,4 @@
-// The self-improvement prompt (agent-core/defaults/reviewPrompt.ts).
+// The review prompt (agent-core/defaults/reviewPrompt.ts).
 //
 // Why this is tested: the prompt IS the feature. Everything else — the trigger,
 // the tools, the guards — only decides that a run happens and what it may touch.
