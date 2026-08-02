@@ -290,6 +290,24 @@ export default function CompanionSection() {
             <p className="mt-1 text-muted-foreground">{message}</p>
           )}
 
+          {/* What's actually running over there. It used to surface ONLY as a
+              mismatch prompt, so the common case — the two agree — showed no
+              version at all, and "is my server current?" had no answer on the
+              page that owns the server. Read from the same `verCheck` the
+              mismatch rows use, so there is one version fact and it can't
+              disagree with itself.
+
+              Ephemeral by construction: `verCheck` is component state and this
+              section is conditionally mounted, so leaving the page drops it and
+              a stale version can never outlive the connection it described —
+              the same reason `disconnect` clears it. */}
+          {status === 'connected' && verCheck?.companion && (
+            <p className="mt-1 text-muted-foreground">
+              Running <span className="font-mono">{verCheck.companion}</span>
+              {verCheck.status === 'match' && <> &mdash; up to date</>}
+            </p>
+          )}
+
           {/* Connected on an approved certificate — show which one, so it can be
               checked against `shockwave-fingerprint` on the server at any time,
               not just during setup. Absent for a publicly-trusted certificate,
