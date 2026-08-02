@@ -76,8 +76,7 @@ One pino root; every subsystem logs through `logger(sub)` — a child with a `su
 - `scheduler.ts` — croner scheduler: one fire-cron per `cron.json` entry + a refresh cron that reconciles registrations non-destructively (ETag).
 - `cronRun.ts` — executes one cron run: checkout → agent turn (stream to feed) → deterministic check-in (git-fixer on conflict).
 - `backgroundSweeper.ts` — the clock for BOTH background processes: one croner tick that asks two questions and starts at most one run. See "Background runs" below.
-- `reviewRun.ts` — executes one review run (skills). `cronRun.ts` with a different trigger; same checkout → turn → `checkInWithFixer` shape.
-- `memoryRun.ts` — executes one memory run. Same shape again, a different prompt, and the narrowest tool set in the app (`memory` alone).
+- `backgroundRun.ts` — executes ONE background run of either kind: checkout → one turn under a watchdog → `checkInWithFixer`. The two kinds are `REVIEW` and `MEMORY`, four fields each (source, title, prompt builder). **Mechanism, not policy** — everything that makes the two processes different lives in the sweeper and the prompts, not here. It was two files first, and the diff between them was four string literals; the cost showed up as `timezone` being passed by one and not the other. `cronRun.ts` stays separate: it reads its prompt from `cron.json`, disposes one-time jobs, and delivers files, and shares the part that matters (`checkInWithFixer`).
 - `git.ts` — server-side git CLI: `prepareCheckout` (claim-or-reuse-or-shallow-clone), `cloneFresh`/`refreshPristine` (shared with the checkout queue), `checkIn` (add/commit → `syncAndPush`), `syncAndPush` (fetch/merge/push, one retry), `landed`, `cleanup`. **`WORK_BASE` is `DATA_BASE/work`** — on the `agent-data` volume beside `runs/` and `files/`. It used to read a `CRON_WORK_DIR` env var that was set nowhere, so it fell back to the container's temp dir: the one thing here expensive to rebuild was the only one not kept, and every restart or `POST /update` made the next message in every chat re-clone. Derived from `DATA_BASE` now, so there is no variable to forget. **The PAT is never in the remote URL.** `clone` and `remote set-url` both persist whatever URL they're given into `<dir>/.git/config`, and `<dir>` is the agent's own cwd for the turn — so an embedded PAT was a file the agent could read (`git remote -v`), granting write access to every repo the token covers, for `RUN_DIR_TTL_DAYS` after the run. Auth now goes through a `GITHUB_PAT` child env (`gitEnv`) answered by a credential helper passed **on the command line** — nothing on disk, same mechanism as the desktop's `src/main/sync.ts`. Existing checkouts predating this still hold the old URL — `prepareCheckout` rewrites it on reuse, but wipe `WORK_BASE` on deploy to be sure. **Every PAT-carrying call also gets `guards()`** — see the boxed rule below.
 - `gitFixer.ts` — LLM tool-loop (single `run_git` tool) that recovers merge conflicts and independently verifies the tree is clean with no surviving markers — trusting nothing the model claims. Retries up to `codingAgent.maxFixAttempts` (unset ⇒ 3), bounded overall by `codingAgent.maxRunMinutes`. It holds **no credentials**: it resolves and commits locally, and the caller pushes afterwards via `syncAndPush`. Deliberate — `run_git` is a model-controlled shell running over conflict text that came from outside, which is the last place a PAT should be reachable. Also exports **`checkInWithFixer`** — see the boxed rules below.
 - `github.ts` — `fetchCronJson` over the GitHub Contents API, ETag-conditional (304 = unchanged, free).
@@ -114,13 +113,22 @@ The checkout is the agent's own cwd for the turn, and `checkIn`/`syncAndPush` ru
 
 `tests/gitGuards.test.js` pins all of this against **real git**: each attack is planted and an actual push is run, because the claim is "git does not execute the agent's code while holding the token", and only git can settle that. It also checks the helper still answers for github.com — without that, a scoping typo would break sync silently instead of failing a test.
 
-### Every agent run checks in the SAME way — `checkInWithFixer`, never `checkIn`
+### Every agent run checks in the SAME way — and there is no other way left
 
-There are two server-side agent paths, cron (`cronRun.ts`) and Telegram (`telegram/webhook.ts`), and they are one operation with different triggers. Both call **`checkInWithFixer(dir, branch, message, auth, model, limits)`** (`gitFixer.ts`): deterministic `checkIn` → on `'conflict'`, hand to `gitFix` → `syncAndPush` when it verifies clean. **No agent path calls `git.ts`'s `checkIn` directly** — that function is the mechanical half, and reaching for it is how a path ends up with only half the policy.
+Three server-side agent paths — cron (`cronRun.ts`), Telegram (`telegram/webhook.ts`), and the two background kinds (`backgroundRun.ts`) — are one operation with different triggers. All call **`checkInWithFixer(dir, branch, message, auth, model, limits)`** (`gitFixer.ts`): stage and commit → push → on `'conflict'`, hand to `gitFix` → `syncAndPush` when it verifies clean.
 
-Which is exactly what happened. Telegram ran `checkIn(...).catch(() => {})` — no fixer, and the result discarded. A conflict left the turn's work committed-but-unpushed in the run's checkout, said nothing in chat, and the **next** message's `prepareCheckout` `reset --hard`'d it away: the failure and its evidence vanishing together, looking identical to a turn that saved fine. Telegram is if anything the more exposed path, since the user is typically at the desktop with sync pushing to the same repo while the bot works. A non-`'pushed'` result is now reported in-chat.
+**`git.ts` used to export `checkIn`, and it does not any more.** That function did the whole add → commit → fetch → merge → push but stopped at a conflict, which made it a second, incomplete way to save a run's work. Both were exported, both read as the answer, and picking the wrong one committed the work without ever pushing it while reporting nothing.
 
-**A third agent path must call `checkInWithFixer` too.** The turn is the part that differs between callers (prompt source, event sink, `unattended`, one-time-job disposal); landing the work is not.
+Which is exactly what happened. Telegram ran `checkIn(...).catch(() => {})` — no fixer, and the result discarded. A conflict left the turn's work committed-but-unpushed in the run's checkout, said nothing in chat, and the **next** message's `prepareCheckout` `reset --hard`'d it away: the failure and its evidence vanishing together, looking identical to a turn that saved fine.
+
+The fix is not a rule saying "call the other one" — a rule in a document is a thing to remember, and the whole failure mode was somebody not remembering. `git.ts` now exports only primitives that promise exactly what they do:
+
+| | does | does not |
+|---|---|---|
+| `commitAll(dir, message)` | stages everything, commits, returns false if there was nothing to commit | push |
+| `syncAndPush(dir, branch, auth)` | fetches, merges, pushes | commit |
+
+Neither can be mistaken for saving a run's work, because neither claims to. `checkInWithFixer` is the only place they are composed into a landing, and it is therefore the only thing there is to call. **A fourth agent path cannot get this wrong** — not because it is told not to, but because the wrong function no longer exists.
 
 ### Reusing a checkout: `fetch` (no `--depth`) then a GUARDED `reset --hard`
 
@@ -314,7 +322,7 @@ A `cron.json` entry with `"once": true` and an **ISO datetime** `schedule` (`"20
 
 **Registration latency is ~70s** — a desktop-authored edit needs a sync tick (10s) to reach GitHub plus a reconcile cycle (≤60s). One-time jobs less than ~2 minutes out don't reliably register; the helper prompt tells the agent to act immediately instead.
 
-## Background runs (`backgroundSweeper.ts`, `reviewRun.ts`, `memoryRun.ts`)
+## Background runs (`backgroundSweeper.ts`, `backgroundRun.ts`)
 
 The agent gets better at a workspace by writing down what it learned. It could already write skills and save facts, but only when a user thought to ask — so most of what was worth keeping was never captured. This removes the human trigger.
 

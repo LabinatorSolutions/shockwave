@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import { resolveModel } from '../../agent-core/agent.js';
-import { checkIn, syncAndPush, type CheckInResult, type GitAuth } from './git.js';
+import { commitAll, syncAndPush, type CheckInResult, type GitAuth } from './git.js';
 import { logger, errStr } from './log.js';
 
 const exec = promisify(execFile);
@@ -30,20 +30,36 @@ export interface FixLimits { attempts?: number; maxMs?: number }
 const DEFAULT_ATTEMPTS = 3;
 const DEFAULT_MAX_MS = 30 * 60_000;
 
-// The ONE way a companion agent run checks its work in. Every server-side agent
-// path calls THIS, never git.ts's checkIn directly — cron and Telegram are the
-// same operation with different triggers, and work that fails to land is the
-// same loss whoever asked for it.
+// The ONE way a companion agent run checks its work in — and now the only one
+// that exists, rather than the one a comment asked you to prefer.
 //
-// Telegram used to call checkIn alone and discard the result. So a conflict left
-// the turn's work committed-but-unpushed in the run's checkout, said nothing,
-// and the NEXT message's prepareCheckout reset --hard'd it away — the failure
-// and the evidence disappearing together. Two call sites, one of them missing
-// half the policy, is exactly the shape that hides for months.
+// Telegram used to call git.ts's `checkIn` instead and discard the result. That
+// function did the whole add → commit → push but stopped at a merge conflict, so
+// a conflict left the turn's work committed-but-unpushed in the run's checkout,
+// said nothing, and the NEXT message's prepareCheckout reset --hard'd it away —
+// the failure and the evidence disappearing together. Two exported functions
+// that both look like "save the work", one of them missing half the policy, is
+// exactly the shape that hides for months.
+//
+// So `checkIn` is gone. `git.ts` now exports only primitives whose names promise
+// exactly what they do — `commitAll` (stages and commits, does not push) and
+// `syncAndPush` (pushes, does not commit) — and this function is the sole place
+// they are composed into a landing. There is nothing left to call by mistake,
+// which is a better guarantee than a rule saying not to.
 export async function checkInWithFixer(
   dir: string, branch: string, message: string, auth: GitAuth, m: FixModel, limits: FixLimits = {},
 ): Promise<CheckInResult> {
-  const result = await checkIn(dir, branch, message, auth);
+  let result: CheckInResult;
+  try {
+    // Nothing staged is a clean run, not a failure — a review that found nothing
+    // to save is the common case, not the exception.
+    if (!await commitAll(dir, message)) return 'clean';
+    result = await syncAndPush(dir, branch, auth);
+  } catch (e: any) {
+    // The status is all the caller gets — the WHY lives here or nowhere.
+    log.error({ dir, branch, err: errStr(e) }, 'check-in failed');
+    return 'error';
+  }
   if (result !== 'conflict') return result;
   // The deterministic merge left markers → hand to the fixer, which resolves and
   // commits with NO credentials of its own. The push is ours, after it verifies.

@@ -41,8 +41,7 @@ import { Cron } from 'croner';
 import type { PgPool } from './db.js';
 import { getDb } from './db.js';
 import * as store from './store.js';
-import { runReview } from './reviewRun.js';
-import { runMemory } from './memoryRun.js';
+import { runBackground, REVIEW, MEMORY } from './backgroundRun.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('background');
@@ -116,9 +115,10 @@ export async function sweepOnce(pool: PgPool, key: Buffer, runtime: any): Promis
   log.info({ kind, source: sourceChatId, ws: workspaceId, count, chatId: runChatId }, 'chat is due');
 
   try {
-    const r = kind === 'review'
-      ? await runReview(pool, key, runtime, workspaceId, sourceChatId, runChatId)
-      : await runMemory(pool, key, runtime, workspaceId, sourceChatId, runChatId);
+    const r = await runBackground(
+      pool, key, runtime, kind === 'review' ? REVIEW : MEMORY,
+      workspaceId, sourceChatId, runChatId,
+    );
     if (r.checkIn === 'conflict' || r.checkIn === 'error') {
       log.error({ kind, source: sourceChatId, chatId: runChatId, checkIn: r.checkIn },
         'run finished but its changes did not reach GitHub');

@@ -219,7 +219,7 @@ async function nothingToLose(dir: string, branch: string): Promise<boolean> {
 // threw the link away.
 //
 // Nothing the guard declines to fold in is stranded: the turn's own `git add -A`
-// sweeps it into the next commit, and checkIn reconciles with the remote at the
+// sweeps it into the next commit, and the check-in reconciles with the remote at the
 // end.
 //
 // The accepted cost is two agents briefly sharing one folder. That is messy — a
@@ -324,24 +324,32 @@ export function landed(r: CheckInResult): boolean {
   return r === 'clean' || r === 'pushed';
 }
 
-// Deterministic check-in. add -A; nothing staged → clean. Else commit, fetch,
-// merge if the remote moved, push. One mechanical merge retry on non-fast-forward.
-// Returns 'conflict' when a merge conflict remains (caller hands to the git-fixer).
-export async function checkIn(dir: string, branch: string, message: string, auth: GitAuth): Promise<CheckInResult> {
-  try {
-    await git(dir, ['add', '-A']);
-    const { stdout: status } = await git(dir, ['status', '--porcelain']);
-    if (!status.trim()) return 'clean';
-    // No token on the commit, so a pre-commit hook gets nothing worth having —
-    // but --no-verify anyway, because a hook that can rewrite the tree between
-    // `add -A` and the commit changes what we are about to push.
-    await git(dir, ['commit', '--no-verify', '-m', message]);
-    return await syncAndPush(dir, branch, auth);
-  } catch (e: any) {
-    // The status is all the caller gets — the WHY lives here or nowhere.
-    log.error({ dir, branch, err: errStr(e) }, 'check-in failed');
-    return 'error';
-  }
+// Stage everything and commit. Returns false when there was nothing to commit.
+//
+// A PRIMITIVE, not a landing. It deliberately does not push, and its name says
+// so — which is the whole reason it replaced `checkIn`.
+//
+// `checkIn` used to live here and did the full add → commit → fetch → merge →
+// push. That made it a second, incomplete way to save a run's work: the complete
+// one (`checkInWithFixer`) repairs a merge conflict, and this one returned
+// 'conflict' and stopped. Both were exported, both looked like the answer, and
+// picking the wrong one committed the work without ever pushing it while
+// reporting nothing — which is precisely what Telegram did for months. The fix
+// is not a rule saying "call the other one": it is that there is no longer
+// anything here to call by mistake. Nobody mistakes `commitAll` for saving to
+// GitHub, because it doesn't claim to.
+//
+// The push half is `syncAndPush`, also exported, also obviously partial by name.
+// `gitFixer.ts` composes the two into the one landing operation.
+export async function commitAll(dir: string, message: string): Promise<boolean> {
+  await git(dir, ['add', '-A']);
+  const { stdout: status } = await git(dir, ['status', '--porcelain']);
+  if (!status.trim()) return false;
+  // No token on the commit, so a pre-commit hook gets nothing worth having —
+  // but --no-verify anyway, because a hook that can rewrite the tree between
+  // `add -A` and the commit changes what we are about to push.
+  await git(dir, ['commit', '--no-verify', '-m', message]);
+  return true;
 }
 
 // How many times syncAndPush will re-fetch and re-push when the remote moves
@@ -351,7 +359,7 @@ export async function checkIn(dir: string, branch: string, message: string, auth
 const PUSH_ATTEMPTS = 3;
 
 // Fetch, merge if the remote moved, push. Mechanical retries on non-fast-forward.
-// Split out of checkIn because the git-fixer path needs it on its own: the fixer
+// Separate from `commitAll` because the git-fixer path needs it on its own: the fixer
 // resolves and commits with NO credentials, and the push is done here afterwards,
 // deterministically.
 export async function syncAndPush(dir: string, branch: string, auth: GitAuth): Promise<CheckInResult> {
