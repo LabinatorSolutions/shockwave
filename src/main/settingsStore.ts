@@ -18,12 +18,10 @@ import {
   LOCAL_SETTINGS, isLocalKey, readLocalSettings, patchLocalSettings, getWorkspaceLocal,
   pruneWorkspaceLocal,
 } from './api/localSettings.js';
-// WHICH fields are credentials is declared once, in agent-core — the only code
-// bundled into both this build and the companion's. See agent-core/credentials.ts.
-import {
-  SETTINGS_CREDENTIALS, AGENT_SECRET_CREDENTIALS,
-  getPath, deletePath, setPathCopy, isSet,
-} from '../../agent-core/credentials.ts';
+// The strip itself is pure and lives beside this file so tests can load it
+// without electron. WHICH fields are credentials is declared once, in agent-core
+// — the only code bundled into both builds. See agent-core/credentials.ts.
+import { stripCredentials } from './settingsStrip.ts';
 
 // The ONLY defaults the desktop holds are LOCAL_SETTINGS (api/localSettings.ts) —
 // machine-local settings, which live in a userData file and never touch the DB.
@@ -33,63 +31,6 @@ import {
 // (no row); nothing here invents one, so the desktop can never show a value the DB
 // — and every other reader (Telegram, cron) — doesn't have. That mismatch was the
 // provider bug.
-
-/**
- * Strip every credential, replacing each with a "is one saved?" flag.
- *
- * Applied at the ONLY two places settings cross into the renderer — the
- * `settings:read` IPC and the `settings:changed` push. Main itself keeps the real
- * values: it needs them to run the agent, push to GitHub, and mint the voice
- * token. This is the main→renderer hop, not companion→main.
- *
- * The renderer never used the values for anything but painting them into a box, so
- * nothing loses a capability. What it loses is the ability to send one back — and
- * that was the actual hazard: it held every key and resent them on unrelated
- * edits, so any stale copy could overwrite the real thing.
- *
- * `has*` flags are what the boxes render dots from. A flag is not a secret.
- */
-function stripCredentials(settings: any): any {
-  if (!settings || typeof settings !== 'object') return settings;
-  let out: any = { ...settings };
-
-  for (const c of SETTINGS_CREDENTIALS) {
-    const value = getPath(out, c.path);
-    if (c.wildcard) {
-      // An open-ended map (provider slug -> key). The flag is a map too, so the
-      // box can show dots for whichever provider is selected.
-      const flags = Object.fromEntries(
-        Object.entries((value ?? {}) as Record<string, unknown>)
-          .filter(([, v]) => isSet(v))
-          .map(([k]) => [k, true]),
-      );
-      out = setPathCopy(deletePath(out, c.path), parentOf(c.path, c.flag), flags);
-    } else {
-      out = setPathCopy(deletePath(out, c.path), parentOf(c.path, c.flag), isSet(value));
-    }
-  }
-
-  if (Array.isArray(out.agentSecrets)) {
-    out.agentSecrets = out.agentSecrets.map((entry: any) => {
-      let next: any = { ...entry };
-      for (const c of AGENT_SECRET_CREDENTIALS) {
-        // accessToken/refreshToken get a flag too, though nothing renders them —
-        // the point is that they leave, not that they're reported.
-        next = setPathCopy(deletePath(next, c.path), parentOf(c.path, c.flag), isSet(getPath(next, c.path)));
-      }
-      return next;
-    });
-  }
-
-  return out;
-}
-
-/** `a.b.c` + flag `hasC` -> `a.b.hasC`. Keeps a flag beside the value it replaces. */
-function parentOf(path: string, flag: string): string {
-  const parts = path.split('.');
-  parts[parts.length - 1] = flag;
-  return parts.join('.');
-}
 
 // Broadcasts changed top-level keys + a fresh read to the renderer, for
 // main-initiated writes (OAuth refresh, window bounds). Credentials are
