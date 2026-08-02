@@ -1,6 +1,6 @@
 // PURE key policy + shape mapping for the settings layer. No electron, no db —
-// plain `.js` so `node --test` can exercise it directly, the same split as
-// cronScheduler.js (pure) vs cron.ts (stateful). settingsStore.ts is the
+// so `node --test` can exercise it directly, the same split as
+// cronScheduler (pure) vs cron.ts (stateful). settingsStore.ts is the
 // stateful half that does the crypto and SQL.
 //
 // Secrets no longer live in the `setting` table, so "is this key secret" is no

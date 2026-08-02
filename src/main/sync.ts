@@ -35,8 +35,8 @@ import { app } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ensureWorkspaceFiles } from '../../agent-core/defaults/files.js';
-// Folder classification + GitHub URL parsing live in a plain `.js` sibling with
-// no electron import, so `node --test` can exercise them directly. Re-exported
+// Folder classification + GitHub URL parsing live in a sibling module with no
+// electron import, so `node --test` can exercise them directly. Re-exported
 // here because this module is the public face of everything sync-related.
 import { classifyFolder, cloneUrlFor, repoMismatch } from './workspaceFolder.js';
 // Absolute path, resolved before the agent's shim dir joins PATH. See gitBinary.ts.

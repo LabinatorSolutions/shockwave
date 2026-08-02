@@ -4,8 +4,8 @@
 // readable. Kept separate and pure so swapping the speech engine can't change the
 // output format, and so the formats can be tested without a network call.
 //
-// Plain `.js` for the same reason as `credentials.ts` — `node --test` loads it
-// directly and both TypeScript builds import it without ceremony.
+// Dependency-free for the same reason as `credentials.ts` — `node --test` loads
+// it directly and both TypeScript builds import it without ceremony.
 //
 // A segment is `{ startMs, endMs, text, speaker? }`. That is the whole contract a
 // new engine has to satisfy.

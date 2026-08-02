@@ -1,6 +1,6 @@
-// PURE git-remote URL policy. No child_process, no fs — plain `.js` so
-// `node --test` can exercise it directly, the same split as `keys.ts` (pure) vs
-// `store.ts` (stateful).
+// PURE git-remote URL policy. No child_process, no fs, so `node --test` can
+// exercise it directly — the same split as `keys.ts` (pure) vs `store.ts`
+// (stateful).
 //
 // This exists because of one specific bug: the PAT used to be embedded in the
 // remote URL. `git clone <url>` and `git remote set-url` both persist whatever

@@ -1,8 +1,8 @@
 // What a folder IS, from the app's point of view — the question the
 // add-workspace flow asks before it decides anything else.
 //
-// Plain `.js` with no electron import, so `node --test` can exercise it against
-// real git repos in tmp dirs. Same split as `cronScheduler.js` vs `cron.ts`: the
+// No electron import, so `node --test` can exercise it against
+// real git repos in tmp dirs. Same split as `cronScheduler` vs `cron.ts`: the
 // decision is pure and testable, the wiring around it isn't.
 
 import { spawn } from 'node:child_process';

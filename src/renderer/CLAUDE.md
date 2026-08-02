@@ -159,7 +159,7 @@ That split is the whole fix for images not rendering. The optimistic row in `sen
 
 ### Voice input (composer mic button)
 
-The composer's microphone button uses `voice/useVoiceInput.js`, which streams 16kHz PCM via the Web Audio API + an inline `AudioWorklet` to AssemblyAI's real-time WebSocket. The flow:
+The composer's microphone button uses `voice/useVoiceInput.ts`, which streams 16kHz PCM via the Web Audio API + an inline `AudioWorklet` to AssemblyAI's real-time WebSocket. The flow:
 
 1. Renderer asks main for a short-lived (60s) streaming token via `voice:getToken`. The long-lived AssemblyAI API key never leaves main.
 2. `useVoiceInput` prefetches a token on mount and caches it for 50s; on click it consumes the cached token instantly and kicks off a background refresh so the next click is also instant. Without this, every click would pay the renderer→main→AssemblyAI round-trip.
@@ -244,7 +244,7 @@ Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD
 
 ### "Needs setup" badge — one rule, three readers
 
-`setupStatus.ts` (pure, plain `.js`, `tests/setupStatus.test.js`) answers one question per required item: **is it filled in?** `hooks/useSetupStatus.ts` gathers the two inputs that aren't in the settings object (the companion URL/key via `api:read`, git via `sync:checkGit`) and hands the flags to the **three** places that render them — the gear in `WorkspaceSelector`, the nav rows in `SettingsModal` (`BADGE_KEY_FOR_SECTION`), and the pages themselves. One definition is what stops them disagreeing.
+`setupStatus.ts` (pure, no React/window import, `tests/setupStatus.test.js`) answers one question per required item: **is it filled in?** `hooks/useSetupStatus.ts` gathers the two inputs that aren't in the settings object (the companion URL/key via `api:read`, git via `sync:checkGit`) and hands the flags to the **three** places that render them — the gear in `WorkspaceSelector`, the nav rows in `SettingsModal` (`BADGE_KEY_FOR_SECTION`), and the pages themselves. One definition is what stops them disagreeing.
 
 Load-bearing decisions, each of which was a live option:
 

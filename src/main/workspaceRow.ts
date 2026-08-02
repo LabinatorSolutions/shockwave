@@ -1,7 +1,7 @@
 // The renderer-facing shape of a workspace (see `WorkspaceEntry` in
 // src/shared/settings.ts).
 //
-// Plain `.js` with no electron import, so `node --test` can pin the one thing
+// No electron import, so `node --test` can pin the one thing
 // here that's easy to get silently backwards: the sync flag's polarity.
 //
 // Its own module rather than living in `workspaceFolder.ts` — that file answers

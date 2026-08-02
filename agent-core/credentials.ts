@@ -3,8 +3,10 @@
 // BOTH builds (the desktop's electron-vite build and the companion's esbuild —
 // see api/Dockerfile).
 //
-// Plain `.js` so `node --test` loads it directly and both TypeScript builds import
-// it without ceremony, same as `keys.ts` and `linkParser.ts`.
+// Dependency-free so `node --test` loads it directly and both TypeScript builds
+// import it without ceremony, same as `keys.ts` and `linkParser.ts`. (It was plain
+// `.js` for years for that first reason — the test suite runs off the source and
+// Node resolves specifiers literally. Tests naming the `.ts` file is what freed it.)
 //
 // It used to be written out three times: the companion deciding what to encrypt,
 // main deciding what to strip before the renderer, and the renderer deciding what

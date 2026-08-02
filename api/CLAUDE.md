@@ -2,7 +2,9 @@
 
 The **companion** is the backend the desktop app talks to over HTTP. It is the **single source of truth** for everything synced: settings, secrets, workspaces (identity), chats + transcripts, and Telegram/cron state. It also *runs the coding agent server-side* for Telegram messages and scheduled (cron) jobs, using the same `agent-core` runtime the desktop bundles. Postgres is private to the compose network; the companion holds the one master encryption key. Read the root `CLAUDE.md` first for terminology and the desktop side.
 
-Node 22 + Express 5 + Postgres (drizzle). Source is TypeScript + a couple of pure `.js` policy modules; esbuild bundles `src/` **and** `../agent-core` into `dist/server.js`.
+Node 22 + Express 5 + Postgres (drizzle). Source is TypeScript throughout — the pure policy modules (`keys.ts`, `gitRemote.ts`, `telegram/attachmentPolicy.ts`) used to be plain `.js` and no longer are. esbuild bundles `src/` **and** `../agent-core` into `dist/server.js`.
+
+**`npm run typecheck` here is the only thing that checks this tree.** esbuild strips types without looking at them, and the root tsconfig's `include` is `src/**` with nothing under it importing `api/`, so tsc never reached a single file in this directory. `api/tsconfig.json` covers `api/src/**` plus `../agent-core/**` — the latter deliberately, since this tree compiles agent-core into the server bundle and it should be checked against *this* manifest's dependency versions, not only the desktop's. Run it before you ship; the build will not tell you.
 
 ## Install (`install.sh`)
 

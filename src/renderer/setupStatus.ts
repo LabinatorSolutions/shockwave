@@ -1,7 +1,7 @@
 // Which required settings still have nothing in them.
 //
-// Pure + plain `.js` so `node --test` loads it directly and the renderer's TS
-// imports it without ceremony — same arrangement as `linkResolver.ts`.
+// Pure and dependency-free so `node --test` loads it directly and the
+// renderer's TS imports it without ceremony — same as `linkResolver.ts`.
 //
 // ONE definition, three readers: the gear badge, the settings nav badge, and the
 // page itself. They cannot disagree about whether something needs attention,

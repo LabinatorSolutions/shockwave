@@ -6,7 +6,7 @@ import {
   getPath, deletePath, setPathCopy, isSet,
 } from '../../agent-core/credentials.ts';
 
-// PURE patch-diffing for settings saves. Plain `.js` (no React, no window) so
+// PURE patch-diffing for settings saves. No React, no window, so
 // `node --test` can exercise it directly — same split as linkResolver.ts.
 //
 // Settings are stored one row per leaf key. Per-field setters necessarily build

@@ -10,7 +10,7 @@
 // checkout plus its attachment staging dir, the desktop only its workspace. So
 // `validateDeliveryPath` takes the roots as an argument rather than knowing them.
 //
-// Plain `.js` so `node --test` loads it directly and both TypeScript builds
+// Dependency-free so `node --test` loads it directly and both TypeScript builds
 // import it without ceremony, same as `credentials.ts` and `linkParser.ts`.
 //
 // Ported from hermes-agent (`gateway/platforms/base.py`), including the parts

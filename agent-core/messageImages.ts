@@ -11,7 +11,7 @@
 // `agentSend`, the companion does the same for Telegram, and both end up in the
 // same `content` array. One function covers both clients.
 //
-// Plain `.js` so `node --test` loads it directly and both TypeScript builds
+// Dependency-free so `node --test` loads it directly and both TypeScript builds
 // import it without ceremony — same arrangement as `mediaTags.ts` and
 // `credentials.ts` beside it.
 
