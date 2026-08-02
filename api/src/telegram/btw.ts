@@ -18,47 +18,30 @@ import { resolveModel } from '../../../agent-core/agent.js';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { ModelRegistry, AuthStorage } from '@earendil-works/pi-coding-agent';
 
-// Enough recent conversation to answer "what are you doing / what did we decide".
-// A working turn spends two rows per tool call, so 40 covered about twenty
-// commands — one busy turn, with the request that started it already pushed out
-// of view. The character budget below is the real bound now, so the row count can
-// be generous without risking the request size.
-const MAX_MESSAGES = 120;
+// Enough recent conversation to answer "what are you doing / what did we decide",
+// bounded so a long chat can't blow up the request.
+const MAX_MESSAGES = 40;
 const MAX_CHARS_PER_MESSAGE = 1500;
 
-// What the agent DID, not just what it said. A tool call's arguments and its
-// output are both stored (`message.tool_calls` / `message.content`) and both used
-// to be discarded here — every call rendered as a bare `[ran bash]`. That left
-// the model a transcript of the conversation with the work removed, so "which
-// directory / what command / what did it find" was unanswerable from data this
-// function already had in hand.
-//
-// Tool output is bulky, so it gets its own smaller per-row cap, and the whole
-// transcript gets a budget spent NEWEST-FIRST: when a working turn is long
-// enough to overflow, the trimming falls on the oldest rows and the most recent
-// work — which is what "what are you doing" is asking about — keeps its detail.
-const MAX_CHARS_PER_TOOL = 500;
-const MAX_TRANSCRIPT_CHARS = 24_000;
-
-// Tools whose RESULT is a usable credential. Showing the work is the point of
-// everything above, but this one returns the token itself (`agentTokens.ts`),
-// and `/btw`'s answer goes straight out as a Telegram message — so its output is
-// named and never quoted. The CALL is still shown: `get_agent_secret({"name":
-// "github"})` says what the agent reached for, which is the useful half, and the
-// name was never the secret. `list_agent_secrets` returns metadata only and is
-// deliberately not on this list.
+// Tools whose RESULT is a usable credential — `get_agent_secret` returns the
+// token itself (`agentTokens.ts`), and this answer goes straight out as a
+// Telegram message. A NAME MATCH, not a judgement: the output is never read into
+// the prompt, so there is nothing for the model to decide. `list_agent_secrets`
+// returns metadata only and is deliberately not on this list.
 const SECRET_OUTPUT_TOOLS = new Set(['get_agent_secret']);
 
 // The running tool can spew a large log; keep the TAIL, not the head — the newest
 // lines (e.g. the latest count) are what "what's it doing now" needs.
 const MAX_LIVE_TAIL_CHARS = 2000;
 
-const PROMPT = [
-  'You are answering a question ABOUT an ongoing conversation between a user and a coding agent.',
-  'You are not the coding agent and you are not part of that conversation — you are looking at it from outside.',
-  'The transcript shows the tools the agent ran, with the arguments it passed and the output it got back.',
-  'Use those to answer concretely — the commands, paths, files and results are there.',
-  'Answer only from the information below. If it does not say, say so plainly.',
+// The role, stated as what this IS. The next message is the question, so this
+// says so — it sets up a reader who has been handed a conversation and is about
+// to be asked about it, rather than an assistant wondering what the wall of text
+// in front of it is for.
+const ROLE = [
+  'You are an observer of an ongoing conversation between a user and a coding agent.',
+  'You have been given that conversation, and the message after this one is the user asking you about it — what the agent is doing, what was decided, where things stand.',
+  'Answer from what you were given. If it does not say, say so plainly.',
   'Be brief and concrete: two or three sentences, plain text, no markdown.',
 ].join('\n');
 
@@ -66,54 +49,19 @@ function tail(s: string, max = MAX_LIVE_TAIL_CHARS): string {
   return s.length <= max ? s : `…${s.slice(-max)}`;
 }
 
-// Head, not tail: a command's output is identified by how it starts (the listing,
-// the file, the error), where a STREAMING tool is identified by how it ends —
-// which is why `tail` above is the opposite and stays that way.
-function clip(s: string, max: number): string {
-  return s.length <= max ? s : `${s.slice(0, max)}…`;
-}
-
 function render(rows: any[]): string {
-  const out: string[] = [];
-  let budget = MAX_TRANSCRIPT_CHARS;
-  for (let i = rows.length - 1; i >= 0 && budget > 0; i--) {
-    const line = renderRow(rows[i]);
-    if (!line) continue;
-    const kept = clip(line, budget);
-    out.push(kept);
-    budget -= kept.length;
-  }
-  return out.reverse().join('\n');
+  return rows.map((r) => {
+    if (r.role === 'tool') return `[ran ${r.toolName ?? 'a tool'}]`;
+    const who = r.role === 'user' ? 'User' : 'Agent';
+    const body = (r.content ?? '').slice(0, MAX_CHARS_PER_MESSAGE);
+    const calls = r.toolCalls ? ` [calling ${summariseCalls(r.toolCalls)}]` : '';
+    return body || calls ? `${who}: ${body}${calls}` : '';
+  }).filter(Boolean).join('\n');
 }
 
-function renderRow(r: any): string {
-  if (r.role === 'tool') {
-    const name = r.toolName ?? 'a tool';
-    if (SECRET_OUTPUT_TOOLS.has(name)) return `[${name} returned a credential — not shown]`;
-    const output = clip((r.content ?? '').trim(), MAX_CHARS_PER_TOOL);
-    return output ? `[${name} returned]\n${output}` : `[ran ${name}]`;
-  }
-  const who = r.role === 'user' ? 'User' : 'Agent';
-  const body = clip(r.content ?? '', MAX_CHARS_PER_MESSAGE);
-  const calls = r.toolCalls ? ` [calling ${summariseCalls(r.toolCalls)}]` : '';
-  return body || calls ? `${who}: ${body}${calls}` : '';
-}
-
-// `name(args)`. The arguments are the half that carries the path, the command and
-// the pattern — the name alone says a tool ran and nothing about what it did.
 function summariseCalls(json: string): string {
-  try {
-    const calls = JSON.parse(json) || [];
-    const parts = calls.map((c: any) => `${c?.name ?? 'a tool'}(${clip(argsOf(c?.arguments), MAX_CHARS_PER_TOOL)})`);
-    return parts.join(', ') || 'a tool';
-  } catch { return 'a tool'; }
-}
-
-// pi hands arguments as an object; tolerate a pre-stringified one either way.
-function argsOf(args: any): string {
-  if (args == null) return '';
-  if (typeof args === 'string') return args;
-  try { return JSON.stringify(args); } catch { return ''; }
+  try { return (JSON.parse(json) || []).map((c: any) => c.name).join(', ') || 'a tool'; }
+  catch { return 'a tool'; }
 }
 
 /** Answer a question about a chat. Never throws — returns a readable message. */
@@ -163,9 +111,16 @@ export async function askAboutChat(
     const creds = await registry.getApiKeyAndHeaders(model);
     if (!creds?.ok) return 'I could not reach the model.';
 
+    // The role and the conversation are the SETUP, so they go in the system
+    // prompt; the user message is the question and nothing else. Both used to be
+    // one user turn, which left the instructions competing for attention with the
+    // transcript they were meant to be read against.
     const res = await completeSimple(
       model,
-      { messages: [{ role: 'user', content: `${PROMPT}\n\n--- FACTS ---\n${facts}\n\n--- TRANSCRIPT ---\n${render(recent)}${liveBlock}\n\n--- QUESTION ---\n${question}`, timestamp: Date.now() }] },
+      {
+        systemPrompt: `${ROLE}\n\n--- FACTS ---\n${facts}\n\n--- THE CONVERSATION ---\n${render(recent)}${liveBlock}`,
+        messages: [{ role: 'user', content: `Here is the question: ${question}`, timestamp: Date.now() }],
+      },
       { apiKey: creds.apiKey, headers: creds.headers, env: creds.env, maxTokens: 400 },
     );
     const text = (res?.content ?? []).filter((c: any) => c?.type === 'text').map((c: any) => c.text).join('').trim();
