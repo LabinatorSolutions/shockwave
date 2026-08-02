@@ -37,6 +37,16 @@ export interface PromptOpts {
    * deliberately not here (it would miss the session cache every turn).
    */
   timezone?: string;
+  /**
+   * The rendered MEMORY.md / USER.md blocks (`MemoryStore.renderForPrompt`).
+   *
+   * Passed in rather than read here because reading is async and
+   * `rebuildSystemPrompt` is not — and it must stay sync, since it is the resume
+   * path's one cheap operation. The caller (`bootSession`) is already async and
+   * already reads the workspace, so it does the read once and hands the text to
+   * both branches.
+   */
+  memory?: string;
 }
 
 // Build the full system prompt for the given workspace. Reads that workspace's
@@ -66,9 +76,12 @@ export function rebuildSystemPrompt(stored: string, opts: PromptOpts = {}): stri
 
 // Everything the helper gates on must be forwarded, not just used here. `source`
 // picks the tool list AND gates the companion-only sections; `scratchDir` names a
-// real directory in the Boundaries rules. Deriving one from the other is not the
-// same as passing it on — drop a forward and that section is present at session
-// boot and silently gone after the first rebuild.
+// real directory in the Boundaries rules; `memory` is the block itself. Deriving
+// one from the other is not the same as passing it on — drop a forward and that
+// section is present at session boot and silently gone after the first rebuild.
+// For `memory` that failure is worse than for the others: the agent would answer
+// the first message of a resumed chat knowing the user, and every message after
+// it not knowing them, with nothing in the logs to say why.
 function helperFor(opts: PromptOpts): string {
   return buildShockwaveHelper({
     tools: toolsForSource(opts.source),
@@ -76,5 +89,6 @@ function helperFor(opts: PromptOpts): string {
     source: opts.source,
     scratchDir: opts.scratchDir,
     timezone: opts.timezone,
+    memory: opts.memory,
   });
 }

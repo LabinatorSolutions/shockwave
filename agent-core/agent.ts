@@ -23,6 +23,7 @@ import { makeAgentTokenTools } from './agentTokens.js';
 import { makeTranscribeTool } from './transcribe.js';
 import { makeDailyNoteTool } from './dailyNoteTool.js';
 import { makeSkillTools } from './skillTool.js';
+import { makeMemoryTool } from './memoryTool.js';
 import { makeChatSearchTool, type ChatSearchHost } from './chatSearch.js';
 import { imagesOf } from './messageImages.js';
 
@@ -97,6 +98,17 @@ export interface RunOpts {
   unattended?: boolean; source?: string; sourceId?: string; cronTitle?: string;
   /** `settings.timezone` — named in the Scheduled runs prompt section. */
   timezone?: string;
+  /**
+   * Char budgets for MEMORY.md / USER.md (`codingAgent.memoryCharLimit` /
+   * `userCharLimit`). Unset ⇒ hermes' defaults, applied in `MemoryStore`.
+   *
+   * Read at session boot, so a change takes effect on the next boot rather than
+   * mid-chat. That matches the block in the prompt, which is a snapshot from the
+   * same moment — a limit and a usage line that disagreed would be worse than
+   * one that is a conversation out of date.
+   */
+  memoryCharLimit?: number;
+  userCharLimit?: number;
 }
 
 type Entry = {
@@ -121,6 +133,10 @@ type Entry = {
   /** `transcriptUpdatedAt` as of our last upload/boot. If the row's value moves
    *  past this, another client advanced the chat and our session is stale. */
   transcriptAt: number | null;
+  /** Clears the memory tool's per-turn failure budget. Called at the start of
+   *  every turn: a turn that fought a full store must not leave the next one
+   *  starting with its retries already spent. */
+  resetMemoryTurn: () => void;
 };
 
 const TITLE_PROMPT = 'Generate a short, descriptive title (3-7 words) for a conversation that starts with the following exchange. The title should capture the main topic or intent. Return ONLY the title text, nothing else. No quotes, no punctuation at the end, no prefixes.';
@@ -335,6 +351,21 @@ export function createAgentRuntime(host: AgentHost) {
         fs.writeFileSync(jsonlPath, content);
       }
     }
+    // One filtered list for this run's source, used three times: the names pi is
+    // allowed to run, what the prompt says the agent has, and which of the
+    // per-session tools below are worth building at all.
+    const allowed = activeToolNames(source);
+
+    // Built before the prompt because the prompt CONTAINS what it reads. One
+    // store, so the usage line the agent is shown and the budget the tool
+    // enforces are the same numbers.
+    const memoryHandle = makeMemoryTool(workspacePath, { memory: opts.memoryCharLimit, user: opts.userCharLimit });
+    // The block goes in regardless of whether this run can WRITE memory. It is
+    // knowledge about the user, and a review run writing skills is better for
+    // knowing it; only the how-to-save section is gated on holding the tool.
+    const memory = await memoryHandle.render();
+    const promptOpts = { unattended: !!unattended, source, scratchDir, timezone, memory };
+
     let sessionManager: any;
     let promptOverride: string;
     if (row && jsonlPath) {
@@ -342,26 +373,25 @@ export function createAgentRuntime(host: AgentHost) {
       // Keep the SOUL this chat was created with; rebuild the helper for THIS
       // run, so its tool list matches the side actually executing the turn.
       promptOverride = row.systemPrompt
-        ? rebuildSystemPrompt(row.systemPrompt, { unattended: !!unattended, source, scratchDir, timezone })
-        : await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir, timezone });
+        ? rebuildSystemPrompt(row.systemPrompt, promptOpts)
+        : await assembleSystemPrompt(workspacePath, promptOpts);
     } else {
       // A brand-new chat. If the row exists we'd be silently restarting a real
       // conversation from empty — refuse instead, so a lost transcript surfaces
       // rather than quietly truncating the chat.
       if (row) throw new Error('This chat\'s transcript is missing on the server, so it cannot be continued. Start a new chat.');
       sessionManager = SessionManager.create(workspacePath, sessionsDir, { id: chatId });
-      promptOverride = await assembleSystemPrompt(workspacePath, { unattended: !!unattended, source, scratchDir, timezone });
+      promptOverride = await assembleSystemPrompt(workspacePath, promptOpts);
     }
 
     const resourceLoader = new DefaultResourceLoader({ cwd: workspacePath, agentDir, systemPromptOverride: () => promptOverride });
     await resourceLoader.reload();
 
-    // One filtered list for this run's source, used twice: as the names pi is
-    // allowed to run, and (via the prompt above) as what the agent is told it
-    // has. pi filters CUSTOM tools against the allowlist too, so a host tool the
+    // pi filters CUSTOM tools against the allowlist too, so a host tool the
     // catalog doesn't name is dropped without a word — warn instead of leaving
-    // the agent to discover it mid-turn.
-    const allowed = activeToolNames(source);
+    // the agent to discover it mid-turn. (`allowed` is computed above, before
+    // the prompt, because the memory block has to be read first.)
+    //
     // Built per session because it writes into THIS chat's scratch pad.
     const transcribeTools = allowed.includes('transcribe')
       ? [makeTranscribeTool(host.getTranscription, scratchDir)]
@@ -386,6 +416,9 @@ export function createAgentRuntime(host: AgentHost) {
         trackReads: source === 'review',
       })
       : [];
+    // The handle is built above (the prompt needs its render); this only decides
+    // whether the run may WRITE. A memory run holds this and nothing else.
+    const memoryTools = allowed.includes('memory') ? memoryHandle.tools : [];
     const extraTools = host.extraTools.filter((t: any) => allowed.includes(t?.name));
     for (const t of host.extraTools) {
       if (!allowed.includes(t?.name)) console.warn(`[agent] host tool "${t?.name}" is not offered on ${source ?? 'desktop'} runs — add it to TOOL_CATALOG to enable it.`);
@@ -394,7 +427,7 @@ export function createAgentRuntime(host: AgentHost) {
     const { session } = await createAgentSession({
       cwd: workspacePath, agentDir, model: modelObj, thinkingLevel: level as any,
       authStorage, modelRegistry, sessionManager, resourceLoader,
-      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...dailyNoteTools, ...skillTools, ...extraTools],
+      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...dailyNoteTools, ...skillTools, ...memoryTools, ...extraTools],
       tools: allowed,
     });
 
@@ -405,6 +438,7 @@ export function createAgentRuntime(host: AgentHost) {
       emit: emitEvent, lastFailureError: null, modelObj, modelRegistry,
       sessionManager, sentIds: new Set<string>(), writeChain: Promise.resolve(), pending: [],
       transcriptAt: row?.transcriptUpdatedAt ?? null,
+      resetMemoryTurn: memoryHandle.resetTurn,
     };
 
     // Stamp every event with its chatId and hand it to the (single) sink. The
@@ -523,6 +557,7 @@ export function createAgentRuntime(host: AgentHost) {
 
     const entry = await ensureSession(chatId, opts, emitEvent);
     entry.lastFailureError = null;
+    entry.resetMemoryTurn();
     entry.running = true;
     // Mark running on the companion (this machine). Cleared only AFTER upload below.
     host.setRunning(chatId, host.machine).catch(() => { /* best-effort */ });

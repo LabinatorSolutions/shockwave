@@ -95,6 +95,14 @@ function toolSummary(toolName, args) {
       return a.pattern ?? a.path ?? '';
     case 'ls':
       return a.path ?? '';
+    // A batch is the shape the tool asks the model to prefer, so the default
+    // JSON dump would be a wall of escaped entries truncated mid-word. Say which
+    // store and how many changes; the expanded view still shows the arguments.
+    case 'memory': {
+      const store = a.target === 'user' ? 'user profile' : 'memory';
+      if (Array.isArray(a.operations)) return `${a.operations.length} change(s) to ${store}`;
+      return a.action ? `${a.action} ${store}` : store;
+    }
     default:
       try { return JSON.stringify(a).slice(0, 120); } catch { return ''; }
   }

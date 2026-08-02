@@ -111,6 +111,25 @@ export interface CodingAgentSettings {
   // opportunity, one turn with twelve tool calls usually is. Unset ⇒ 10, which is
   // what hermes and knack both default to.
   reviewInterval?: number;
+  // How many of YOUR messages a chat must accumulate before the companion looks
+  // it over for facts worth remembering about you. Counted from the last look,
+  // across every source, exactly like reviewInterval.
+  //
+  // Messages and not tool calls, because this is a different question from the
+  // review's. What the agent learns about you shows up in what you SAY — a chat
+  // that ran forty tool calls and two sentences reveals almost nothing about you,
+  // and one that ran none and twenty sentences may reveal a great deal. That is
+  // why the two are separate processes with separate counters rather than one
+  // pass doing both. Unset ⇒ 10, 0 disables. hermes' `memory.nudge_interval`.
+  memoryInterval?: number;
+  // Char budgets for MEMORY.md and USER.md. The cap is the mechanism, not a
+  // safety rail: a write that would exceed it is refused with the current
+  // entries attached and an instruction to consolidate, which is what keeps
+  // memory a curated page instead of an ever-growing log. Every entry is in
+  // every prompt, so the number is also the standing cost.
+  // Unset ⇒ 2200 / 1375, hermes' figures (~800 and ~500 tokens).
+  memoryCharLimit?: number;
+  userCharLimit?: number;
 }
 
 // OAuth connection state carried by an `oauth`-kind AgentSecret. The three

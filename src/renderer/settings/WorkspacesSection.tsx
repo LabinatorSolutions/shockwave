@@ -331,7 +331,10 @@ export default function WorkspacesSection({
         open={!!confirmResetWs}
         title="Reset default files"
         message={confirmResetWs
-          ? `Replace SOUL.md, AGENTS.md, .ignore, and .gitignore in "${confirmResetWs.name}" with the current defaults? Any edits you've made to them are overwritten — committed versions stay in the repo's history, but changes since the last sync are lost.`
+          // MEMORY.md and USER.md are named explicitly because a reset EMPTIES
+          // them, and what they hold is not something the user wrote and can
+          // retype — it is everything the agent has learned about them.
+          ? `Replace SOUL.md, AGENTS.md, .ignore, and .gitignore in "${confirmResetWs.name}" with the current defaults, and empty MEMORY.md and USER.md — everything the agent has learned about you and this workspace? Any edits you've made are overwritten — committed versions stay in the repo's history, but changes since the last sync are lost.`
           : ''}
         confirmLabel="Reset files"
         destructive

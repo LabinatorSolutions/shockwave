@@ -307,6 +307,9 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caScratchTtlDays = codingAgent?.scratchTtlDays;
   const caCheckoutPoolSize = codingAgent?.checkoutPoolSize;
   const caReviewInterval = codingAgent?.reviewInterval;
+  const caMemoryInterval = codingAgent?.memoryInterval;
+  const caMemoryCharLimit = codingAgent?.memoryCharLimit;
+  const caUserCharLimit = codingAgent?.userCharLimit;
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
@@ -318,6 +321,9 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     scratchTtlDays: caScratchTtlDays,
     checkoutPoolSize: caCheckoutPoolSize,
     reviewInterval: caReviewInterval,
+    memoryInterval: caMemoryInterval,
+    memoryCharLimit: caMemoryCharLimit,
+    userCharLimit: caUserCharLimit,
     ...patch,
   });
 
@@ -347,6 +353,23 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const reviewField = useCommitField(
     caReviewInterval == null ? '' : String(caReviewInterval),
     (next) => updateCa({ reviewInterval: next === '' ? undefined : Number(next) }),
+  );
+  // 0 turns the memory pass off, so this takes the explicit-blank form too.
+  const memoryField = useCommitField(
+    caMemoryInterval == null ? '' : String(caMemoryInterval),
+    (next) => updateCa({ memoryInterval: next === '' ? undefined : Number(next) }),
+  );
+  // The two budgets take the SHORTHAND, not the explicit-blank form: 0 is not a
+  // meaningful size, and a store that can hold nothing would fail every write
+  // with an error the agent cannot act on. `clampLimit` in agent-core refuses it
+  // anyway; mapping blank-or-zero to unset means the field agrees with that.
+  const memoryLimitField = useCommitField(
+    caMemoryCharLimit == null ? '' : String(caMemoryCharLimit),
+    (next) => updateCa({ memoryCharLimit: next ? Number(next) : undefined }),
+  );
+  const userLimitField = useCommitField(
+    caUserCharLimit == null ? '' : String(caUserCharLimit),
+    (next) => updateCa({ userCharLimit: next ? Number(next) : undefined }),
   );
   // Only the slot being typed into. The server merges rather than treating the map
   // as complete (see reconcileProviderKeys), so other providers' keys are untouched
@@ -465,6 +488,63 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
           </div>
           <FieldDescription>
             Tool calls a chat must reach before the agent reviews it and updates its own skills. Counted across the app, Telegram and scheduled runs. 0 turns it off.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-memory-interval">Memory Interval</FieldLabel>
+          <div>
+            <Input
+              id="agent-memory-interval"
+              className={NUMBER_FIELD}
+              type="number"
+              min={0}
+              placeholder="10"
+              value={memoryField.value}
+              onChange={(e) => memoryField.onChange(e.target.value)}
+              onBlur={memoryField.onBlur}
+            />
+          </div>
+          <FieldDescription>
+            Your messages a chat must reach before the agent looks it over for things worth remembering about you, and writes them to MEMORY.md and USER.md in the workspace. Counted across the app, Telegram and scheduled runs. 0 turns it off.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-memory-limit">Memory Max Chars</FieldLabel>
+          <div>
+            <Input
+              id="agent-memory-limit"
+              className={NUMBER_FIELD_WIDE}
+              type="number"
+              min={1}
+              placeholder="2200"
+              value={memoryLimitField.value}
+              onChange={(e) => memoryLimitField.onChange(e.target.value)}
+              onBlur={memoryLimitField.onBlur}
+            />
+          </div>
+          <FieldDescription>
+            How much MEMORY.md may hold. The limit is what keeps it curated — at capacity the agent must consolidate before it can save anything new. All of it is in every prompt.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-user-limit">User Profile Max Chars</FieldLabel>
+          <div>
+            <Input
+              id="agent-user-limit"
+              className={NUMBER_FIELD_WIDE}
+              type="number"
+              min={1}
+              placeholder="1375"
+              value={userLimitField.value}
+              onChange={(e) => userLimitField.onChange(e.target.value)}
+              onBlur={userLimitField.onBlur}
+            />
+          </div>
+          <FieldDescription>
+            The same for USER.md — what the agent knows about you.
           </FieldDescription>
         </Field>
       </SettingsGroup>

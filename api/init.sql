@@ -120,7 +120,13 @@ CREATE TABLE IF NOT EXISTS chat (
   -- `message.seq` it had reached. Work since then is what triggers a review, so
   -- this moves forward when a run STARTS — a run that fails must not make the
   -- same chat eligible again on the very next tick, forever.
-  last_reviewed_seq integer NOT NULL DEFAULT 0
+  last_reviewed_seq integer NOT NULL DEFAULT 0,
+  -- The same idea for the memory pass, which is a SEPARATE process with its own
+  -- trigger: how far it has looked. Two marks and not one because the two count
+  -- different things (your messages vs the agent's tool calls) and therefore
+  -- come due at different times — sharing a mark would make whichever ran first
+  -- silently mark the other's work as already examined.
+  last_memory_seq integer NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_chat_ws_updated ON chat (workspace_id, updated_at);
 -- Existing volumes (table already created before these columns) get them here.
@@ -137,6 +143,21 @@ BEGIN
   ) THEN
     ALTER TABLE chat ADD COLUMN last_reviewed_seq integer NOT NULL DEFAULT 0;
     UPDATE chat SET last_reviewed_seq = COALESCE(
+      (SELECT max(seq) FROM message WHERE message.chat_id = chat.id), 0
+    );
+  END IF;
+END $$;
+-- Same seeding for the memory mark, and for the same reason: at 0 every existing
+-- chat would be due the first time the tick ran, so the loop would open a run for
+-- every conversation in the database before it did anything useful.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'chat' AND column_name = 'last_memory_seq'
+  ) THEN
+    ALTER TABLE chat ADD COLUMN last_memory_seq integer NOT NULL DEFAULT 0;
+    UPDATE chat SET last_memory_seq = COALESCE(
       (SELECT max(seq) FROM message WHERE message.chat_id = chat.id), 0
     );
   END IF;

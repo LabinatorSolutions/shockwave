@@ -34,9 +34,9 @@
 // the user. agent.ts logs a warning if a host ever supplies an unnamed tool.
 
 /** Where a turn is running from — `RunOpts.source`. */
-export type ToolScope = 'desktop' | 'cron' | 'telegram' | 'review';
+export type ToolScope = 'desktop' | 'cron' | 'telegram' | 'review' | 'memory';
 
-export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review'];
+export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review', 'memory'];
 
 // A review run gets an EXPLICIT list, not the catalog minus a few
 // exclusions. That direction matters: with an exclusion list, every tool added
@@ -53,6 +53,17 @@ export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review'
 // tools (no credentialed work), `transcribe`, `open_file`, `daily_note`,
 // `search_chats`.
 const REVIEW_TOOLS = ['read', 'grep', 'find', 'ls', 'manage_skill'];
+
+// A memory run gets ONE tool, for the same reason the review list is explicit
+// and for one more: it has nothing to look up. Its whole input is the
+// conversation it was handed and the current memory, and the current memory is
+// already in its prompt — rendered from disk at the boot of that very run. There
+// is no file it could usefully read, so giving it `read`/`grep` would widen the
+// one run nobody is watching in exchange for nothing.
+//
+// hermes restricts its memory fork the same way (`review_toolsets` is the memory
+// toolset alone when only the memory trigger fired).
+const MEMORY_TOOLS = ['memory'];
 
 export interface ToolDescriptor {
   name: string;
@@ -85,6 +96,12 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   { name: 'daily_note', origin: 'custom', desc: "Find the user's daily note (journal) for a date — today by default — and create it from their template if asked. Returns the workspace-relative path. Use this instead of guessing a filename: the name and folder come from per-workspace settings." },
   // The agent's memory of earlier conversations in this workspace.
   { name: 'search_chats', origin: 'custom', desc: 'Search earlier chats in this workspace — what the user told you before, what was decided, what you already tried. Pass `query` to search, `chatId` + `around` to read more of one, or nothing to list recent chats. Results carry dates; prefer recent ones when they disagree.' },
+  // Every source. The memory pass exists because an agent forgets to save
+  // unprompted, not because saving is a background-only act — "remember that I
+  // hate long replies" has to work the moment it is said, in the chat where it
+  // was said. hermes puts its memory tool in the ordinary toolset for exactly
+  // this reason and treats the background pass as the safety net.
+  { name: 'memory', origin: 'custom', desc: "Save a durable fact about the user (`user`) or about working in this workspace (`memory`). Use it the moment you learn a preference, a correction, or a stable fact — don't wait to be asked. Actions: add, replace, remove, or an `operations` batch applied atomically." },
   // Every source, like hermes: one validated way to author a skill, whoever is
   // asking. The guards inside it differ by caller, not the tool.
   { name: 'manage_skill', origin: 'custom', desc: 'Create or update one of your own skills — validated before it is written, so use it rather than editing a SKILL.md by hand. Actions: create, patch (preferred for fixes), edit, write_file, remove_file. Skills the user provided and the ones built into the app are read-only to you.' },
@@ -93,9 +110,11 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
 /** The catalog as offered to a turn running from `source`. */
 export function toolsForSource(source: string | undefined): ToolDescriptor[] {
   const s = (source || 'desktop') as ToolScope;
-  // A review run takes the explicit list rather than the catalog-minus-`only`
-  // filter, so a newly added tool is excluded by default. See REVIEW_TOOLS.
+  // The two background runs take explicit lists rather than the
+  // catalog-minus-`only` filter, so a newly added tool is excluded by default.
+  // See REVIEW_TOOLS / MEMORY_TOOLS.
   if (s === 'review') return TOOL_CATALOG.filter((t) => REVIEW_TOOLS.includes(t.name));
+  if (s === 'memory') return TOOL_CATALOG.filter((t) => MEMORY_TOOLS.includes(t.name));
   return TOOL_CATALOG.filter((t) => !t.only || t.only.includes(s));
 }
 

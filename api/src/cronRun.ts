@@ -98,6 +98,8 @@ export async function runCronJob(
         wsBuiltinSkills,
         unattended: true, source: 'cron', cronTitle: jobName,
         timezone: settings.timezone,   // same zone the scheduler evaluates cron.json in
+        // Same budgets every other run writes against — see RunOpts in agent-core.
+        memoryCharLimit: ca.memoryCharLimit, userCharLimit: ca.userCharLimit,
       },
       (event: any) => {
         if (event?.type === 'agent_end') finalMessages = event.messages;

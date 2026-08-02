@@ -78,56 +78,16 @@ If a tool failed because of setup state, capture the FIX (install command, confi
 
 'Nothing to save.' is a real option but should NOT be the default. If the session ran smoothly with no corrections and produced no new technique, just say 'Nothing to save.' and stop. Otherwise, act.`;
 
-/** One stored message, as `store.getMessages` returns it. */
-export interface RenderableMessage {
-  role: string;
-  content?: string | null;
-  toolName?: string | null;
-  toolCalls?: string | null;
-}
+// Rendering a stored conversation moved to `conversation.ts` when the memory run
+// arrived and needed the same thing. Re-exported here because this module's
+// callers (and its test) have always named it from this file, and because the
+// two are still one operation from a reader's point of view: take a stored
+// conversation, hand it to a model with an instruction.
+export { renderConversation, type RenderableMessage } from './conversation.ts';
 
-/**
- * Render a stored conversation as plain text for the run to read.
- *
- * The transcript goes in as TEXT inside one user message rather than being
- * replayed as structured messages. knack does the same, and the reason is worth
- * keeping: replayed tool-call parts have to be valid against the tools the
- * current run holds, and a review run holds a different, smaller set. As text
- * there is nothing to validate and nothing to reconcile.
- *
- * Tool output is included. It is bounded before it ever reaches us — pi
- * truncates tool results at 2000 lines or 50KB, whichever comes first — and both
- * hermes and knack replay results in full, because "the command failed like
- * this and here is what fixed it" is most of what a skill is made of.
- *
- * Reasoning is skipped: large, and not what a skill is written from.
- */
-export function renderConversation(messages: RenderableMessage[]): string {
-  const lines: string[] = [];
-  for (const m of messages) {
-    const text = (m.content ?? '').trim();
-    if (m.role === 'user') {
-      if (text) lines.push(`USER: ${text}`);
-    } else if (m.role === 'assistant') {
-      // The names of the tools it decided to call, in order. The arguments live
-      // on the row as JSON; the call is what shows the approach.
-      let calls: string[] = [];
-      try {
-        const parsed = m.toolCalls ? JSON.parse(m.toolCalls) : null;
-        if (Array.isArray(parsed)) {
-          calls = parsed.map((c: any) => c?.name || c?.function?.name || 'tool').filter(Boolean);
-        }
-      } catch { /* unparseable tool_calls must not lose the message's text */ }
-      if (calls.length) lines.push(`ASSISTANT [called ${calls.join(', ')}]`);
-      if (text) lines.push(`ASSISTANT: ${text}`);
-    } else if (m.role === 'tool') {
-      lines.push(`TOOL ${m.toolName ?? 'result'}: ${text}`);
-    }
-  }
-  return lines.join('\n');
-}
+import { promptOverConversation, type RenderableMessage as Msg } from './conversation.ts';
 
 /** The full prompt for a review run: the conversation, then the instruction. */
-export function buildReviewPrompt(messages: RenderableMessage[]): string {
-  return `Here is the conversation to review:\n\n<conversation>\n${renderConversation(messages)}\n</conversation>\n\n${SKILL_REVIEW_PROMPT}`;
+export function buildReviewPrompt(messages: Msg[]): string {
+  return promptOverConversation(messages, SKILL_REVIEW_PROMPT);
 }

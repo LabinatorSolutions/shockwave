@@ -254,6 +254,29 @@ Do NOT use (they'll render as raw text):
 - Strikethrough (\`~~text~~\`).
 - Task checkboxes without a leading bullet.`;
 
+// Included only when the `memory` tool survives the filter, the same rule
+// `REACHING_THE_USER` and `DAILY_NOTES` follow: a section telling the agent to
+// reach for a tool it does not have is worse than saying nothing.
+//
+// This is the WHEN. The what-to-save rules live in the tool description
+// (`memoryTool.ts`, hermes' text) and are deliberately not repeated here —
+// two statements of the same rules is how they drift apart. What this section
+// adds is the part the tool description cannot know: that these are two real
+// files in the user's workspace, which the user can open and edit, and which the
+// agent must therefore not treat as a private store.
+const MEMORY = `# Memory
+
+You keep two files at the workspace root:
+
+- \`MEMORY.md\` — what you have learned about working here: conventions, environment facts, where things are, what went wrong before.
+- \`USER.md\` — who the user is: their role, preferences, how they want you to work.
+
+Both are loaded into your prompt at the start of every chat, so anything saved there is something you will know next time without being told again. That is the point of them: the user should never have to repeat a preference twice.
+
+Write them with the \`memory\` tool rather than editing the files directly — it enforces a size budget and tells you when you are near it. Save the moment you learn something durable rather than waiting to be asked.
+
+They are ordinary files the user can open and edit. If they have written something there themselves, it is theirs — work with it, don't tidy it away.`;
+
 const SKILLS = `# Creating skills
 
 If the user asks you to create a skill, "remember this for next time," or capture a workflow as a reusable skill, do it. Otherwise, if you think a skill *would* be useful but the user didn't ask, propose it in one sentence and wait for confirmation before writing any files.
@@ -293,8 +316,8 @@ Skills are scanned at session boot. After writing the files, tell the user to cl
 // sections — it is NOT derivable from `tools`, so every caller must pass it (see
 // `rebuildSystemPrompt` in index.ts, which forwards it for exactly this reason).
 export function buildShockwaveHelper(
-  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, timezone }:
-    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; timezone?: string } = {},
+  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, timezone, memory }:
+    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; timezone?: string; memory?: string } = {},
 ): string {
   return [
     HELPER_MARK,
@@ -313,13 +336,28 @@ export function buildShockwaveHelper(
     WIKILINKS,
     ASSOCIATION,
     DUPLICATE_BASENAMES,
-    LINK_GRAPH,
+    // Gated on `grep` for the same reason `REACHING_THE_USER` is gated on
+    // `send_message`: this section IS a how-to for that tool — it hands over a
+    // regex to run with it. A memory run has neither the tool nor any reason to
+    // walk the graph, and would be reading an instruction it cannot follow.
+    ...(tools.some((t) => t.name === 'grep') ? [LINK_GRAPH] : []),
     EXTENDING_GRAPH,
     ...(tools.some((t) => t.name === 'daily_note')
       ? [DAILY_NOTES(tools.some((t) => t.name === 'open_file'))]
       : []),
+    ...(tools.some((t) => t.name === 'memory') ? [MEMORY] : []),
     MARKDOWN,
-    SKILLS,
+    // Same rule again. Authoring guidance for a run that cannot author is the
+    // clearest possible case of describing a capability that isn't there.
+    ...(tools.some((t) => t.name === 'manage_skill') ? [SKILLS] : []),
     SCHEDULED_RUNS(timezone),
+    // The memory CONTENT goes last, closest to the conversation — hermes puts it
+    // in the volatile tier at the end of its prompt for the same reason. It is
+    // rendered from disk at every session boot and lives after HELPER_MARK, so
+    // `rebuildSystemPrompt` refreshes it on resume: a fact saved in one chat is
+    // known by the next, while the current chat keeps the snapshot it started
+    // with. That is hermes' frozen-snapshot behaviour, arrived at by putting the
+    // block on the right side of a seam we already had.
+    ...(memory ? [memory] : []),
   ].join('\n\n');
 }

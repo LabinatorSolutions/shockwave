@@ -59,9 +59,24 @@ export interface DefaultFile {
   purpose: string;
 }
 
+// The two memory files are seeded EMPTY, deliberately. Their content is written
+// by the agent through the `memory` tool, which appends `§`-delimited entries —
+// so a stub with prose in it would parse as the agent's first memory and be
+// carried into every prompt until something removed it. Zero bytes reads as an
+// empty store everywhere (`parseEntries('')` is `[]`), and seeding them at all
+// is only so they show up in the workspace as somewhere the agent writes.
+//
+// They are in this manifest, which means "Reset to defaults" blanks them along
+// with everything else. That is the accepted cost of having them here — the
+// renderer names them in its confirmation for that reason.
+export const MEMORY_FILENAME = 'MEMORY.md';
+export const USER_FILENAME = 'USER.md';
+
 export const DEFAULT_FILES: DefaultFile[] = [
   { name: SOUL_FILENAME, content: `${DEFAULT_SOUL}\n`, purpose: "The agent's identity for this workspace" },
   { name: AGENTS_FILENAME, content: AGENTS_STUB, purpose: 'Your project-specific instructions to the agent' },
+  { name: MEMORY_FILENAME, content: '', purpose: 'What the agent has learned about working here' },
+  { name: USER_FILENAME, content: '', purpose: 'What the agent has learned about you' },
   { name: IGNORE_FILENAME, content: DEFAULT_IGNORE, purpose: 'Paths the agent should skip when searching' },
   { name: GITIGNORE_FILENAME, content: DEFAULT_GITIGNORE, purpose: 'Paths git should not track' },
 ];

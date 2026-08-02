@@ -9,7 +9,11 @@ export {
   EDITOR_ACTIONS,
   SUPPORTED_PROVIDER_SLUGS,
   DEFAULT_PROVIDER_SLUG,
-} from '../shared/constants';
+// Spelled `.ts` because `tests/chatSources.test.js` loads this module, and
+// `node --test` resolves a specifier literally — no extensionAlias, so an
+// extensionless (or `.js`) specifier does not find `constants.ts`. See the
+// import rule in the root CLAUDE.md.
+} from '../shared/constants.ts';
 
 export const SETTINGS_SECTIONS = Object.freeze({
   COMPANION: 'companion',
@@ -75,11 +79,18 @@ export const TREE_SORT_LABELS = Object.freeze({
 // `source ?? 'desktop'`, so a null is a pre-provenance chat rather than an unknown
 // kind, and filtering it out of "App" would hide history for a reason the user
 // can't see.
-export const CHAT_SOURCES = Object.freeze(['desktop', 'telegram', 'cron', 'review']);
+// **Every `chat.source` the companion can write must be listed here.** A missing
+// one is not a missing checkbox: chats of that kind stay visible while the filter
+// is `null` (all), and become invisible with no way to turn them back on the
+// moment the user narrows it once — and `allSelected` reads as true while they
+// are hidden, so the UI says everything is shown. `memory` was added with the
+// memory pass for exactly this reason.
+export const CHAT_SOURCES = Object.freeze(['desktop', 'telegram', 'cron', 'review', 'memory']);
 
 export const CHAT_SOURCE_LABELS = Object.freeze({
   desktop: 'App',
   telegram: 'Telegram',
   cron: 'Scheduled',
   review: 'Reviews',
+  memory: 'Memory',
 });

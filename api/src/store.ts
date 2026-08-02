@@ -381,8 +381,10 @@ export async function setRunning(db: Db, chatId: string, machine: string | null)
  * separate counter to drift.
  *
  * Excluded, and each for its own reason:
- *   • `source='review'` — a review run makes tool calls like any chat, so
- *     without this it crosses the threshold and reviews itself, forever.
+ *   • `source='review'` and `source='memory'` — a background run makes tool
+ *     calls and holds a conversation like any chat, so without this it crosses
+ *     the threshold and examines itself, forever. BOTH are excluded from BOTH
+ *     sweeps: the memory run's messages must not make it due for review either.
  *   • `running` — the conversation isn't finished; reviewing a half-written turn
  *     reads a partial. It becomes eligible again on the next tick.
  *   • deleted chats — nothing to learn from, and the checkout is gone.
@@ -393,33 +395,102 @@ export async function chatsDueForReview(db: Db, threshold: number, limit = 5) {
   const rows = await db.execute(sql`
     select c.id            as "chatId",
            c.workspace_id  as "workspaceId",
-           count(m.seq)::int as "toolCalls",
+           count(m.seq)::int as "count",
            -- The chat's OWN high-water mark, not max(m.seq): the join is
            -- filtered to tool rows, so that would stop short of the assistant's
            -- closing message. The run reads the whole conversation, so the mark
            -- has to record the whole conversation or it understates what was
            -- reviewed.
-           (select max(seq) from message where chat_id = c.id)::int as "maxSeq"
+           (select max(seq) from message where chat_id = c.id)::int as "maxSeq",
+           -- When the oldest unexamined row landed. The one tick runs at most
+           -- one thing, so it needs a way to pick fairly between two due chats;
+           -- without this, whichever process is asked first always wins and the
+           -- other starves behind a permanent backlog.
+           min(m.created_at)::bigint as "oldest"
       from chat c
       join message m
         on m.chat_id = c.id
-       and m.seq > c.last_reviewed_seq
+       and m.seq > ${selfSaveMark('last_reviewed_seq', 'manage_skill')}
        and m.role = 'tool'
      where c.deleted = false
        and c.running = false
-       and coalesce(c.source, '') <> 'review'
+       and coalesce(c.source, '') not in ('review', 'memory')
      group by c.id, c.workspace_id
     having count(m.seq) >= ${threshold}
      order by min(m.created_at) asc
      limit ${limit}
   `);
-  return (rows.rows ?? []) as Array<{ chatId: string; workspaceId: string; toolCalls: number; maxSeq: number }>;
+  return (rows.rows ?? []) as unknown as DueChat[];
+}
+
+/**
+ * Chats with enough of the USER's messages since the memory pass last looked.
+ *
+ * Deliberately a near-copy of `chatsDueForReview` rather than one function with
+ * a role parameter. The two are separate processes and the queries differ in
+ * what they count (`role='user'` vs `role='tool'`), which mark they read, and
+ * which self-save clears them — three of the five moving parts. Merging them
+ * would put a branch in each of those spots, which is how the next change to one
+ * process silently lands in the other.
+ */
+export async function chatsDueForMemory(db: Db, threshold: number, limit = 5) {
+  const rows = await db.execute(sql`
+    select c.id            as "chatId",
+           c.workspace_id  as "workspaceId",
+           count(m.seq)::int as "count",
+           (select max(seq) from message where chat_id = c.id)::int as "maxSeq",
+           min(m.created_at)::bigint as "oldest"
+      from chat c
+      join message m
+        on m.chat_id = c.id
+       and m.seq > ${selfSaveMark('last_memory_seq', 'memory')}
+       and m.role = 'user'
+     where c.deleted = false
+       and c.running = false
+       and coalesce(c.source, '') not in ('review', 'memory')
+     group by c.id, c.workspace_id
+    having count(m.seq) >= ${threshold}
+     order by min(m.created_at) asc
+     limit ${limit}
+  `);
+  return (rows.rows ?? []) as unknown as DueChat[];
+}
+
+export interface DueChat { chatId: string; workspaceId: string; count: number; maxSeq: number; oldest: number }
+
+/**
+ * The point past which work counts: the stored mark, OR wherever the agent last
+ * did this job ITSELF in an ordinary chat, whichever is further along.
+ *
+ * hermes resets the equivalent counter whenever the foreground agent calls the
+ * tool (`tool_executor.py`), and we never ported that half — so a chat where the
+ * user said "remember that" and the agent did was still counted as owing the
+ * work, and got a background run to learn something already learned.
+ *
+ * Computed rather than stored, from `message.tool_name`, which we already write
+ * per tool row. Nothing has to reach back from `agent-core` into Postgres to
+ * move a counter, which is what made this cheap enough to be worth having.
+ */
+function selfSaveMark(markColumn: 'last_reviewed_seq' | 'last_memory_seq', toolName: 'manage_skill' | 'memory') {
+  return sql`greatest(
+    c.${sql.raw(markColumn)},
+    coalesce((select max(x.seq) from message x
+               where x.chat_id = c.id and x.role = 'tool' and x.tool_name = ${toolName}), 0)
+  )`;
 }
 
 /** Move a chat's review watermark forward. Called before the run, not after. */
 export async function setLastReviewedSeq(db: Db, chatId: string, seq: number) {
   await db.update(chatTable)
     .set({ lastReviewedSeq: seq })
+    .where(eq(chatTable.chatId, chatId));
+}
+
+/** Move a chat's memory watermark forward. Called before the run, not after.
+ *  Only ever this mark — a memory run must never advance the review's. */
+export async function setLastMemorySeq(db: Db, chatId: string, seq: number) {
+  await db.update(chatTable)
+    .set({ lastMemorySeq: seq })
     .where(eq(chatTable.chatId, chatId));
 }
 

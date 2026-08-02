@@ -1845,7 +1845,7 @@ ipcMain.handle('agent:send', async (evt, { chatId, text, images }) => {
     if (settings.timezone) process.env.TZ = settings.timezone;
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, baseUrl, contextWindow, thinkingLevel, providerKeys } = settings.codingAgent ?? {};
+    const { provider, model, baseUrl, contextWindow, thinkingLevel, providerKeys, memoryCharLimit, userCharLimit } = settings.codingAgent ?? {};
     const apiKey = providerKeys?.[provider] ?? '';
     // Built-in skill on/off is per-workspace only; it lives in the workspace file.
     const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
@@ -1865,6 +1865,7 @@ ipcMain.handle('agent:send', async (evt, { chatId, text, images }) => {
         thinkingLevel,
         wsBuiltinSkills: wsData?.builtinSkills ?? {},
         timezone: settings.timezone,   // same zone the companion's scheduler evaluates cron.json in
+        memoryCharLimit, userCharLimit,   // the memory tool's budgets — see RunOpts
       },
       // Desktop emit routes to BOTH sinks: the renderer (IPC) and the companion
       // live feed, so other clients watching this chat see the turn stream.

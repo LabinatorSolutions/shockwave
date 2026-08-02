@@ -47,7 +47,11 @@ The `emit` sink is passed **per `agentSend` call**, not stored on the host — s
 - `manageSkill.ts` — the five actions (`create`/`edit`/`patch`/`write_file`/`remove_file`) behind `manage_skill`. **No `delete`** — hermes' delete carries a fail-closed consolidation guard, `absorbed_into` validation, rmtree containment and an archive-vs-remove branch, all of it serving a curator we do not have.
 - `fuzzyMatch.ts` — the 9-strategy patcher behind `patch`, ported from hermes `tools/fuzzy_match.py`. **Not from knack's TypeScript copy**, which predates four fixes; each is pinned by a named test in `tests/fuzzyMatch.test.js`.
 - `skillTool.ts` — the `manage_skill` pi tool, plus the `read` override that makes read-before-write possible. One factory because they share the set of files this run has loaded.
-- `defaults/reviewPrompt.ts` — the review instruction (hermes' `_SKILL_REVIEW_PROMPT`, extracted by AST, eight documented substitutions) + rendering a stored conversation to text.
+- `memoryStore.ts` — **the two memory files and everything that decides whether a write to them is correct**: the `§` format, the char budget, substring matching, the atomic write, and a per-path lock. Ported from hermes `tools/memory_tool.py`. Five documented departures, of which two are load-bearing here and nowhere else: the files live **in the workspace repo** (root `MEMORY.md` / `USER.md`, beside `SOUL.md`), and writes are serialized by an **in-process promise chain per path** — the desktop runs several chats against ONE workspace folder, and a naive read-modify-write loses an entry outright, measured. hermes' drift refusal and `.bak` snapshots are deliberately NOT ported: they protect a machine-owned file from human edits, and here the user opening these files in the editor is the point. Pinned by `tests/memoryStore.test.js`, including the two failure modes that were measured before being fixed (concurrent loss, and an unreadable file rewritten as empty).
+- `memoryTool.ts` — the `memory` pi tool. Built per session with the workspace and its budgets closed over, same shape as `makeDailyNoteTool`. **The description IS the behaviour** — hermes' `MEMORY_SCHEMA["description"]`, extracted by AST, one substitution (`session_search` → `search_chats`). The batch shape it tells the model to prefer is what lets one call free space and add together; the "don't repeat it" clause is what stops the same write being reissued five times. Returns a `render()` for the prompt block and a `resetTurn()` the runtime calls at the start of every turn.
+- `defaults/conversation.ts` — rendering a stored conversation to text, shared by the two background runs. They are separate processes; this is the one thing they legitimately share.
+- `defaults/reviewPrompt.ts` — the review instruction (hermes' `_SKILL_REVIEW_PROMPT`, extracted by AST, eight documented substitutions).
+- `defaults/memoryPrompt.ts` — the memory instruction (hermes' `_MEMORY_REVIEW_PROMPT`, extracted by AST, **zero substitutions** — it names one thing outside itself, "the memory tool", and ours is called that). Deliberately four sentences: the rules about what to save live in the tool description, and a second copy here would compete with them. It carries **no bias to action**, unlike the skill prompt — see "Memory" below.
 - `defaults/index.ts` — `assembleSystemPrompt` / `rebuildSystemPrompt` + re-exports.
 - `defaults/tools.ts` — `TOOL_CATALOG` (the single source for the prompt list AND the pi allowlist), `only` scoping, `toolsForSource` / `activeToolNames`.
 - `defaults/soul.ts` — `DEFAULT_SOUL`, `AGENTS_STUB`, `readSoul`.
@@ -94,11 +98,15 @@ The result is passed to pi as `systemPromptOverride`, replacing pi's built-in pr
 
 **`TOOL_CATALOG` is the single source** — filtered once per boot by the run's source (`toolsForSource` / `activeToolNames(source)`), and that ONE filtered list is BOTH the prompt's "Available tools" list (`formatToolList`) AND the pi allowlist (passed to `createAgentSession({ tools })`). One list so the prompt can't claim a tool pi lacks or miss one it has.
 
-Catalog: builtins `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`; customs `list_agent_secrets`, `get_agent_secret`, `open_file`, `send_message`, `transcribe`, `search_chats`, `daily_note`. **The allowlist is load-bearing:** pi's `discoverAndLoadExtensions` scans `<dataDir>/pi-agent/extensions/` unconditionally and *adds* whatever it finds; a stale extension file once made the prompt advertise 7 tools while pi ran 8. The allowlist bounds the set — a stray tool loads but is filtered out unless `TOOL_CATALOG` names it.
+Catalog: builtins `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`; customs `list_agent_secrets`, `get_agent_secret`, `open_file`, `send_message`, `transcribe`, `search_chats`, `daily_note`, `memory`, `manage_skill`. **The allowlist is load-bearing:** pi's `discoverAndLoadExtensions` scans `<dataDir>/pi-agent/extensions/` unconditionally and *adds* whatever it finds; a stale extension file once made the prompt advertise 7 tools while pi ran 8. The allowlist bounds the set — a stray tool loads but is filtered out unless `TOOL_CATALOG` names it.
 
-### The review scope is an explicit list, not the catalog minus exclusions
+### The background scopes are explicit lists, not the catalog minus exclusions
 
-`toolsForSource('review')` returns a named set — `read`, `grep`, `find`, `ls`, `manage_skill` — rather than filtering `only`. The direction is the point: with an exclusion list, **every tool added later lands in the one run nobody is watching** unless someone remembers to exclude it. `daily_note` proved that while this was being designed.
+`toolsForSource('review')` returns a named set — `read`, `grep`, `find`, `ls`, `manage_skill` — and `toolsForSource('memory')` returns exactly one, `memory`. Neither filters `only`. The direction is the point: with an exclusion list, **every tool added later lands in the runs nobody is watching** unless someone remembers to exclude them. `daily_note` proved that while the review scope was being designed.
+
+The memory run is one tool because it has nothing to look up: its input is the conversation it was handed, and the current memory is already in its system prompt, rendered from disk at the boot of that very run.
+
+**A section that teaches a tool is dropped wherever that tool is absent**, which is the same rule `REACHING_THE_USER` has always followed and which the memory run made newly sharp — it is the narrowest run in the app. Two sections were unconditional and named tools a narrow run does not hold: `LINK_GRAPH` (it hands over a `grep` pattern to run) is now gated on `grep`, and `SKILLS` (authoring guidance) on `manage_skill`. Pinned by `tests/helperPrompt.test.js`.
 
 `write`, `edit` and `bash` are absent because with any of them the containment and read-before-write guards are decorative — the agent could edit a `SKILL.md` directly and skip every check. hermes restricts its review fork the same way and for the same reason. Also out: `send_message` (maintenance is not news), the secret tools, `transcribe`, `open_file`, `daily_note`, `search_chats`.
 
@@ -129,6 +137,25 @@ Sources the Settings model dropdown from **models.dev** (`/api.json`) — freshe
 **Stale-while-revalidate — a cached copy is returned at ANY age and the refresh happens out of band.** It used to block: the TTL expiring made the *next* caller wait on a live fetch with an 8-second timeout, and on the companion that caller is a Telegram message, because session boot resolves the model through here for anything pi's bundled catalog doesn't carry (i.e. any recent model). So roughly once every ten minutes somebody paid for the refresh with their reply. Nothing about a list of model metadata is urgent enough to sit on that path. A failed background refresh backs off (`RETRY_MS`) so an offline server doesn't start a fresh 8-second fetch on every turn; only a completely cold cache blocks. The only hand-maintained bit is `DEV_KEY` (our slug → models.dev key).
 
 `resolveModel(provider, model)` (used at boot and by `api/src/gitFixer.ts`): pi's bundled `getModel` wins; else **synthesize** a runnable pi Model from the models.dev record by cloning a sibling model's provider wiring and overlaying the metadata. `listThinkingLevels` returns `['off', ...reasoningLevels]`; `toPiThinkingLevel` translates models.dev's top tier **`max` → pi's `xhigh`** (same translation at boot, so the dropdown value is exactly what executes).
+
+## Memory (`memoryStore.ts`, `memoryTool.ts`)
+
+Two files at the workspace root, maintained by the agent:
+
+| file | holds | unset ⇒ |
+|---|---|---|
+| `MEMORY.md` | what it has learned about working here — conventions, environment facts, what went wrong before | 2,200 chars |
+| `USER.md` | who the user is — role, preferences, how they want to be worked with | 1,375 chars |
+
+Ordinary files: committed, synced, diffable, and openable in the editor like anything else. Seeded **empty** by `ensureWorkspaceFiles` (prose in a stub would parse as the agent's first memory and ride in every prompt until something removed it), and created on first write for any workspace that predates them.
+
+**The char cap is the mechanism, not a safety rail.** A write that would exceed it is refused with the current entries attached and an instruction to consolidate *in the same turn* — which is what keeps memory a curated page rather than a growing log. Both numbers are settings (`codingAgent.memoryCharLimit` / `userCharLimit`), read at session boot and passed through `RunOpts`; `clampLimit` refuses a zero or negative one, since a store that can hold nothing fails every write with an error the agent cannot act on.
+
+**Where it lands in the prompt, and why that spelling.** The rendered blocks go LAST, after every instruction section, closest to the conversation — hermes' volatile tier, arrived at by putting them on the right side of a seam we already had. Being **after `HELPER_MARK`** is what makes them refresh: `rebuildSystemPrompt` regenerates everything past the mark on resume, so a fact saved in one chat is known by the next, while the current chat keeps the snapshot it started with. That is hermes' frozen-snapshot behaviour for free. `PromptOpts.memory` is passed IN rather than read in `defaults/index.ts` because reading is async and `rebuildSystemPrompt` must stay sync — `bootSession` is already async and already reads the workspace, so it reads once and hands the text to both branches.
+
+**Every source can write it.** `memory` is unscoped in the catalog: "remember that I hate long replies" has to work in the chat where it was said, not up to ten messages later. The background memory pass exists because an agent forgets to save unprompted, not because saving is a background-only act — hermes makes the same split and calls the pass the safety net. The **block** goes into every run including `review`, which cannot write it: memory is knowledge about the user, and a run writing skills is better for having it. Only the how-to-save section is gated on holding the tool.
+
+**The per-turn failure budget is real state.** Three consecutive at-capacity failures and the tool stops asking for a retry and returns a terminal result, because a fragile replace can otherwise loop a turn to exhaustion and suppress the user's reply — a failed memory side effect must never cost the answer. `Entry.resetMemoryTurn` clears it at the start of every turn; a successful write clears it too, since progress is progress.
 
 ## Skills (`skillLibrary.ts`)
 

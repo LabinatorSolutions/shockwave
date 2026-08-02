@@ -519,6 +519,7 @@ async function prepareRun(
       provider: ca.provider, model: ca.model, apiKey,
       baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
+      memoryCharLimit: ca.memoryCharLimit, userCharLimit: ca.userCharLimit,
     }, feed.publish).catch(() => { /* agentSend reports it */ });
   }
 
@@ -558,6 +559,7 @@ async function runTurnInner(
       baseUrl: ca.baseUrl, contextWindow: ca.contextWindow, thinkingLevel: ca.thinkingLevel ?? 'off',
       wsBuiltinSkills, source: 'telegram', sourceId: String(dm),
       timezone,   // same zone the scheduler evaluates cron.json in
+      memoryCharLimit: ca.memoryCharLimit, userCharLimit: ca.userCharLimit,
     }, emit);
   } catch (e) {
     // `sink.done()` below is never reached on this path, so the sink has to be

@@ -88,6 +88,7 @@ export const chatTable = pgTable('chat', {
   // forward when a run STARTS, not when it succeeds — otherwise a chat whose
   // review keeps failing is picked again on every tick.
   lastReviewedSeq: integer('last_reviewed_seq').notNull().default(0),
+  lastMemorySeq: integer('last_memory_seq').notNull().default(0),
   // pi's OWN session JSONL, whole — how a chat moves between machines. NOT what
   // the UI renders (that's `message`). A column, not a 1:1 side table; Postgres
   // TOASTs it out of line and never reads it unless selected.
