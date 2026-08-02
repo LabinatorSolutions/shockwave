@@ -6,7 +6,7 @@
 // Synced (through the API, server holds the master key): codingAgent + provider
 // keys, agentSecrets, sync.pat + interval, transcription, appearance, workspace
 // IDENTITY. Machine-local (userData, never synced): window/view state, active
-// workspace, cron, and each workspace's checkout path + sync-toggle.
+// workspace, and each workspace's checkout path + sync-toggle.
 //
 // No local database, no fallback: connected → the server; unreachable throws,
 // which the caller surfaces (the settings:read IPC degrades to defaults so boot
@@ -15,7 +15,8 @@
 import { BrowserWindow } from 'electron';
 import { api } from './api/client.js';
 import {
-  isLocalKey, readLocalSettings, patchLocalSettings, getWorkspaceLocal, pruneWorkspaceLocal,
+  LOCAL_SETTINGS, isLocalKey, readLocalSettings, patchLocalSettings, getWorkspaceLocal,
+  pruneWorkspaceLocal,
 } from './api/localSettings.js';
 // WHICH fields are credentials is declared once, in agent-core — the only code
 // bundled into both this build and the companion's. See agent-core/credentials.ts.
@@ -24,24 +25,14 @@ import {
   getPath, deletePath, setPathCopy, isSet,
 } from '../../agent-core/credentials.ts';
 
-// The ONLY defaults the desktop holds — for machine-local settings, which live in
-// a userData file and never touch the DB. DB settings have NO desktop defaults:
-// the companion is the source of truth, and what it returns IS the value. A DB
-// setting is either set (a row exists) or unset (no row); nothing here invents
-// one, so the desktop can never show a value the DB — and every other reader
-// (Telegram, cron) — doesn't have. That mismatch was the provider bug.
-const LOCAL_KEYS = ['windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen', 'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'showHiddenFiles', 'hideReviewChats'] as const;
-const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
-  windowBounds: null,
-  sidebarWidth: 260,
-  chatSidebarWidth: 360,
-  chatSidebarOpen: true,
-  viewMode: 'live',
-  treeSortOrder: 'name-asc',
-  bookmarkFilterActive: false,
-  showHiddenFiles: false,
-  hideReviewChats: false,
-};
+// The ONLY defaults the desktop holds are LOCAL_SETTINGS (api/localSettings.ts) —
+// machine-local settings, which live in a userData file and never touch the DB.
+// They're declared there, beside the write routing that must cover the same keys.
+// DB settings have NO desktop defaults: the companion is the source of truth, and
+// what it returns IS the value. A DB setting is either set (a row exists) or unset
+// (no row); nothing here invents one, so the desktop can never show a value the DB
+// — and every other reader (Telegram, cron) — doesn't have. That mismatch was the
+// provider bug.
 
 /**
  * Strip every credential, replacing each with a "is one saved?" flag.
@@ -144,10 +135,9 @@ export async function readSettingsForRenderer(): Promise<{ settings: any; online
 // only place defaults are applied, and only for local keys — never DB settings.
 function overlayLocal(merged: any, identities: any[], opts: { authoritative?: boolean } = {}) {
   const local = readLocalSettings();
-  for (const k of LOCAL_KEYS) {
-    (merged as any)[k] = (local as any)[k] !== undefined ? (local as any)[k] : LOCAL_DEFAULTS[k];
+  for (const [k, fallback] of Object.entries(LOCAL_SETTINGS)) {
+    (merged as any)[k] = (local as any)[k] !== undefined ? (local as any)[k] : fallback;
   }
-  merged.activeWorkspaceId = local.activeWorkspaceId ?? null;
   // Prune ONLY against a list we actually received. `identities` is [] on the
   // degraded path (readSettingsSafe, when the companion is unreachable or its
   // certificate isn't approved) — and pruning against [] deletes every

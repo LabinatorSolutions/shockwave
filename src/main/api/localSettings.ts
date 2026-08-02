@@ -1,6 +1,6 @@
 // Machine-local settings — the stuff that was in the local DB's machine columns,
 // now a plain userData file (never synced). Window/view state, which workspace is
-// open here, cron timing, and each workspace's local checkout path + sync-toggle.
+// open here, and each workspace's local checkout path + sync-toggle.
 //
 // The per-workspace map is PRUNED on read against the current identity list, so a
 // workspace deleted elsewhere can't leave orphan local state (the old
@@ -11,13 +11,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 
-// Top-level machine-local settings keys. Anything a settings patch names that
-// matches these is written here; everything else goes to the API.
-export const LOCAL_KEYS = [
-  'windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen',
-  'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'showHiddenFiles',
-  'hideReviewChats', 'activeWorkspaceId', 'cron',
-];
+// The machine-local settings, declared ONCE: key → the value the renderer sees
+// when the file has none. Two things derive from this and must never be listed
+// separately, because both failures are silent — a key with routing but no
+// default reads as `undefined` on a fresh machine, and a key with a default but
+// no routing gets PATCHed to the companion (so it syncs across machines, and the
+// write throws while the companion is unreachable).
+//
+//   LOCAL_KEYS  — write routing: a settings patch naming one of these is written
+//                 here, everything else goes to the API.
+//   overlayLocal (settingsStore.ts) — stamps these onto every settings read.
+//
+// Same discipline as agent-core/credentials.ts: one declaration, derived uses.
+export const LOCAL_SETTINGS: Record<string, any> = {
+  windowBounds: null,
+  sidebarWidth: 260,
+  chatSidebarWidth: 360,
+  chatSidebarOpen: true,
+  viewMode: 'live',
+  treeSortOrder: 'name-asc',
+  bookmarkFilterActive: false,
+  showHiddenFiles: false,
+  chatSources: null,
+  activeWorkspaceId: null,
+};
+
+export const LOCAL_KEYS = Object.keys(LOCAL_SETTINGS);
 
 export function isLocalKey(key: string): boolean {
   return LOCAL_KEYS.some((k) => key === k || key.startsWith(`${k}.`));
@@ -32,9 +51,8 @@ export interface LocalSettings {
   treeSortOrder?: string;
   bookmarkFilterActive?: boolean;
   showHiddenFiles?: boolean;
-  hideReviewChats?: boolean;
+  chatSources?: string[] | null;
   activeWorkspaceId?: string | null;
-  cron?: any;
   /** Update version whose toast the user dismissed. Machine-local because
    *  installing an update is a per-machine act. Not in LOCAL_KEYS — the renderer
    *  never patches it through a settings save; app:snoozeUpdate writes it. */
