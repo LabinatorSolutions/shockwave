@@ -224,14 +224,19 @@ async function setupWorkspace(initialFiles) {
   }
 
   // Wait for parcel to stop delivering events (one quiet window > the correlator
-  // grace, so buffered unlinks have committed), then flush once.
+  // grace, so buffered unlinks have committed), then flush once. Polled rather
+  // than slept in whole windows — the window has to clear the grace, but nothing
+  // says we have to sleep through it after the events have already arrived.
   async function settle(quiet = 1100) {
-    let last = -1;
-    while (true) {
-      const c = seen;
-      if (c === last) break;
-      last = c;
-      await new Promise((r) => setTimeout(r, quiet));
+    const POLL = 25;
+    let count = seen;
+    let lastChange = Date.now();
+    while (Date.now() - lastChange < quiet) {
+      await new Promise((r) => setTimeout(r, POLL));
+      if (seen !== count) {
+        count = seen;
+        lastChange = Date.now();
+      }
     }
     await flush();
   }

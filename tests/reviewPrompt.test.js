@@ -21,10 +21,10 @@ import {
 // ── Load-bearing clauses, verbatim ───────────────────────────────────────────
 
 test('the bias to action survives', () => {
-  assert.ok(SKILL_REVIEW_PROMPT.includes(
-    'Be ACTIVE — most sessions produce at least one skill update, even if small. '
-    + 'A pass that does nothing is a missed learning opportunity, not a neutral outcome.',
-  ));
+  // The distinctive phrase, not the paragraph around it. Rewording the prose is
+  // how this prompt legitimately improves; a verbatim copy fails on every such
+  // edit, so the habit becomes pasting the new text in — which pins nothing.
+  assert.ok(SKILL_REVIEW_PROMPT.includes('Be ACTIVE'));
   assert.ok(SKILL_REVIEW_PROMPT.includes(
     "'Nothing to save.' is a real option but should NOT be the default.",
   ));

@@ -85,16 +85,22 @@ async function setupHarness() {
     dispatch.handleBatch(events);
   }, { ignore: ['**/.*', '**/.*/**'] });
 
+  // Wait until the correlator has been quiet for `quiet` ms. The window has to
+  // clear the correlator's grace (400ms here) plus however long parcel takes to
+  // deliver, because an unlink that is really a delete emits nothing until the
+  // grace expires — return early and a delete looks like it never happened.
+  // Polled rather than slept in whole windows: the old version spent two full
+  // 700ms sleeps per call doing nothing, which was ~100s of the suite's runtime.
   async function settle(quiet = 700) {
-    let last = -1;
-    while (true) {
-      const c = emitted.length;
-      if (c === last) {
-        await new Promise((r) => setTimeout(r, quiet));
-        if (emitted.length === c) return;
+    const POLL = 25;
+    let count = emitted.length;
+    let lastChange = Date.now();
+    while (Date.now() - lastChange < quiet) {
+      await new Promise((r) => setTimeout(r, POLL));
+      if (emitted.length !== count) {
+        count = emitted.length;
+        lastChange = Date.now();
       }
-      last = c;
-      await new Promise((r) => setTimeout(r, quiet));
     }
   }
 
