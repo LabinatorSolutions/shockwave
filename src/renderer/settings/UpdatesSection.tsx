@@ -9,9 +9,14 @@ import { cn } from '@/lib/utils';
 // the whole story rather than just a check button: the running version, what
 // phase the update is in, what's new, and the one action that phase allows.
 //
-// One primary button that changes with the phase — Check → Download → Restart —
-// because at any moment there is exactly one thing to do, and showing the other
-// two greyed out is just noise.
+// ONE primary slot, filled by whatever the top action is for the phase — Check →
+// Download → Restart. Check keeps its own button beside Download (demoted to
+// outline) while an update is merely `available`, because that is the one phase
+// where re-checking both means something and is allowed: main's runUpdateCheck
+// returns early once we're `downloading` or `ready` (a re-check would walk the
+// phase back to `available` and lose the Restart button), so a Check button
+// there would be a control that does nothing. Without this the only way to
+// re-poll a pending update was to restart the app.
 //
 // Nothing on this page downloads or installs on its own; see the block comment
 // in main.ts for why both of electron-updater's self-driving flags are off.
@@ -51,26 +56,31 @@ export default function UpdatesSection({ appUpdate }) {
 
   // The primary action for the phase we're in. `available` in a dev build has no
   // downloader behind it, so it offers the release page instead of pretending.
-  let action: React.ReactNode;
+  let primary: React.ReactNode;
   if (phase === 'ready') {
-    action = <Button size="sm" className="w-fit" onClick={requestRestart}>Restart to update</Button>;
+    primary = <Button size="sm" onClick={requestRestart}>Restart to update</Button>;
   } else if (phase === 'downloading') {
-    action = <Button size="sm" className="w-fit" disabled>Downloading… {status.percent}%</Button>;
+    primary = <Button size="sm" disabled>Downloading… {status.percent}%</Button>;
   } else if (phase === 'available' && status?.canDownload) {
-    action = <Button size="sm" className="w-fit" onClick={download}>Download version {latest}</Button>;
+    primary = <Button size="sm" onClick={download}>Download version {latest}</Button>;
   } else if (phase === 'available' && status?.url) {
-    action = (
-      <Button size="sm" className="w-fit" onClick={() => window.api.openExternal(status.url)}>
-        View release
-      </Button>
-    );
-  } else {
-    action = (
-      <Button size="sm" className="w-fit" onClick={onCheck} disabled={checking}>
-        Check for updates
-      </Button>
+    primary = (
+      <Button size="sm" onClick={() => window.api.openExternal(status.url)}>View release</Button>
     );
   }
+
+  // Check rides along in `available` as the secondary. Only IT disables while a
+  // check is in flight — the download decision has nothing to wait for.
+  const checkButton = (
+    <Button
+      size="sm"
+      variant={primary ? 'outline' : 'default'}
+      onClick={onCheck}
+      disabled={checking}
+    >
+      {primary ? 'Check again' : 'Check for updates'}
+    </Button>
+  );
 
   return (
     <SettingsSection
@@ -81,7 +91,10 @@ export default function UpdatesSection({ appUpdate }) {
         Current version: {current ? `v${current}` : '—'}
       </div>
 
-      {action}
+      <div className="flex w-fit items-center gap-2">
+        {primary}
+        {phase !== 'downloading' && phase !== 'ready' && checkButton}
+      </div>
 
       {result && (
         <p className={cn('text-xs', phase === 'error' ? 'text-destructive' : phase === 'available' || phase === 'ready' ? 'text-primary' : 'text-muted-foreground')}>
