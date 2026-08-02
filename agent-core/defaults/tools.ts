@@ -34,9 +34,25 @@
 // the user. agent.ts logs a warning if a host ever supplies an unnamed tool.
 
 /** Where a turn is running from — `RunOpts.source`. */
-export type ToolScope = 'desktop' | 'cron' | 'telegram';
+export type ToolScope = 'desktop' | 'cron' | 'telegram' | 'review';
 
-export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram'];
+export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review'];
+
+// A self-improvement run gets an EXPLICIT list, not the catalog minus a few
+// exclusions. That direction matters: with an exclusion list, every tool added
+// later lands in the one run nobody is watching unless someone remembers to
+// exclude it. `daily_note` proved the point — it was added while this was being
+// designed and would have arrived silently.
+//
+// It investigates and it curates: read/grep/find/ls to look around, and
+// `skill_manage` to write. Deliberately absent are `write`, `edit` and `bash` —
+// with any of those the containment and read-before-write guards in
+// `skillManage.ts` are decorative, since the agent could edit a SKILL.md
+// directly. hermes restricts its review fork the same way and for the same
+// reason. Also absent: `send_message` (maintenance is not news), the secret
+// tools (no credentialed work), `transcribe`, `open_file`, `daily_note`,
+// `search_chats`.
+const REVIEW_TOOLS = ['read', 'grep', 'find', 'ls', 'skill_manage'];
 
 export interface ToolDescriptor {
   name: string;
@@ -69,11 +85,17 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   { name: 'daily_note', origin: 'custom', desc: "Find the user's daily note (journal) for a date — today by default — and create it from their template if asked. Returns the workspace-relative path. Use this instead of guessing a filename: the name and folder come from per-workspace settings." },
   // The agent's memory of earlier conversations in this workspace.
   { name: 'search_chats', origin: 'custom', desc: 'Search earlier chats in this workspace — what the user told you before, what was decided, what you already tried. Pass `query` to search, `chatId` + `around` to read more of one, or nothing to list recent chats. Results carry dates; prefer recent ones when they disagree.' },
+  // Every source, like hermes: one validated way to author a skill, whoever is
+  // asking. The guards inside it differ by caller, not the tool.
+  { name: 'skill_manage', origin: 'custom', desc: 'Create or update one of your own skills — validated before it is written, so use it rather than editing a SKILL.md by hand. Actions: create, patch (preferred for fixes), edit, write_file, remove_file. Skills the user provided and the ones built into the app are read-only to you.' },
 ];
 
 /** The catalog as offered to a turn running from `source`. */
 export function toolsForSource(source: string | undefined): ToolDescriptor[] {
   const s = (source || 'desktop') as ToolScope;
+  // A review run takes the explicit list rather than the catalog-minus-`only`
+  // filter, so a newly added tool is excluded by default. See REVIEW_TOOLS.
+  if (s === 'review') return TOOL_CATALOG.filter((t) => REVIEW_TOOLS.includes(t.name));
   return TOOL_CATALOG.filter((t) => !t.only || t.only.includes(s));
 }
 

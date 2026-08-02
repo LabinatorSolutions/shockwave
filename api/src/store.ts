@@ -357,6 +357,58 @@ export async function setRunning(db: Db, chatId: string, machine: string | null)
     .where(eq(chatTable.chatId, chatId));
 }
 
+// ── Self-improvement sweep ───────────────────────────────────────────────────
+
+/**
+ * Chats with at least `threshold` tool calls since they were last reviewed.
+ *
+ * A tool call is one `role='tool'` row — pi emits exactly one per tool result
+ * (`entryToRow` in agent-core), so counting rows is counting calls, with no
+ * separate counter to drift.
+ *
+ * Excluded, and each for its own reason:
+ *   • `source='review'` — a review run makes tool calls like any chat, so
+ *     without this it crosses the threshold and reviews itself, forever.
+ *   • `running` — the conversation isn't finished; reviewing a half-written turn
+ *     reads a partial. It becomes eligible again on the next tick.
+ *   • deleted chats — nothing to learn from, and the checkout is gone.
+ *
+ * Ordered oldest-first so a backlog drains in the order the work happened.
+ */
+export async function chatsDueForReview(db: Db, threshold: number, limit = 5) {
+  const rows = await db.execute(sql`
+    select c.id            as "chatId",
+           c.workspace_id  as "workspaceId",
+           count(m.seq)::int as "toolCalls",
+           -- The chat's OWN high-water mark, not max(m.seq): the join is
+           -- filtered to tool rows, so that would stop short of the assistant's
+           -- closing message. The run reads the whole conversation, so the mark
+           -- has to record the whole conversation or it understates what was
+           -- reviewed.
+           (select max(seq) from message where chat_id = c.id)::int as "maxSeq"
+      from chat c
+      join message m
+        on m.chat_id = c.id
+       and m.seq > c.last_reviewed_seq
+       and m.role = 'tool'
+     where c.deleted = false
+       and c.running = false
+       and coalesce(c.source, '') <> 'review'
+     group by c.id, c.workspace_id
+    having count(m.seq) >= ${threshold}
+     order by min(m.created_at) asc
+     limit ${limit}
+  `);
+  return (rows.rows ?? []) as Array<{ chatId: string; workspaceId: string; toolCalls: number; maxSeq: number }>;
+}
+
+/** Move a chat's review watermark forward. Called before the run, not after. */
+export async function setLastReviewedSeq(db: Db, chatId: string, seq: number) {
+  await db.update(chatTable)
+    .set({ lastReviewedSeq: seq })
+    .where(eq(chatTable.chatId, chatId));
+}
+
 // Append message rows, one per pi SessionEntry, as they happen.
 //
 // Idempotent by (session_id, entry_id) — a conflict means "pi already told us

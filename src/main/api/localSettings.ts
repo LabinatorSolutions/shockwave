@@ -16,7 +16,7 @@ import { app } from 'electron';
 export const LOCAL_KEYS = [
   'windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen',
   'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'showHiddenFiles',
-  'activeWorkspaceId', 'cron',
+  'hideReviewChats', 'activeWorkspaceId', 'cron',
 ];
 
 export function isLocalKey(key: string): boolean {
@@ -32,6 +32,7 @@ export interface LocalSettings {
   treeSortOrder?: string;
   bookmarkFilterActive?: boolean;
   showHiddenFiles?: boolean;
+  hideReviewChats?: boolean;
   activeWorkspaceId?: string | null;
   cron?: any;
   /** Update version whose toast the user dismissed. Machine-local because

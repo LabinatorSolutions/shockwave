@@ -272,12 +272,13 @@ export default function App() {
 
   const {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
+    hideReviewChats,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
     settingsRef,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
-    onBookmarkFilterActiveChange, onShowHiddenFilesChange,
+    onBookmarkFilterActiveChange, onShowHiddenFilesChange, onHideReviewChatsChange,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onTimezoneChange,
@@ -2280,7 +2281,7 @@ export default function App() {
             className="absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize"
             onMouseDown={onChatSidebarResizeStart}
           />
-          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} onOpenSecrets={() => openSettings(SETTINGS_SECTIONS.AGENT_SECRETS)} />
+          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} onOpenSecrets={() => openSettings(SETTINGS_SECTIONS.AGENT_SECRETS)} hideReviewChats={hideReviewChats} onHideReviewChatsChange={onHideReviewChatsChange} />
         </aside>
       ) : (
         <button

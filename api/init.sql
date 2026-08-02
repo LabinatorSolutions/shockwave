@@ -115,12 +115,32 @@ CREATE TABLE IF NOT EXISTS chat (
   -- agent_start and clears it AFTER uploading the turn, so running=false means
   -- "done and uploaded". running_machine names which client is executing.
   running         boolean NOT NULL DEFAULT false,
-  running_machine text
+  running_machine text,
+  -- How far the self-improvement sweep has already looked at this chat: the
+  -- `message.seq` it had reached. Work since then is what triggers a review, so
+  -- this moves forward when a run STARTS — a run that fails must not make the
+  -- same chat eligible again on the very next tick, forever.
+  last_reviewed_seq integer NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_chat_ws_updated ON chat (workspace_id, updated_at);
 -- Existing volumes (table already created before these columns) get them here.
 ALTER TABLE chat ADD COLUMN IF NOT EXISTS running boolean NOT NULL DEFAULT false;
 ALTER TABLE chat ADD COLUMN IF NOT EXISTS running_machine text;
+-- Existing chats start at 0, which would make every one of them eligible the
+-- first time the sweep runs. Seeding to the chat's current high-water mark means
+-- the loop starts from "nothing owed" and only reviews work done from here on.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'chat' AND column_name = 'last_reviewed_seq'
+  ) THEN
+    ALTER TABLE chat ADD COLUMN last_reviewed_seq integer NOT NULL DEFAULT 0;
+    UPDATE chat SET last_reviewed_seq = COALESCE(
+      (SELECT max(seq) FROM message WHERE message.chat_id = chat.id), 0
+    );
+  END IF;
+END $$;
 -- Rename: starred → pinned (the feature is "pinned chats" now). Guarded so
 -- re-running this file (every boot) is a no-op; fresh DBs create `pinned` above.
 DO $$ BEGIN

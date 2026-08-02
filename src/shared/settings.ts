@@ -101,6 +101,14 @@ export interface CodingAgentSettings {
   // two rather than one: two can legitimately be wanted inside a single restock
   // tick. 0 disables it and every chat clones, as it did before. Unset ⇒ 2.
   checkoutPoolSize?: number;
+  // How many tool calls a chat must accumulate before the companion reviews it
+  // and updates the agent's own skills. Counted from the last review, across
+  // every source — a desktop chat, a Telegram thread and a cron run all feed the
+  // same tally, because every turn's messages land on the companion whoever ran
+  // it. Tool calls rather than turns: ten trivial exchanges are not a learning
+  // opportunity, one turn with twelve tool calls usually is. Unset ⇒ 10, which is
+  // what hermes and knack both default to.
+  reviewInterval?: number;
 }
 
 // OAuth connection state carried by an `oauth`-kind AgentSecret. The three
@@ -212,5 +220,12 @@ export interface Settings {
   // DISPLAY ONLY — the watcher and the link index keep their own rule, so this
   // never changes what the app indexes, resolves wiki-links against, or reloads.
   showHiddenFiles: boolean;
+  // Whether self-improvement chats are hidden from the chat history list. They
+  // are ordinary chats and show by default — the point of running them as chats
+  // is that you can open one and read what it decided. This is a VIEW
+  // preference, which is why it is machine-local rather than synced: you might
+  // want them out of the way on a laptop and visible on a desktop. It hides
+  // nothing else — the runs still happen, and their commits still land.
+  hideReviewChats: boolean;
   windowBounds: WindowBounds | null;
 }

@@ -12,6 +12,9 @@
 
 import path from 'node:path';
 import fs from 'node:fs/promises';
+// One frontmatter parser, and it lives beside the validators because that module
+// is the one under test. A second copy here is how the two drift apart.
+import { parseFrontmatter } from './skillValidate.js';
 
 export function agentDirFor(userDataDir) {
   return path.join(userDataDir, 'pi-agent');
@@ -23,46 +26,22 @@ export function workspaceSkillsDir(workspacePath) {
   return path.join(workspacePath, '.shockwave', 'skills');
 }
 
+// The agent's OWN skills — the ones it writes for itself. pi discovers this
+// directory on its own (see the note at the top of this file), so unlike the two
+// above it needs no wiring into `computeEffectivePaths`; naming it here is what
+// lets `skill_manage` confine the agent's writes to it. Keeping the three roots
+// physically separate is what makes ownership a path question instead of a
+// bookkeeping one.
+export function agentSkillsDir(workspacePath) {
+  return path.join(workspacePath, '.agents', 'skills');
+}
+
 function piSettingsPath(userDataDir) {
   return path.join(agentDirFor(userDataDir), 'settings.json');
 }
 
 export async function ensureDirs(userDataDir) {
   await fs.mkdir(agentDirFor(userDataDir), { recursive: true });
-}
-
-// Pull `name` and `description` out of `--- … ---` YAML frontmatter. Handles
-// inline values and block scalars (`description: |` / `: >` with the text on the
-// following indented lines) — common in SKILL.md files.
-function parseFrontmatter(text): any {
-  const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
-  if (!m) return {};
-  const lines = m[1].split('\n');
-  const out = {};
-  for (let i = 0; i < lines.length; i++) {
-    const kv = lines[i].match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (!kv) continue;
-    const key = kv[1];
-    let val = kv[2].trim();
-    if (/^[|>][+-]?$/.test(val)) {
-      // Block scalar: gather the following more-indented lines. `>` folds onto
-      // one line (spaces); `|` keeps newlines.
-      const fold = val[0] === '>';
-      const collected: string[] = [];
-      let j = i + 1;
-      for (; j < lines.length; j++) {
-        if (lines[j].trim() === '') { collected.push(''); continue; }
-        if (/^\s/.test(lines[j])) collected.push(lines[j].replace(/^\s+/, ''));
-        else break;
-      }
-      i = j - 1;
-      val = collected.join(fold ? ' ' : '\n').trim();
-    } else if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
-    }
-    out[key] = val;
-  }
-  return out;
 }
 
 async function readSkillFolder(folderPath, source) {

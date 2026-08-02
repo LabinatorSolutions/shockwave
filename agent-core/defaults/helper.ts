@@ -10,8 +10,12 @@
 // at the bottom composes them in order. The only interpolated piece is the tool
 // list (from `tools.ts`) — everything else is literal prose.
 
-import { TOOL_CATALOG, ToolDescriptor, formatToolList } from './tools.js';
-import { SENDING_FILES, isCompanionSource } from './companion.js';
+// `ToolDescriptor` is type-only and must say so: this module is loaded straight
+// off source by `node --test`, which strips types rather than resolving them, so
+// a type in a value import is a missing export at runtime.
+import { TOOL_CATALOG, formatToolList } from './tools.ts';
+import type { ToolDescriptor } from './tools.ts';
+import { SENDING_FILES, isCompanionSource } from './companion.ts';
 
 // First line of the helper, and the seam the stored prompt is split on so the
 // helper can be rebuilt on a later run while the workspace's SOUL stays frozen
@@ -84,19 +88,36 @@ This matters most on scheduled and unattended runs, where nobody sees your reply
 
 If sending fails (Telegram isn't connected), say so in your reply rather than treating the task as done.`;
 
-const TOOLS = (tools: ToolDescriptor[]) => `# Available tools
+// The closing paragraph is about choosing BETWEEN tools, so it only makes sense
+// when `bash` is one of the choices. A run without it (a self-improvement run)
+// was being told to "reach for bash" for anything the other tools don't cover —
+// naming a tool it does not have, which is the same failure `REACHING_THE_USER`
+// is gated against below, and it reads as though the run is unrestricted.
+const TOOLS = (tools: ToolDescriptor[]) => {
+  const has = (n: string) => tools.some((t) => t.name === n);
+  const searchTools = ['grep', 'find', 'ls'].filter(has);
+  const advice = has('bash') && searchTools.length
+    ? `\n\nUse ${searchTools.map((t) => `\`${t}\``).join(', ')} for searching and listing rather than shelling out through \`bash\`: they return structured, truncated output, they respect \`.gitignore\`, and they work on every platform (\`bash\` and Unix tools like \`grep\` are not available on Windows). Reach for \`bash\` to run programs, git, and anything the other tools don't cover.`
+    : '';
+  return `# Available tools
 
 ${formatToolList(tools)}
 
-This is the complete set — there are no others.
+This is the complete set — there are no others.${advice}`;
+};
 
-Use \`grep\`, \`find\`, and \`ls\` for searching and listing rather than shelling out through \`bash\`: they return structured, truncated output, they respect \`.gitignore\`, and they work on every platform (\`bash\` and Unix tools like \`grep\` are not available on Windows). Reach for \`bash\` to run programs, git, and anything the other tools don't cover.`;
-
-const GUIDELINES = `# Guidelines
-
-- Do not echo a token returned by \`get_agent_secret\` in your reply, into a file, or into a shell command that prints it. Prefer passing the token via env vars to the subprocess that needs it.
-- Be concise in your responses.
-- Show file paths clearly when working with files.`;
+// Same rule as the tool list above: a guideline about a tool this run doesn't
+// have is noise at best, and at worst tells the reader the run has it.
+const GUIDELINES = (tools: ToolDescriptor[]) => {
+  const lines = [
+    ...(tools.some((t) => t.name === 'get_agent_secret')
+      ? ['- Do not echo a token returned by \`get_agent_secret\` in your reply, into a file, or into a shell command that prints it. Prefer passing the token via env vars to the subprocess that needs it.']
+      : []),
+    '- Be concise in your responses.',
+    '- Show file paths clearly when working with files.',
+  ];
+  return `# Guidelines\n\n${lines.join('\n')}`;
+};
 
 const WORKSPACE = `# The workspace
 
@@ -280,7 +301,7 @@ export function buildShockwaveHelper(
     BOUNDARIES(scratchDir),
     ...(unattended ? [UNATTENDED] : []),
     TOOLS(tools),
-    GUIDELINES,
+    GUIDELINES(tools),
     // Only when the tool is actually in this run's set — the section tells the
     // agent to reach for it by name, which is worse than useless if it's absent.
     ...(tools.some((t) => t.name === 'send_message') ? [REACHING_THE_USER] : []),

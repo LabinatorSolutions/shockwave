@@ -16,12 +16,13 @@ import fs from 'node:fs';
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import { getModel, getModels, completeSimple } from '@earendil-works/pi-ai/compat';
 import { getCatalogModel } from './modelCatalog.js';
-import { agentDirFor, ensureDirs, listBuiltinSkills, listWorkspaceSkills, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
+import { agentDirFor, agentSkillsDir, ensureDirs, listBuiltinSkills, listWorkspaceSkills, workspaceSkillsDir, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
 import { assembleSystemPrompt, rebuildSystemPrompt } from './defaults/index.js';
 import { activeToolNames } from './defaults/tools.js';
 import { makeAgentTokenTools } from './agentTokens.js';
 import { makeTranscribeTool } from './transcribe.js';
 import { makeDailyNoteTool } from './dailyNoteTool.js';
+import { makeSkillTools } from './skillTool.js';
 import { makeChatSearchTool, type ChatSearchHost } from './chatSearch.js';
 import { imagesOf } from './messageImages.js';
 
@@ -371,6 +372,20 @@ export function createAgentRuntime(host: AgentHost) {
     const dailyNoteTools = allowed.includes('daily_note')
       ? [makeDailyNoteTool(workspacePath, timezone)]
       : [];
+    // Built per session because the skill roots are THIS workspace's, and
+    // because a review run's read-before-write state must not be shared with
+    // any other run. On a review run this also returns a `read` that wraps pi's
+    // own — see skillTool.ts for why the override is where the mark lives.
+    const skillTools = allowed.includes('skill_manage')
+      ? makeSkillTools({
+        cwd: workspacePath,
+        roots: {
+          agentDir: agentSkillsDir(workspacePath),
+          protectedDirs: [workspaceSkillsDir(workspacePath), host.builtinDir].filter(Boolean),
+        },
+        trackReads: source === 'review',
+      })
+      : [];
     const extraTools = host.extraTools.filter((t: any) => allowed.includes(t?.name));
     for (const t of host.extraTools) {
       if (!allowed.includes(t?.name)) console.warn(`[agent] host tool "${t?.name}" is not offered on ${source ?? 'desktop'} runs — add it to TOOL_CATALOG to enable it.`);
@@ -379,7 +394,7 @@ export function createAgentRuntime(host: AgentHost) {
     const { session } = await createAgentSession({
       cwd: workspacePath, agentDir, model: modelObj, thinkingLevel: level as any,
       authStorage, modelRegistry, sessionManager, resourceLoader,
-      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...dailyNoteTools, ...extraTools],
+      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...dailyNoteTools, ...skillTools, ...extraTools],
       tools: allowed,
     });
 

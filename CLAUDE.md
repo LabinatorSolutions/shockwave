@@ -59,6 +59,7 @@ Electron app with a Vite + React 19 renderer. The renderer is a markdown-workspa
 | Settings pages (when a value saves, credential fields, per-section inventory) | `src/renderer/settings/**` | `src/renderer/settings/CLAUDE.md` |
 | Companion server (settings/secrets/chats storage, server-side agent for Telegram + cron, Docker deploy) | `api/**` | `api/CLAUDE.md` |
 | Shared coding-agent runtime (pi wrapper — bundled into BOTH the desktop and the companion) | `agent-core/**` | `agent-core/CLAUDE.md` |
+| Self-improvement (the agent writes its own skills after enough work) | `api/src/review{Sweeper,Run}.ts`, `agent-core/skill{Manage,Validate,Tool}.ts`, `agent-core/fuzzyMatch.ts`, `agent-core/defaults/reviewPrompt.ts` | "Self-improvement" in `api/CLAUDE.md` |
 | GitHub sync (merge-based; in-app conflict resolution) | `src/main/sync.ts`, `src/main/syncEngine.ts`, `src/renderer/settings/WorkspacesSection.tsx`, `src/renderer/settings/AddWorkspaceDialog.tsx`; conflict view in `src/renderer/{App.tsx, SortBar.tsx, FileTree.tsx}` | "GitHub sync" sections in both subdocs |
 | Cross-process types + constants | `src/shared/{api.d.ts, settings.ts, constants.ts}` | this file, below |
 | Tests | `tests/*.test.js` | `tests/CLAUDE.md` |
@@ -74,6 +75,7 @@ The canonical names. Use these in UI strings, comments, docs, agent prompts — 
 - **External link** — the `[label](https://…)` markdown form. Always means an off-workspace URL. Opens in the system browser. Not to be confused with wiki-links.
 - **Chat** — one conversation with the agent. The user-facing noun, and the name used in code, in the database (`chat` / `message.chat_id`), and in the IPC channels (`chat:list`, `chat:open`, …). **Never call a chat a "session".**
 - **Session** — reserved for **pi's own session**: its `SessionManager`, its `AgentSession`, and the JSONL session file that is its working memory for a chat. Different thing, different lifetime — pi's session is rebuilt from the stored transcript whenever a chat moves between machines.
+- **Self-improvement run** — a chat the companion opens by itself, after a chat has done enough work, in which the agent reviews that conversation and updates its own skills. It is an ordinary chat (`source: 'review'`), not a second agent and not a supervisor of anything. Closest existing thing is **cron**: same fresh chat, same unattended run, same check-in — only the trigger differs.
 - **Backlink** — a wiki-link that points *at* a given file from elsewhere. The link index maintains backlinks per file; the backlinks panel under the editor reads from that.
 
 Avoid: "page", "note", "document" (for `.md` files), "vault" (in new code/copy), "internal link" (call it a wiki-link), "session" (for a chat).

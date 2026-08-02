@@ -306,6 +306,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caMaxFixAttempts = codingAgent?.maxFixAttempts;
   const caScratchTtlDays = codingAgent?.scratchTtlDays;
   const caCheckoutPoolSize = codingAgent?.checkoutPoolSize;
+  const caReviewInterval = codingAgent?.reviewInterval;
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
@@ -316,6 +317,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     maxFixAttempts: caMaxFixAttempts,
     scratchTtlDays: caScratchTtlDays,
     checkoutPoolSize: caCheckoutPoolSize,
+    reviewInterval: caReviewInterval,
     ...patch,
   });
 
@@ -339,6 +341,12 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const poolField = useCommitField(
     caCheckoutPoolSize == null ? '' : String(caCheckoutPoolSize),
     (next) => updateCa({ checkoutPoolSize: next === '' ? undefined : Number(next) }),
+  );
+  // 0 is meaningful here too — it turns self-improvement off — so it takes the
+  // same explicit-blank form as the pool size rather than the shorthand above.
+  const reviewField = useCommitField(
+    caReviewInterval == null ? '' : String(caReviewInterval),
+    (next) => updateCa({ reviewInterval: next === '' ? undefined : Number(next) }),
   );
   // Only the slot being typed into. The server merges rather than treating the map
   // as complete (see reconcileProviderKeys), so other providers' keys are untouched
@@ -438,6 +446,25 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
           </div>
           <FieldDescription>
             Copies of your workspace the server keeps ready, so a new chat starts without waiting for a download. 0 turns it off.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="agent-review-interval">Self-Improvement Every</FieldLabel>
+          <div>
+            <Input
+              id="agent-review-interval"
+              className={NUMBER_FIELD}
+              type="number"
+              min={0}
+              placeholder="10"
+              value={reviewField.value}
+              onChange={(e) => reviewField.onChange(e.target.value)}
+              onBlur={reviewField.onBlur}
+            />
+          </div>
+          <FieldDescription>
+            Tool calls a chat must reach before the agent reviews it and updates its own skills. Counted across the app, Telegram and scheduled runs. 0 turns it off.
           </FieldDescription>
         </Field>
       </SettingsGroup>

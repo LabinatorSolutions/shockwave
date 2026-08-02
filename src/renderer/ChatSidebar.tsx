@@ -392,7 +392,7 @@ function formatAgo(ms) {
 // Popover of recent + searchable chats. Anchored under the header history button.
 // Recents paginate on scroll (keyset via the last row's updatedAt); a non-empty
 // query switches to full-text search across the workspace's chats.
-function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDeleted }: any) {
+function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDeleted, hideReviewChats, onHideReviewChatsChange }: any) {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -530,8 +530,26 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
     </button>
   );
 
-  const showPinned = !searching && pinned.length > 0;
-  const empty = items.length === 0 && !showPinned && !loading;
+  // Self-improvement runs are ordinary chats and listed like any other — being
+  // able to open one and read what it decided is the point of running them as
+  // chats. The filter is for when they are in the way, and hides nothing else:
+  // the runs still happen and their commits still land.
+  const visible = useMemo(
+    () => (hideReviewChats ? items.filter((it: any) => it?.source !== 'review') : items),
+    [items, hideReviewChats],
+  );
+  const visiblePinned = useMemo(
+    () => (hideReviewChats ? pinned.filter((it: any) => it?.source !== 'review') : pinned),
+    [pinned, hideReviewChats],
+  );
+  // Counted off the UNFILTERED list, so the affordance to turn the filter ON is
+  // there when there is something to hide. Counting the difference instead is
+  // always zero while the filter is off — i.e. the control appears only once you
+  // no longer need it.
+  const reviewCount = useMemo(() => items.filter((it: any) => it?.source === 'review').length, [items]);
+
+  const showPinned = !searching && visiblePinned.length > 0;
+  const empty = visible.length === 0 && !showPinned && !loading;
 
   return (
     <div
@@ -558,12 +576,26 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         {showPinned && (
           <>
             <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Pinned</div>
-            {pinned.map((it) => renderRow(it, true))}
-            {items.length > 0 && <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Recent</div>}
+            {visiblePinned.map((it) => renderRow(it, true))}
+            {visible.length > 0 && <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Recent</div>}
           </>
         )}
-        {items.map((it) => renderRow(it, false))}
+        {visible.map((it) => renderRow(it, false))}
       </div>
+      {(hideReviewChats || reviewCount > 0) && (
+        <button
+          type="button"
+          className="flex items-center justify-between gap-2 border-t border-border px-3 py-1.5 text-left text-[11px] text-muted-2 hover:text-muted-foreground"
+          onClick={() => onHideReviewChatsChange?.(!hideReviewChats)}
+        >
+          <span>
+            {hideReviewChats
+              ? 'Self-improvement chats hidden'
+              : `${reviewCount} self-improvement chat${reviewCount === 1 ? '' : 's'}`}
+          </span>
+          <span className="text-muted-foreground">{hideReviewChats ? 'Show' : 'Hide'}</span>
+        </button>
+      )}
       <ConfirmDialog
         open={!!confirmDelete}
         onClose={() => setConfirmDelete(null)}
@@ -584,7 +616,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   );
 }
 
-const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets }, ref) {
+const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets, hideReviewChats, onHideReviewChatsChange }, ref) {
   // All chat state (transcripts, running flags, drafts, counters) lives in
   // chatStore — OUTSIDE this component — so background chats keep streaming
   // and nothing is lost when the sidebar collapses (unmount) or the workspace
@@ -740,6 +772,16 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     setRejected(null);
     setRenamingTitle(false);
     setPartialText('');
+    // Focus the composer so you can just start typing. Deferred a frame: the
+    // textarea is `disabled` while the previous chat ran elsewhere, and focus()
+    // on a still-disabled element is a no-op.
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      const len = el.value.length;
+      try { el.setSelectionRange(len, len); } catch { /* selection is cosmetic */ }
+    });
   }, [workspacePath]);
 
   // Pin / unpin the active chat (header pin button).
@@ -1060,6 +1102,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           onClose={() => setShowHistory(false)}
           runningIds={runningIds}
           onDeleted={onDeletedSession}
+          hideReviewChats={hideReviewChats}
+          onHideReviewChatsChange={onHideReviewChatsChange}
         />
       )}
 

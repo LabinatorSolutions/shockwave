@@ -30,7 +30,7 @@ import {
 // setting is either set (a row exists) or unset (no row); nothing here invents
 // one, so the desktop can never show a value the DB — and every other reader
 // (Telegram, cron) — doesn't have. That mismatch was the provider bug.
-const LOCAL_KEYS = ['windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen', 'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'showHiddenFiles'] as const;
+const LOCAL_KEYS = ['windowBounds', 'sidebarWidth', 'chatSidebarWidth', 'chatSidebarOpen', 'viewMode', 'treeSortOrder', 'bookmarkFilterActive', 'showHiddenFiles', 'hideReviewChats'] as const;
 const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
   windowBounds: null,
   sidebarWidth: 260,
@@ -40,6 +40,7 @@ const LOCAL_DEFAULTS: Record<(typeof LOCAL_KEYS)[number], any> = {
   treeSortOrder: 'name-asc',
   bookmarkFilterActive: false,
   showHiddenFiles: false,
+  hideReviewChats: false,
 };
 
 /**

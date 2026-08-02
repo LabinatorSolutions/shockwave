@@ -18,6 +18,7 @@ import { initScheduler, nextRuns } from './scheduler.js';
 import { mintToken } from './oauth.js';
 import { initSweeper } from './sweeper.js';
 import { initCheckoutPool } from './checkoutPool.js';
+import { initReviewSweeper } from './reviewSweeper.js';
 import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus, syncCommands as tgSyncCommands } from './telegram/webhook.js';
 import { configuredHost, ensureSelfSignedCert, readCertPem, removeSelfSignedCert } from './telegram/selfSigned.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
@@ -365,6 +366,7 @@ async function settleTls(): Promise<void> {
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
   initSweeper(pool, masterKey);                 // reclaims idle per-run working dirs (TTL)
   initCheckoutPool(pool, masterKey);            // keeps a warm checkout ready for a new Telegram chat
+  initReviewSweeper(pool, masterKey, agentRuntime); // reviews chats that have done enough work
   tgSyncCommands(pool, masterKey, log);         // keep the /commands menu current
   const server = app.listen(PORT, () => log.info({ port: PORT }, 'shockwave-api listening'));
   const shutdown = () => { server.close(() => pool.end().finally(() => process.exit(0))); setTimeout(() => process.exit(0), 5000).unref(); };
