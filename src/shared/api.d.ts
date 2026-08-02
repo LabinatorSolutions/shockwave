@@ -412,6 +412,16 @@ export interface ShockwaveApi {
     /** `provider` names the engine the token belongs to (`assemblyai` |
      *  `deepgram`), so the renderer knows which socket to open. */
     getToken(): Promise<{ token?: string; provider?: string; error?: string }>;
+    /** Per-capability key check. `ok` means the key transcribes; `canStream`
+     *  means it can also mint a microphone token. Deepgram can be the first
+     *  without the second (a restricted key), which is not a failure. */
+    verifyKey(): Promise<{
+      ok: boolean;
+      canStream?: boolean;
+      engineName?: string;
+      streamError?: string;
+      error?: string;
+    }>;
   };
 
   app: {

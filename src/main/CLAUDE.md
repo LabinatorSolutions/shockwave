@@ -361,6 +361,12 @@ Turning off only the first moves the download decision to the user while leaving
 
 It returns **`{ token, provider }`**. The provider has to come back with the token — the renderer needs it to pick the socket URL and to read what comes back, and inferring it from a second settings read would be a second answer that can disagree with the one the token was minted against. `keyFor` (`agent-core/transcribe.ts`) resolves which of the two stored keys applies, so main never branches on the provider string itself.
 
+**`voice:verifyKey` is a separate question and must stay separate.** The one transcription key feeds three consumers — the microphone, Telegram voice notes, the agent's `transcribe` tool — and **Deepgram gates them differently**: transcribing needs any valid key, minting a streaming token needs Member or higher. So the mint is not a proxy for "is this key good". It asks `GET /v1/auth/token` and then the grant, returning `{ ok, canStream }`; AssemblyAI has one credential with one capability, so there the mint is still the whole answer.
+
+> **Read `/v1/auth/token`'s `scopes` — the 200 means nothing.** That endpoint accepts any valid key and only reports whose it is, so treating the status code as "this key transcribes" is wrong: a key scoped `account:write` answers 200 and cannot transcribe a syllable. It shipped that way for an afternoon and told a user their unusable key was fine. The response body carries the key's own `scopes`, which is the actual answer — `usage:write` (or a `member`/`admin`/`owner` role, which bundle it) transcribes; only the roles can mint. Both failure messages name the scopes they found, because that string is what turns "insufficient permissions" into a console click. **Deepgram's key-creation default is `usage:write`, which lands exactly in the can't-mint case** — Member is behind the "Advanced" toggle.
+
+`ok: true, canStream: false` is a **restricted Deepgram key** — genuinely fine for everything but the microphone. Settings paints that green with a note rather than red; treating it as a failure tells the user to replace a key that works. Both handlers share `resolveVoiceEngine` / `mintVoiceToken` / `voiceFailure`, so the reason string can't drift between the thing that starts the mic and the thing that reports on it.
+
 The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/CLAUDE.md`.
 
 ## IPC surface
@@ -375,7 +381,7 @@ The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/C
 | OAuth | `oauth:listPresets`, `oauth:startConnect`, `oauth:disconnect` |
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |
-| Voice | `voice:getToken` |
+| Voice | `voice:getToken`, `voice:verifyKey` (per-capability key check — see below) |
 | Agent | `agent:send` (takes `chatId`; steers if that chat is mid-turn), `agent:abort` (per chatId), `agent:runningChats`, `agent:listProviders`, `agent:listModels`, `agent:listThinkingLevels`, `agent:validateConnection` (checks an openai-compatible `{baseUrl}/models`); plus push events `agent:event` / `agent:error` (stamped with `chatId`) |
 | Chat (all over HTTP to the companion) | `chat:list`, `chat:listPinned`, `chat:setPinned`, `chat:search`, `chat:getMessages` (optional `after` seq), `chat:open` (returns the row + messages + this machine's `workspacePath` for the chat's workspace), `chat:delete`, `chat:rename`; plus push event `chat:feedResync` (the live feed reconnected — re-read loaded chats) |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |

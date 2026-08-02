@@ -191,17 +191,27 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       providerRef.current = provider;
       dgCommittedRef.current = '';
 
-      // Deepgram takes the token as a query param on purpose: a browser
-      // WebSocket cannot set an Authorization header, and the documented
-      // alternative (Sec-WebSocket-Protocol) is the fallback for environments
-      // that can't do even this.
+      // The two engines authenticate the socket DIFFERENTLY, and Deepgram's is
+      // not what its docs suggest. A browser WebSocket can't set an
+      // Authorization header, so the credential has to ride in the URL or in the
+      // subprotocol — tested against a live grant token, all four ways:
+      //
+      //   ?access_token=<jwt>            401 INVALID_AUTH   (the documented one)
+      //   ?token=<jwt>                   401 INVALID_AUTH
+      //   Sec-WebSocket-Protocol: token  401 INVALID_AUTH   (that's for raw keys)
+      //   Sec-WebSocket-Protocol: bearer OPEN ✅
+      //
+      // So a grant JWT is only accepted as the `bearer` subprotocol. Don't
+      // "simplify" this back to a query param — it fails at connect time with a
+      // bare onerror, which surfaces as "Voice connection error" and says nothing.
       const url = provider === 'deepgram'
         ? 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16'
-          + '&sample_rate=16000&channels=1&interim_results=true&smart_format=true'
-          + `&punctuate=true&access_token=${result.token}`
+          + '&sample_rate=16000&channels=1&interim_results=true&smart_format=true&punctuate=true'
         : `wss://streaming.assemblyai.com/v3/ws?token=${result.token}&sample_rate=16000&encoding=pcm_s16le`;
 
-      const ws = new WebSocket(url);
+      const ws = provider === 'deepgram'
+        ? new WebSocket(url, ['bearer', result.token])
+        : new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
 

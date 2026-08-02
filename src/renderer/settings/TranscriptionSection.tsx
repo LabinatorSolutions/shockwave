@@ -92,16 +92,29 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
   // the normal case, not a corner.
   const savingRef = useRef<Promise<any> | null>(null);
 
+  // Asks what the key can DO, not merely whether a token came back. Deepgram
+  // gates transcription and streaming separately, so a restricted key is good
+  // for Telegram voice notes and the agent's transcribe tool while the
+  // microphone can't start — reporting that as "rejected" sends the user to
+  // replace a key that works. `recheck` still runs alongside, because the Test
+  // microphone button is gated on the streaming token specifically.
   const runVerify = async () => {
     const req = ++verifyReq.current;
     setVerifyState({ status: 'checking' });
     await savingRef.current;
     if (verifyReq.current !== req) return;
-    const res = await recheckRef.current?.();
+    const [res] = await Promise.all([
+      window.api.voice.verifyKey(),
+      recheckRef.current?.(),
+    ]);
     if (verifyReq.current !== req) return;
-    setVerifyState(res?.error
-      ? { status: 'error', error: res.error }
-      : { status: 'ok' });
+    if (!res?.ok) {
+      setVerifyState({ status: 'error', error: res?.error || 'Could not check that key.' });
+    } else if (res.canStream === false) {
+      setVerifyState({ status: 'partial', detail: res.streamError });
+    } else {
+      setVerifyState({ status: 'ok' });
+    }
   };
   runVerifyRef.current = runVerify;
 
@@ -275,6 +288,19 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
           />
           {verifyState.status === 'ok' && (
             <p className="text-xs text-success">✓ Key accepted by {engine.label}</p>
+          )}
+          {/* Deliberately NOT an ErrorMessage. The key works — voice notes and the
+              agent's transcribe tool are fine — and only the microphone is out.
+              Painting that red is what made a good key look broken. */}
+          {verifyState.status === 'partial' && (
+            <div className="flex flex-col gap-0.5">
+              <p className="text-xs text-success">
+                ✓ Key accepted by {engine.label} — voice notes and the transcribe tool will work
+              </p>
+              <p className="text-xs text-muted-foreground">
+                The microphone won&apos;t start: {verifyState.detail}
+              </p>
+            </div>
           )}
           {verifyState.status === 'error' && <ErrorMessage>{verifyState.error}</ErrorMessage>}
         </Field>

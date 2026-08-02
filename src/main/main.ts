@@ -1137,41 +1137,139 @@ ipcMain.handle('oauth:disconnect', async (_evt, name) => {
 // AssemblyAI has `/v3/token`, Deepgram has `/v1/auth/grant` (TTL 1–3600s). The
 // PROVIDER comes back with the token because the renderer needs it to know which
 // socket to open and how to read what comes back — see `useVoiceInput.ts`.
-ipcMain.handle('voice:getToken', async () => {
-  // readSettingsSafe (not readSettings) so an unreachable companion returns a
-  // clean {error} result instead of rejecting the IPC — voice is optional. This is
-  // prefetched on mount, so a throw here logged an unhandled rejection in the
-  // renderer on every launch. Report the REAL reason too: "not configured" is a
-  // lie when the key is configured and the server simply isn't reachable.
+/**
+ * Which engine, which key, and is the key even reachable.
+ *
+ * `readSettingsSafe` (not `readSettings`) so an unreachable companion returns a
+ * clean error rather than rejecting the IPC — voice is optional, and this is
+ * prefetched on mount, so a throw logged an unhandled rejection on every launch.
+ * Report the REAL reason too: "not configured" is a lie when the key is
+ * configured and the server simply isn't reachable.
+ */
+async function resolveVoiceEngine() {
   const { settings, online, reason } = await readSettingsSafe();
-  if (!online) return { error: reason || "Can't reach your companion server." };
+  if (!online) return { error: reason || "Can't reach your companion server." } as const;
   const tr = settings.transcription ?? {};
   const provider = providerOf(tr);
+  const engineName = provider === 'deepgram' ? 'Deepgram' : 'AssemblyAI';
   const apiKey = keyFor(tr);
-  if (!apiKey) return { error: 'Voice transcription not configured' };
+  // Name the engine: with two of them, "not configured" left you checking the
+  // field you'd just filled in, for the provider you weren't using.
+  if (!apiKey) return { error: `No ${engineName} key — add one under Settings → Transcription.` } as const;
+  return { provider, engineName, apiKey } as const;
+}
+
+/**
+ * Turn a refusal into something a user can act on.
+ *
+ * A bare "failed" is unactionable, and the two failures people actually hit are
+ * opposites: a wrong key (fix the key) versus a Deepgram key without permission
+ * to mint (fix the key's ROLE — a restricted key transcribes perfectly and
+ * cannot grant). The reason carries no secret, so it goes to the renderer rather
+ * than only to the log.
+ */
+async function voiceFailure(res: Response, provider: string, engineName: string) {
+  const body = await res.text().catch(() => '');
+  let detail = '';
+  try { detail = JSON.parse(body)?.err_msg || JSON.parse(body)?.error || ''; } catch { detail = ''; }
+  if (res.status === 401 || res.status === 403) {
+    return provider === 'deepgram'
+      ? `${engineName} rejected the key for streaming (HTTP ${res.status}). It needs Member permissions or higher to mint a token — a restricted key can transcribe but not grant.`
+      : `${engineName} rejected the key (HTTP ${res.status}).`;
+  }
+  return `${engineName} refused the token request: ${detail || `HTTP ${res.status}`}`;
+}
+
+/** Mint the 60s streaming credential. `{ token }` or `{ error }`. */
+async function mintVoiceToken(provider: string, engineName: string, apiKey: string) {
+  if (provider === 'deepgram') {
+    // `ttl_seconds` matches AssemblyAI's 60 so the renderer's one cache rule
+    // (50s, below the TTL) holds whichever engine is selected.
+    const res = await fetch('https://api.deepgram.com/v1/auth/grant', {
+      method: 'POST',
+      headers: { Authorization: `Token ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ ttl_seconds: 60 }),
+    });
+    if (!res.ok) return { error: await voiceFailure(res, provider, engineName) };
+    const data = await res.json();
+    if (!data?.access_token) return { error: `${engineName} returned no token.` };
+    return { token: data.access_token as string };
+  }
+  const res = await fetch(
+    'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60',
+    { headers: { Authorization: apiKey } },
+  );
+  if (!res.ok) return { error: await voiceFailure(res, provider, engineName) };
+  const data = await res.json();
+  if (!data?.token) return { error: `${engineName} returned no token.` };
+  return { token: data.token as string };
+}
+
+ipcMain.handle('voice:getToken', async () => {
+  const engine = await resolveVoiceEngine();
+  if ('error' in engine) return { error: engine.error };
+  const { provider, engineName, apiKey } = engine;
+  try {
+    const minted = await mintVoiceToken(provider, engineName, apiKey);
+    return 'error' in minted ? minted : { token: minted.token, provider };
+  } catch (err: any) {
+    console.warn(`[voice] ${provider} token request failed:`, err.message);
+    return { error: `Couldn't reach ${engineName}: ${err?.message ?? 'network error'}` };
+  }
+});
+
+/**
+ * Check what the stored key can actually DO — per capability, not pass/fail.
+ *
+ * The key feeds three consumers (the microphone, Telegram voice notes, the
+ * agent's `transcribe` tool) and Deepgram gates them differently: transcription
+ * needs any valid key, minting a streaming token needs Member or higher. So a
+ * perfectly good restricted key made Verify say "rejected", which is false for
+ * two of the three uses and sends the user to replace a key that works.
+ *
+ * Verify used to BE the token mint, on the reasoning that AssemblyAI ships no
+ * key-check endpoint so the cheapest real request is the check, and this app
+ * only ever used the streaming product. Both premises died with the second
+ * engine. AssemblyAI still works that way — one credential, one capability, so
+ * the mint remains the whole answer — while Deepgram is asked two questions.
+ */
+ipcMain.handle('voice:verifyKey', async () => {
+  const engine = await resolveVoiceEngine();
+  if ('error' in engine) return { ok: false, error: engine.error };
+  const { provider, engineName, apiKey } = engine;
+
   try {
     if (provider === 'deepgram') {
-      // `ttl_seconds` matches AssemblyAI's 60 so the renderer's one cache rule
-      // (50s, below the TTL) holds whichever engine is selected.
-      const res = await fetch('https://api.deepgram.com/v1/auth/grant', {
-        method: 'POST',
-        headers: { Authorization: `Token ${apiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ ttl_seconds: 60 }),
+      // This endpoint accepts ANY valid key and answers with the key's own
+      // `scopes` — which is the actual capability answer, not the 200. Treating
+      // the 200 as "it transcribes" was wrong: a key scoped `account:write` is
+      // perfectly valid here and cannot transcribe a thing.
+      const who = await fetch('https://api.deepgram.com/v1/auth/token', {
+        headers: { Authorization: `Token ${apiKey}` },
       });
-      if (!res.ok) return { error: 'Failed to get voice token' };
-      const data = await res.json();
-      return { token: data.access_token, provider };
+      if (!who.ok) return { ok: false, error: await voiceFailure(who, provider, engineName) };
+
+      // DO NOT gate on the `scopes` in this response. It is not the key's
+      // capability list — a Member key that mints tokens successfully still
+      // reports `["account:write"]` here, so reading it as permissions rejects a
+      // working key. Verified against two real keys: identical `scopes`, one
+      // grants and one doesn't. The only trustworthy answer is to make the call.
+      const minted = await mintVoiceToken(provider, engineName, apiKey);
+      if ('error' in minted) {
+        // The key is valid (the call above passed) and just can't mint. Voice
+        // notes and the transcribe tool may well work; only the microphone is
+        // definitely out, so this is a note, not a rejection.
+        return { ok: true, canStream: false, engineName, streamError: minted.error };
+      }
+      return { ok: true, canStream: true, engineName };
     }
-    const res = await fetch(
-      'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60',
-      { headers: { Authorization: apiKey } },
-    );
-    if (!res.ok) return { error: 'Failed to get voice token' };
-    const data = await res.json();
-    return { token: data.token, provider };
+
+    const minted = await mintVoiceToken(provider, engineName, apiKey);
+    if ('error' in minted) return { ok: false, error: minted.error };
+    return { ok: true, canStream: true, engineName };
   } catch (err: any) {
-    console.warn('[voice] token request failed:', err.message);
-    return { error: 'Voice token request failed' };
+    console.warn(`[voice] ${provider} verify failed:`, err.message);
+    return { ok: false, error: `Couldn't reach ${engineName}: ${err?.message ?? 'network error'}` };
   }
 });
 

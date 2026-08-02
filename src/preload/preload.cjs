@@ -452,6 +452,12 @@ contextBridge.exposeInMainWorld('api', {
      *  (AssemblyAI or Deepgram), using that engine's configured key.
      *  @returns {Promise<{ token?: string, provider?: string, error?: string }>} */
     getToken: () => ipcRenderer.invoke('voice:getToken'),
+    /** What the stored key can actually DO. Deepgram gates transcription and
+     *  token-minting separately, so a good restricted key is `{ok:true,
+     *  canStream:false}` rather than a failure.
+     *  @returns {Promise<{ ok: boolean, canStream?: boolean, engineName?: string,
+     *                      streamError?: string, error?: string }>} */
+    verifyKey: () => ipcRenderer.invoke('voice:verifyKey'),
   },
 
   // ---- App / updates ------------------------------------------------------

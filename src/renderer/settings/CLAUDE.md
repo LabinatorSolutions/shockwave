@@ -33,7 +33,17 @@ A credential page's **primary button checks the key** (GitHub → Verify, Transc
 2. **Invalidate on edit.** A green check beside a key that has since been typed over is actively misleading — typing bumps the request id and drops the row back to idle.
 3. **Removing is not failing.** Remove runs the bare re-check (so dependent UI updates) but must not publish its verdict, or deleting a key would paint a red "not configured" under a field the user just chose to empty.
 
-`TranscriptionSection` also shows what to do when a provider ships **no key-check endpoint**: verify by making the cheapest real request and reading the status code. `voice:getToken` already is that request — it mints the 60s streaming token against the stored key — so Verify reuses it rather than adding a second HTTP surface, and it's the right probe besides, since this app only ever uses the streaming product. The mint was always happening (it's what un-greys Test microphone); what was missing is that its answer was thrown away into a boolean and its error string swallowed.
+`TranscriptionSection` also shows what to do when **one credential feeds several capabilities**. Verify calls `voice:verifyKey`, which reports per capability rather than pass/fail, and the three results are distinct UI:
+
+| Result | Shown as |
+|---|---|
+| key transcribes AND can mint a streaming token | green ✓ |
+| key transcribes, can't mint (Deepgram restricted key) | **green ✓ plus a muted note** that the microphone won't start |
+| key rejected outright | `ErrorMessage` |
+
+**The middle row is the whole point, and it is deliberately not red.** The transcription key feeds three consumers — the microphone, Telegram voice notes, the agent's `transcribe` tool — and Deepgram gates them differently: transcribing needs any valid key, minting a streaming token needs Member or higher. A restricted key is *good* for two of the three, so reporting "rejected" is false and sends the user to replace a key that works.
+
+Verify used to BE the token mint, reasoning that AssemblyAI ships no key-check endpoint so the cheapest real request is the check, and that this app only ever used the streaming product. **Both premises died with the second engine.** AssemblyAI still works exactly that way — one credential, one capability, so the mint remains the whole answer — while Deepgram is asked two questions (`GET /v1/auth/token`, which any scope can call, then the grant). `recheck` still runs alongside, because Test microphone is gated on the streaming token specifically and must grey out in the middle row.
 
 ## The sections
 
