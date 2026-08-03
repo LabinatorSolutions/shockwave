@@ -15,6 +15,8 @@ import path from 'node:path';
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import { resolveModel } from '../../agent-core/agent.js';
 import { commitAll, syncAndPush, type CheckInResult, type GitAuth } from './git.js';
+import type { Db } from './db.js';
+import * as store from './store.js';
 import { logger, errStr } from './log.js';
 
 const exec = promisify(execFile);
@@ -68,6 +70,47 @@ export async function checkInWithFixer(
   const final = fixed ? await syncAndPush(dir, branch, auth) : 'conflict';
   log[final === 'pushed' ? 'info' : 'error']({ dir, branch, fixed, result: final }, 'git-fixer finished');
   return final;
+}
+
+/**
+ * Check in a chat's work and record that its check-in has FINISHED.
+ *
+ * Every server-side run lands through here — Telegram, cron, and the two
+ * background runs — and it exists so the stamp cannot be forgotten by one of
+ * them. `checkInWithFixer` on its own has no chat to stamp, which is why the
+ * chat id lives at this layer rather than inside it.
+ *
+ * ── What the stamp is for ───────────────────────────────────────────────────
+ *
+ * `running` clears when the agent stops talking, which is BEFORE the push — so
+ * between those two moments a chat looks finished and isn't. The sweeps pick
+ * chats on `running = false`, so a review run could start while the source
+ * chat's work was still being pushed: it would clone a checkout missing that
+ * work, and two agents would be pushing to the same repo at once.
+ *
+ * Holding `running` across the check-in instead would have been simpler and is
+ * wrong — the desktop freezes its composer for a chat running on another
+ * machine, so a Telegram chat would be un-typeable for as long as the fixer ran.
+ * A separate stamp blocks the sweep and nobody else.
+ *
+ * ── Stamped on failure too ──────────────────────────────────────────────────
+ *
+ * It records "we finished trying", not "we succeeded". A chat that is never
+ * stamped is never reviewed again, and a conversation whose push conflicted is
+ * one worth learning from rather than freezing out.
+ */
+export async function checkInAndStamp(
+  db: Db, chatId: string,
+  dir: string, branch: string, message: string, auth: GitAuth, m: FixModel, limits: FixLimits = {},
+): Promise<CheckInResult> {
+  try {
+    return await checkInWithFixer(dir, branch, message, auth, m, limits);
+  } finally {
+    // Never let a bookkeeping failure change the run's outcome — but say so, or
+    // the chat silently stops being reviewable with nothing to explain it.
+    await store.setCheckedInAt(db, chatId).catch((e: any) =>
+      log.error({ chatId, err: errStr(e) }, 'could not record the check-in time'));
+  }
 }
 
 async function sh(dir: string, cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {

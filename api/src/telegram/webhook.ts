@@ -14,7 +14,7 @@ import { getDb } from '../db.js';
 import * as store from '../store.js';
 import * as feed from '../feed.js';
 import { prepareCheckout, landed, type GitAuth } from '../git.js';
-import { checkInWithFixer } from '../gitFixer.js';
+import { checkInAndStamp } from '../gitFixer.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
@@ -607,7 +607,8 @@ async function runTurnInner(
   // half-edited files and a reply abandoned mid-sentence.
   await sink.done(finalMessages);
   // Identical to the cron path — same function, not a copy. See gitFixer.ts.
-  const checkedIn = await checkInWithFixer(
+  const checkedIn = await checkInAndStamp(
+    db, chatId,
     dir, ws.defaultBranch, `Shockwave telegram — ${new Date().toISOString()}`, auth,
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },

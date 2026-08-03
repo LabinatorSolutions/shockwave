@@ -100,6 +100,9 @@ export const chatTable = pgTable('chat', {
   // TOASTs it out of line and never reads it unless selected.
   transcript: text('transcript'),
   transcriptUpdatedAt: epochMs('transcript_updated_at'),
+  /** When this chat's work last finished being checked in — success or failure.
+   *  NULL forever on a desktop chat, which never checks in. See init.sql. */
+  checkedInAt: epochMs('checked_in_at'),
 }, (t) => [index('idx_chat_ws_updated').on(t.workspaceId, t.updatedAt)]);
 
 // Telegram integration — a single account (one authorized user, DM-only). The

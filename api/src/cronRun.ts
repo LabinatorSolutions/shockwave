@@ -10,7 +10,7 @@ import { getDb } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
 import { prepareCheckout, landed, type GitAuth } from './git.js';
-import { checkInWithFixer } from './gitFixer.js';
+import { checkInAndStamp } from './gitFixer.js';
 import { chatFilesDir } from './dataDirs.js';
 import { sendTelegramFile } from './telegram/sendTool.js';
 import {
@@ -129,7 +129,8 @@ export async function runCronJob(
   const stamp = new Date().toISOString();
   // Shared with the Telegram path — deterministic check-in, git-fixer on a
   // conflict, push. See checkInWithFixer in gitFixer.ts.
-  const result = await checkInWithFixer(
+  const result = await checkInAndStamp(
+    db, chatId,
     dir, w.defaultBranch, `Shockwave cron: ${jobName} — ${stamp}`, auth,
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },

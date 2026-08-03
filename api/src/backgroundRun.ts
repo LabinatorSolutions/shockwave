@@ -30,7 +30,7 @@ import { getDb } from './db.js';
 import * as store from './store.js';
 import * as feed from './feed.js';
 import { prepareCheckout, type GitAuth } from './git.js';
-import { checkInWithFixer } from './gitFixer.js';
+import { checkInAndStamp } from './gitFixer.js';
 import { buildReviewPrompt } from '../../agent-core/defaults/reviewPrompt.js';
 import { buildMemoryPrompt } from '../../agent-core/defaults/memoryPrompt.js';
 import type { BackgroundContext } from '../../agent-core/defaults/conversation.js';
@@ -153,7 +153,8 @@ export async function runBackground(
   // The same landing path cron and Telegram use. Work written into the checkout
   // and never pushed is work that does not exist: the sweeper reclaims the
   // directory on its TTL.
-  const result = await checkInWithFixer(
+  const result = await checkInAndStamp(
+    db, runChatId,
     dir, w.defaultBranch, `Shockwave ${kind.source} — ${stamp}`, auth,
     { provider: ca.provider, model: ca.model, apiKey, baseUrl: ca.baseUrl },
     { attempts: Number(ca.maxFixAttempts) || 3, maxMs: maxRunMs },

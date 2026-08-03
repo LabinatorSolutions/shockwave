@@ -529,6 +529,17 @@ export async function cloneChatForBackground(db: Db, opts: {
   return { workspaceId: src.workspaceId, workspacePathHint: null };
 }
 
+/**
+ * Stamp when this chat's work finished being checked in.
+ *
+ * Called whether the push succeeded or failed: it records "we finished trying".
+ * A chat that is never stamped is never reviewed again, and a failed check-in is
+ * a conversation worth learning from, not one to freeze out.
+ */
+export async function setCheckedInAt(db: Db, chatId: string, at = now()) {
+  await db.update(chatTable).set({ checkedInAt: at }).where(eq(chatTable.chatId, chatId));
+}
+
 export async function setChatTitle(db: Db, chatId: string, title: string) {
   await db.update(chatTable).set({ title }).where(eq(chatTable.chatId, chatId));
 }
@@ -569,6 +580,29 @@ export async function setRunning(db: Db, chatId: string, machine: string | null)
  *
  * Ordered oldest-first so a backlog drains in the order the work happened.
  */
+/**
+ * Is this chat's work safely in GitHub, so a background run may open it?
+ *
+ * `running` clears when the agent stops talking, which is BEFORE the check-in.
+ * Without this a chat whose push is still in flight looks finished: the run
+ * would clone a checkout missing that work, and two agents would be pushing to
+ * the same repo at once.
+ *
+ * Two ways to qualify:
+ *
+ *   checked_in_at > the chat's newest message — the check-in that finished after
+ *     the conversation's last word must be this turn's, since nothing else
+ *     pushes for this chat.
+ *   checked_in_at IS NULL — a desktop chat, which never checks in at all. Its
+ *     work reaches GitHub through the sync engine on a timer, unconnected to any
+ *     chat, so there is nothing to wait for. Without this arm, desktop chats —
+ *     most of them — would never be reviewed again.
+ */
+const checkInSettled = sql`(
+  c.checked_in_at is null
+  or c.checked_in_at > (select max(created_at) from message where chat_id = c.id)
+)`;
+
 export async function chatsDueForReview(db: Db, threshold: number, limit = 5) {
   const rows = await db.execute(sql`
     select c.id            as "chatId",
@@ -593,6 +627,7 @@ export async function chatsDueForReview(db: Db, threshold: number, limit = 5) {
      where c.deleted = false
        and c.running = false
        and coalesce(c.source, '') not in ('review', 'memory')
+       and ${checkInSettled}
      group by c.id, c.workspace_id
     having count(m.seq) >= ${threshold}
      order by min(m.created_at) asc
@@ -626,6 +661,7 @@ export async function chatsDueForMemory(db: Db, threshold: number, limit = 5) {
      where c.deleted = false
        and c.running = false
        and coalesce(c.source, '') not in ('review', 'memory')
+       and ${checkInSettled}
      group by c.id, c.workspace_id
     having count(m.seq) >= ${threshold}
      order by min(m.created_at) asc

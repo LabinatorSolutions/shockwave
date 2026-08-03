@@ -217,7 +217,7 @@ It used to abort the session at 12 tool calls. Resolving *one* conflicted file c
 - **setting** — non-secret scalar settings, one row per dotted leaf key: `key`, `value`, `type` (`string|number|boolean|json`), `updated_at`.
 - **agent_secret** — agent-secret entity metadata (no crypto columns): `name`, `description`, `kind` (`static|oauth`), the `oauth_*` columns, timestamps.
 - **secret_value** — **every** encrypted value: PK `(owner, field)`, `ciphertext` (base64), `iv`+`tag` (`bytea`, `NOT NULL`), `key_version`, `updated_at`. `owner` ∈ {`settings`, `telegram`, an `agent_secret.name`}.
-- **chat** / **message** — chats: session metadata + `source` (`desktop|cron|telegram|review|memory`)/`source_id`/`machine` provenance + `running`/`running_machine` cross-client flag + `last_reviewed_seq` (how far review has looked — see below), plus the whole pi JSONL in a **`transcript` column** (it was a 1:1 `chat_transcript` side table, which bought nothing — Postgres TOASTs a big text column out of line and never reads it unless selected). `message` holds one row per pi session ENTRY, appended as pi completes it; identity is `entry_id` (pi's own id), and `seq` is an ordering/read cursor **assigned by the server**. It also carries a GENERATED `search_text` tsvector (user+assistant content only — tool output is deliberately unindexed) with a GIN index, backing the agent's `search_chats` tool.
+- **chat** / **message** — chats: session metadata + `source` (`desktop|cron|telegram|review|memory`)/`source_id`/`machine` provenance + `running`/`running_machine` cross-client flag + `last_reviewed_seq` (how far review has looked — see below) + `checked_in_at` (when its work last finished being pushed — see "A chat is not reviewable until its work has landed"), plus the whole pi JSONL in a **`transcript` column** (it was a 1:1 `chat_transcript` side table, which bought nothing — Postgres TOASTs a big text column out of line and never reads it unless selected). `message` holds one row per pi session ENTRY, appended as pi completes it; identity is `entry_id` (pi's own id), and `seq` is an ordering/read cursor **assigned by the server**. It also carries a GENERATED `search_text` tsvector (user+assistant content only — tool output is deliberately unindexed) with a GIN index, backing the agent's `search_chats` tool.
 - **attachment** — images the user sent with a message: `id`, `chat_id`, `entry_id`, `idx`, `mime_type`, `bytes`, `created_at`. **This is what the chat UI draws.** Keyed by `entry_id` (the message's identity) and NOT `seq`, which the server assigns afterwards and the writer therefore doesn't know. Inserted in the same transaction as the message and **only when that message actually inserted**, so a retried or re-sent turn can't duplicate its pictures. The bytes also live inside `chat.transcript` — that's pi's own session file, stored whole and never parsed; this table is our copy in a shape that can be served one image at a time.
 - **telegram_account** — single row (`id='default'`): authorized user, dm chat id, active chat, **active workspace** (switchable via `/workspace`; falls back to the first workspace by `sort_order` — the top of the desktop's list), `last_update_id` (dedup), bot username, enabled. Token + webhook secret are encrypted in `secret_value` under owner `telegram`.
 - **cron_state** — run **history** only, PK `(workspace_id, job_name)`: `last_run_at`/`last_error`/`last_chat_id`. Next-run is computed in memory by croner, never persisted.
@@ -370,6 +370,27 @@ Separate croner from cron deliberately — a job scheduled for 2am should fire a
 ### Why the companion and not the end of a turn
 
 Turns happen three ways — desktop, Telegram, cron — across two processes, and only this server sees all of them, because every turn's messages land in its `message` table whoever ran it. Hooking the turn would mean writing it twice and having it never fire while the desktop is closed. It also means there is no counter to keep: "how much has happened" is a count of rows past a mark on the chat, which cannot drift and survives restarts. hermes carries incremented counters precisely because it cannot count what actually happened.
+
+### A chat is not reviewable until its work has landed
+
+`running` clears when the agent stops talking, which is **before** the check-in — `agentSend` ends with `setRunning(chatId, null)` and only then does the caller push. Both sweeps pick chats on `running = false`, so there is a window where a chat looks finished and its work is still in flight. A review run starting in that window clones a checkout **missing the work its conversation describes**, and two agents end up pushing to the same repo at once.
+
+So every server-side run lands through **`checkInAndStamp`** (`gitFixer.ts`), which checks in and then records `chat.checked_in_at`. The due queries require:
+
+```
+c.checked_in_at is null                                   -- desktop: nothing to wait for
+or c.checked_in_at > (max message created_at for the chat) -- this turn's check-in has finished
+```
+
+Nothing else pushes for a given chat, so a check-in later than the conversation's last word must be that turn's — which is why no turn-start column is needed.
+
+**The NULL arm is desktop chats, and it is not a loophole.** They never check in: their work reaches GitHub through the desktop's sync engine on a timer, unconnected to any chat. Without that arm, desktop chats — most of them — would never be reviewed again.
+
+**Stamped on failure too.** It records "we finished trying", not "we succeeded". A chat that is never stamped drops out of review permanently, and a conversation whose push conflicted is one worth learning from.
+
+**Holding `running` across the check-in would have been simpler and is wrong.** The desktop freezes its composer for a chat running on another machine (`remoteMachine` in `ChatSidebar.tsx`), so a Telegram chat would be un-typeable for as long as the fixer ran — up to `maxRunMinutes`. A separate stamp blocks the sweep and nobody else. **Never block a user message to protect a maintenance pass.**
+
+Not covered by an automated test: the due queries need a live Postgres, like the rest of this tree.
 
 ### Five things the loop depends on, each of which breaks it if removed
 

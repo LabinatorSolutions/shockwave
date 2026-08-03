@@ -126,7 +126,22 @@ CREATE TABLE IF NOT EXISTS chat (
   -- different things (your messages vs the agent's tool calls) and therefore
   -- come due at different times — sharing a mark would make whichever ran first
   -- silently mark the other's work as already examined.
-  last_memory_seq integer NOT NULL DEFAULT 0
+  last_memory_seq integer NOT NULL DEFAULT 0,
+  -- When this chat's work last finished being checked in to GitHub. Set whether
+  -- the push succeeded or failed — it records "we finished trying", not "we
+  -- succeeded", because a chat that never gets stamped drops out of review
+  -- permanently.
+  --
+  -- The sweeps require it to be newer than the chat's newest message. `running`
+  -- clears when the agent stops talking, which is BEFORE the check-in, so
+  -- without this a chat whose push is still in flight looks finished: the
+  -- reviewer would clone a checkout missing that work, and two agents would be
+  -- pushing to the same repo at once.
+  --
+  -- NULL forever on a desktop chat, which never checks in — its work reaches
+  -- GitHub through the sync engine on a timer, unconnected to any chat. So NULL
+  -- means "nothing to wait for", not "not yet".
+  checked_in_at bigint
 );
 CREATE INDEX IF NOT EXISTS idx_chat_ws_updated ON chat (workspace_id, updated_at);
 -- Existing volumes (table already created before these columns) get them here.
@@ -177,6 +192,7 @@ END $$;
 -- bought nothing.
 ALTER TABLE chat ADD COLUMN IF NOT EXISTS transcript text;
 ALTER TABLE chat ADD COLUMN IF NOT EXISTS transcript_updated_at bigint;
+ALTER TABLE chat ADD COLUMN IF NOT EXISTS checked_in_at bigint;
 -- Fold the old side table in, once, then retire it.
 DO $$ BEGIN
   IF to_regclass('public.chat_transcript') IS NOT NULL THEN
