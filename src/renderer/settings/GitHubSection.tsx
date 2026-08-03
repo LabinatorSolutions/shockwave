@@ -121,7 +121,7 @@ export default function GitHubSection({ sync, onSyncChange }) {
     try {
       const r = await removeCredential('sync.pat');
       if (!r?.ok) setVerifyState({ status: 'error', error: r?.error || 'Could not remove the token.' });
-      else { setPatDraft(''); setVerifyState({ status: 'idle' }); }
+      else { patField.onChange(''); setVerifyState({ status: 'idle' }); }
     } finally {
       setRemoving(false);
     }
