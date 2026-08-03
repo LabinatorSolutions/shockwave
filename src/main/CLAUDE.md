@@ -335,7 +335,7 @@ One credential helper works everywhere: git runs `!`-prefixed helpers through a 
 
 ## App updates
 
-**Checking is automatic; downloading and installing are not.** `runUpdateCheck()` fires 8s after launch and daily thereafter, and reports what it found. Nothing else happens until the user presses something.
+**Checking is automatic; downloading and installing are not.** `runUpdateCheck()` fires 8s after launch and hourly thereafter, and reports what it found. Nothing else happens until the user presses something.
 
 Both of electron-updater's self-driving flags are **off** and must stay off:
 

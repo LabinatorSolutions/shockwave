@@ -1423,7 +1423,7 @@ ipcMain.handle('voice:listVoices', async () => {
 // Dev (unpackaged) has no app-update.yml and so has no downloader at all: the
 // notify-only GitHub API poll fills in the same status with `canDownload: false`,
 // and the UI offers the release page instead of a Download button. Unauthenticated
-// GitHub API allows ~60 req/hr — a daily poll, the odd manual check and the
+// GitHub API allows ~60 req/hr — an hourly poll, the odd manual check and the
 // release-notes read are nowhere near that.
 const { autoUpdater } = electronUpdater;
 
@@ -1437,7 +1437,13 @@ const { autoUpdater } = electronUpdater;
 updateLog.transports.file.level = 'info';
 autoUpdater.logger = updateLog;
 const UPDATE_REPO = { owner: 'stephengpope', repo: 'shockwave' };
-const UPDATE_POLL_MS = 24 * 60 * 60 * 1000; // daily auto-check
+// Hourly. It only DETECTS — nothing downloads or installs without the user
+// pressing something (see the two electron-updater flags above), so the cost of
+// checking more often is one request, and the benefit is that a release lands on
+// the pill within the hour instead of within the day. Well inside GitHub's
+// unauthenticated ~60/hr: this is one request, alongside the odd manual check
+// and a release-notes read.
+const UPDATE_POLL_MS = 60 * 60 * 1000;
 
 // "v1.2.3" / "1.2.3-beta" → [1,2,3]; the leading "v" and any pre-release/build
 // suffix are dropped (we only compare the numeric core).
@@ -2866,7 +2872,7 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
   // Update check: once shortly after launch (let the window mount + subscribe
-  // first), then daily. Notify-only; failures are swallowed (offline is fine).
+  // first), then hourly. Notify-only; failures are swallowed (offline is fine).
   setTimeout(() => { runUpdateCheck().catch(() => {}); }, 8000);
   setInterval(() => { runUpdateCheck().catch(() => {}); }, UPDATE_POLL_MS);
 });
