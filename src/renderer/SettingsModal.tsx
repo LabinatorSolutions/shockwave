@@ -19,7 +19,7 @@ import WorkspaceSkillsSection from './settings/WorkspaceSkillsSection.jsx';
 import AgentSecretsSection from './settings/AgentSecretsSection.jsx';
 import DailyNoteSection from './settings/DailyNoteSection.jsx';
 import TemplatesSection from './settings/TemplatesSection.jsx';
-import TranscriptionSection from './settings/TranscriptionSection.jsx';
+import VoiceSection from './settings/VoiceSection.jsx';
 import UpdatesSection from './settings/UpdatesSection.jsx';
 import AdvancedSection from './settings/AdvancedSection.jsx';
 
@@ -56,7 +56,7 @@ function buildNav(workspaceLabel) {
     { kind: 'header', label: 'APIs' },
     { kind: 'item', id: SETTINGS_SECTIONS.COMPANION, label: 'Companion' },
     { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
-    { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
+    { kind: 'item', id: SETTINGS_SECTIONS.VOICE, label: 'Agent Voice' },
   ];
 }
 
@@ -64,7 +64,7 @@ const DEFAULT_SECTION = SETTINGS_SECTIONS.GENERAL;
 
 // Which nav row each `setupStatus` flag badges. Only REQUIRED things are in
 // here: a red dot has to mean "the app can't do its job until you deal with
-// this", so Telegram, Transcription and the per-workspace pages are absent no
+// this", so Telegram, Voice and the per-workspace pages are absent no
 // matter how empty they are. Add a row here and you are claiming the app is
 // broken without it.
 const BADGE_KEY_FOR_SECTION: Record<string, string> = Object.freeze({
@@ -125,6 +125,12 @@ export default function SettingsModal({
   onReloadSecrets,
   transcription,
   onTranscriptionChange,
+  speech,
+  onSpeechChange,
+  hasVoiceKey,
+  onVoiceKeyChange,
+  voiceReply,
+  onVoiceReplyChange,
   sync,
   onSyncChange,
   timezone,
@@ -329,10 +335,17 @@ export default function SettingsModal({
           {effectiveActive === SETTINGS_SECTIONS.ADVANCED && (
             workspacePath ? <AdvancedSection onRebuildCache={onRebuildCache} /> : <NoWorkspaceNote />
           )}
-          {effectiveActive === SETTINGS_SECTIONS.TRANSCRIPTION && (
-            <TranscriptionSection
+          {effectiveActive === SETTINGS_SECTIONS.VOICE && (
+            <VoiceSection
               transcription={transcription}
               onTranscriptionChange={onTranscriptionChange}
+              speech={speech}
+              onSpeechChange={onSpeechChange}
+              hasVoiceKey={hasVoiceKey}
+              onVoiceKeyChange={onVoiceKeyChange}
+              voiceReply={voiceReply}
+              onVoiceReplyChange={onVoiceReplyChange}
+              hasWorkspace={!!workspacePath}
             />
           )}
           {effectiveActive === SETTINGS_SECTIONS.UPDATES && (

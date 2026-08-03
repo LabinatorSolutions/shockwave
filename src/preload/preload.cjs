@@ -448,10 +448,18 @@ contextBridge.exposeInMainWorld('api', {
   // that authenticates the WebSocket connection to AssemblyAI's /v3/ws.
 
   voice: {
-    /** Mint a fresh 60-second streaming token from whichever engine is selected
-     *  (AssemblyAI or Deepgram), using that engine's configured key.
-     *  @returns {Promise<{ token?: string, provider?: string, error?: string }>} */
+    /** Mint a fresh streaming token from whichever engine is selected for
+     *  LISTENING (AssemblyAI, Deepgram or ElevenLabs), using that vendor's key.
+     *  The token's lifetime and whether it survives being used come back with it —
+     *  they differ per vendor and the caller caches on them.
+     *  @returns {Promise<{ token?: string, provider?: string, tokenTtlMs?: number,
+     *                      singleUse?: boolean, error?: string }>} */
     getToken: () => ipcRenderer.invoke('voice:getToken'),
+    /** The voices the SPEAKING vendor offers. Listing needs the API key, so it
+     *  happens in main; only `{id, name, preview?}` crosses.
+     *  @returns {Promise<{ voices?: Array<{id: string, name: string, preview?: string}>,
+     *                      error?: string }>} */
+    listVoices: () => ipcRenderer.invoke('voice:listVoices'),
     /** What the stored key can actually DO. Deepgram gates transcription and
      *  token-minting separately, so a good restricted key is `{ok:true,
      *  canStream:false}` rather than a failure.

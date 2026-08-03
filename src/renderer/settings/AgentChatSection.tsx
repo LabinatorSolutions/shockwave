@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Combobox from '../Combobox.jsx';
 import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
-import { useCommitField } from './useCommitField';
+import { useCommitField, useCredentialField } from './useCommitField';
 import { removeCredential } from './credentialField';
 import CredentialRow from './CredentialRow';
 import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD, NUMBER_FIELD_WIDE } from './SectionUI';
@@ -42,8 +42,16 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
   // settings text box. The Test button below also reads the endpoint, so
   // per-keystroke writes meant it was re-armed against every partial URL.
   const baseUrlField = useCommitField(baseUrl ?? '', (next) => onChange({ baseUrl: next }));
-  // Write-only: starts empty, commits only what was typed.
-  const keyField = useCommitField('', (next) => onKeyChange(next));
+  // Write-only: starts empty, commits only what was typed, resets after — so by
+  // the time Test runs there is no draft left to send, and the save it has to
+  // wait for is parked here. Same rule as Voice's Verify (`savingRef`): main
+  // resolves the key from the companion, not from the screen, so a check that
+  // doesn't await the blur-triggered write checks the PREVIOUS key. Clicking the
+  // button is itself what blurs the field, so that ordering is the normal case.
+  const savingRef = useRef<Promise<any> | null>(null);
+  const keyField = useCredentialField((next) => {
+    savingRef.current = Promise.resolve(onKeyChange(next));
+  });
   const ctxField = useCommitField(
     contextWindow == null ? '' : String(contextWindow),
     (next) => onChange({ contextWindow: next ? Number(next) : undefined }),
@@ -91,14 +99,17 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
     setValidateState('loading');
     setValidateMsg('');
     try {
-      // Drafts, not the stored props: clicking Test blurs the input, which
-      // commits, but that write is async — the props are still one edit behind
-      // at this point. The drafts are always the freshest values on screen.
+      // `baseUrl` is the DRAFT, not the stored prop: clicking Test blurs the
+      // input, which commits, but that write is async — the prop is still one
+      // edit behind at this point.
       //
-      // `provider` lets main fall back to the STORED key when nothing is typed.
-      // The key box is write-only, so it's empty unless you're mid-edit — sending
-      // only the draft meant Test ran unauthenticated against a saved endpoint and
-      // reported a 401 for a setup that works.
+      // `apiKey` is the opposite, and deliberately: the key draft is reset the
+      // instant it commits, so there is nothing on screen to send and `provider`
+      // is what lets main fall back to the STORED key. That's why the await
+      // above is load-bearing rather than belt-and-braces — without it main
+      // falls back to the key from BEFORE the one just typed. (Sending nothing
+      // and naming no provider was the original bug: Test ran unauthenticated
+      // against a saved endpoint and reported a 401 for a setup that works.)
       const result = await window.api.agent.validateConnection({
         baseUrl: baseUrlField.value,
         apiKey: keyField.value,
@@ -374,7 +385,8 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   // Only the slot being typed into. The server merges rather than treating the map
   // as complete (see reconcileProviderKeys), so other providers' keys are untouched
   // and there is no need to hold — or resend — any of them.
-  const updateKey = (value) => { if (value) updateCa({ providerKeys: { [caProvider]: value } }); };
+  // Returns the persist promise so Test can await it — see `savingRef` above.
+  const updateKey = (value) => (value ? updateCa({ providerKeys: { [caProvider]: value } }) : undefined);
   // Removing is its own call — an empty value can't carry the intent, because the
   // renderer never holds key values and empty ones are stripped from saves.
   const removeKey = () => removeCredential(`codingAgent.providerKeys.${caProvider}`);

@@ -34,7 +34,24 @@ function textOf(content: any): string {
  *  cleans down to nothing (a segment that is only a file tag). */
 const PLACEHOLDER = '…';
 
-export function makeTelegramSink(client: TelegramClient, chatId: number, deliverRoots: string[] = []) {
+/**
+ * `speak` is injected rather than imported so this file stays a RENDERER of
+ * events — it has no store, no settings and no idea what a vendor is. Absent
+ * means the workspace is on text replies, which is the default and the common
+ * case, so nothing here has to read a setting to find out.
+ *
+ * `textToo` is separate from `speak` because the three modes are not a scale:
+ * text, voice, and both. Voice-ONLY still streams while the turn runs — the
+ * placeholder and the tool lines are how you know it is working — and then takes
+ * the written reply back down once the voice note has landed. Suppressing the
+ * stream instead would leave the user watching an empty chat for the whole turn.
+ */
+export function makeTelegramSink(
+  client: TelegramClient,
+  chatId: number,
+  deliverRoots: string[] = [],
+  opts: { speak?: (text: string) => Promise<boolean>; textToo?: boolean } = {},
+) {
   let text = '';            // current assistant text segment
   // Everything the agent has said THIS turn, across tool boundaries. `text` is
   // reset at each tool call, and agent_end carries pi's whole session — neither
@@ -194,12 +211,35 @@ export function makeTelegramSink(client: TelegramClient, chatId: number, deliver
     }
 
     if (final.trim()) {
-      const chunks = splitMessage(final);
+      const extra: number[] = [];   // ids of the overflow chunks, for the cleanup below
       try {
+        const chunks = splitMessage(final);
         if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0]);
-        else await client.sendMessage(chatId, chunks[0]);
-        for (const c of chunks.slice(1)) await client.sendMessage(chatId, c);
+        else { const m = await client.sendMessage(chatId, chunks[0]); messageId = m?.message_id ?? null; }
+        for (const c of chunks.slice(1)) {
+          const m = await client.sendMessage(chatId, c);
+          if (m?.message_id != null) extra.push(m.message_id);
+        }
       } catch { /* best-effort */ }
+
+      // Speaking happens AFTER the text has landed, never before: synthesis is a
+      // network call that can fail, and the answer must not wait on it. `speak`
+      // reports its own failures and does not throw, so a false here means no
+      // voice note went out.
+      //
+      // It runs on the CLEANED text, after file tags have been cut, so the reply
+      // is never read aloud with a file path in the middle of it.
+      const spoke = opts.speak ? await opts.speak(final) : false;
+
+      // Voice-only: the words were shown while the turn ran so the user could
+      // follow it, and now that the voice note has landed they come back down.
+      // ONLY once it actually landed — a failed synthesis leaves the text in
+      // place, because a mode preference is not worth delivering nothing over.
+      if (spoke && opts.textToo === false) {
+        if (messageId != null) await client.deleteMessage(chatId, messageId).catch(() => {});
+        for (const id of extra) await client.deleteMessage(chatId, id).catch(() => {});
+        messageId = null;
+      }
     } else {
       // The turn said nothing and nothing ever claimed the bubble. Take it back —
       // a bare "…" left as the entire reply reads as the bot having given up

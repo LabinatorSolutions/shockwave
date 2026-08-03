@@ -157,6 +157,39 @@ export async function notifyWorkspacesChanged(): Promise<boolean> {
   return emitChanged(['workspaces', 'activeWorkspaceId']);
 }
 
+/**
+ * Hand the renderer a COMPLETE fresh copy of settings — a resync, not a change.
+ *
+ * This is what a reconnect needs, and a key list is the wrong tool for it. The
+ * renderer's copy after a degraded boot isn't stale in one place, it is empty
+ * everywhere: `readSettingsSafe` returns machine-local values only, so the app
+ * hydrates with no provider, no model, no keys. Naming the keys to re-push means
+ * maintaining that list forever, and the failure when someone forgets one is
+ * silent — a page that reads blank until the app is restarted.
+ *
+ * So the renderer re-seeds through the same path boot uses, and `resync` is the
+ * flag that says "treat this as a full snapshot" rather than "these keys moved".
+ *
+ * **A resync is a PULL and must never become a push.** Everything downstream of
+ * it only seeds local state; nothing writes back. The renderer's empty cache is
+ * exactly the thing that must not reach the companion — a write on top of it
+ * would replace real stored values with the blanks an offline boot invented.
+ * Returns false when the read failed, so the caller retries rather than
+ * broadcasting a degraded copy (which is the bug this whole path exists to fix).
+ */
+export async function notifySettingsResync(): Promise<boolean> {
+  try {
+    const settings = stripCredentials(await readSettings());
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('settings:changed', { keys: [], resync: true, settings });
+    }
+    return true;
+  } catch (err: any) {
+    console.warn('[settings] could not resync the renderer:', err?.message ?? err);
+    return false;
+  }
+}
+
 // Obsolete — data lives on the server now. No-op so the boot call site is unchanged.
 export async function importLegacySettingsIfNeeded(): Promise<boolean> {
   return false;

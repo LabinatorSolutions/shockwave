@@ -29,6 +29,27 @@ class PcmProcessor extends AudioWorkletProcessor {
 registerProcessor('pcm-processor', PcmProcessor);
 `;
 
+/** "The audio stopped — flush what you have." One sentence, three spellings. */
+const GOODBYE: Record<string, string> = {
+  assemblyai: JSON.stringify({ type: 'Terminate' }),
+  deepgram: JSON.stringify({ type: 'CloseStream' }),
+  elevenlabs: JSON.stringify({ message_type: 'commit' }),
+};
+
+/** The vendors this file knows how to talk to. Anything else falls back below. */
+const KNOWN = new Set(['assemblyai', 'deepgram', 'elevenlabs']);
+
+/** Base64 without a FileReader round trip — the worklet fires every ~256ms. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  // Chunked: `String.fromCharCode(...bytes)` blows the argument limit on a buffer
+  // this size and throws rather than degrading.
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
 // Reusable voice input hook for real-time transcription, over AssemblyAI or
 // Deepgram — whichever `transcription.provider` names. Main resolves that and
 // returns it alongside the token, so this file never reads settings.
@@ -56,7 +77,12 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
 
   const tokenRef = useRef<any>(null);
   const tokenTimeRef = useRef(0);
-  const TOKEN_MAX_AGE = 50_000;
+  // How long a cached token stays usable, as a FRACTION of the lifetime the mint
+  // reported — never a constant. It was 50s, tuned to the 60s tokens the first two
+  // engines issue, and a constant is wrong the moment a vendor issues anything
+  // else. ElevenLabs issues 15 minutes; caching that for 50s would just throw away
+  // a good token, and caching it for its full life would hand back a spent one.
+  const CACHE_FRACTION = 0.8;
 
   // Which engine the live socket belongs to. Read by cleanup (the two want
   // different goodbye messages) and by the message handler.
@@ -75,7 +101,7 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
   getTokenRef.current = getToken;
 
   // Only the newest request may publish. Without this the LAST response to land
-  // won, not the newest one: on Settings → Transcription the request fired before
+  // won, not the newest one: on Settings → Agent Voice the request fired before
   // the key was stored (which fails) could resolve after the one fired after it
   // (which succeeds), pinning voiceAvailable false. That's why "Test microphone"
   // stayed greyed out until you left the page and came back.
@@ -100,7 +126,19 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       // against one engine and is meaningless to the other, so the two have to
       // travel together — caching the token alone let the mount prefetch hand a
       // Deepgram token to the AssemblyAI branch on the very first click.
-      tokenRef.current = { token: result.token, provider: result.provider };
+      // The PROVIDER and the token's own RULES are cached with it, never
+      // re-derived. A token is minted against one engine and is meaningless to
+      // the other, so those have to travel together — caching the token alone let
+      // the mount prefetch hand a Deepgram token to the AssemblyAI branch on the
+      // very first click. `singleUse` rides along for the same reason: it is a
+      // fact about this token, not about the engine the settings happen to name
+      // by the time somebody clicks.
+      tokenRef.current = {
+        token: result.token,
+        provider: result.provider,
+        tokenTtlMs: result.tokenTtlMs,
+        singleUse: result.singleUse,
+      };
       tokenTimeRef.current = Date.now();
       if (!stale) setVoiceAvailable(true);
     } else if (!stale) {
@@ -114,8 +152,15 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
   }, [fetchVoiceToken]);
 
   const getReadyToken = useCallback(async () => {
-    if (tokenRef.current && Date.now() - tokenTimeRef.current < TOKEN_MAX_AGE) {
-      const cached = tokenRef.current;
+    const cached = tokenRef.current;
+    // A cached token is consumed either way — `tokenRef.current = null` below is
+    // what makes this safe for a SINGLE-USE token: the prefetch that follows
+    // replaces it, so the next click gets a fresh one rather than a spent one.
+    // (ElevenLabs' is consumed by connecting. Reusing it fails at connect time
+    // with a bare onerror, which surfaces as "Voice connection error" and says
+    // nothing about why the first click worked and the second didn't.)
+    const ttl = typeof cached?.tokenTtlMs === 'number' ? cached.tokenTtlMs : 60_000;
+    if (cached && Date.now() - tokenTimeRef.current < ttl * CACHE_FRACTION) {
       tokenRef.current = null;
       fetchVoiceToken();
       return cached;
@@ -145,11 +190,9 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     }
     if (wsRef.current) {
       if (wsRef.current.readyState === WebSocket.OPEN) {
-        // Both engines want to be told the audio has stopped so they can flush
+        // All three want to be told the audio has stopped so they can flush
         // whatever is half-transcribed; they just spell it differently.
-        wsRef.current.send(JSON.stringify({
-          type: providerRef.current === 'deepgram' ? 'CloseStream' : 'Terminate',
-        }));
+        wsRef.current.send(GOODBYE[providerRef.current] ?? GOODBYE.assemblyai);
       }
       wsRef.current.close();
       wsRef.current = null;
@@ -187,7 +230,7 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       await audioCtx.audioWorklet.addModule(workletUrl);
       URL.revokeObjectURL(workletUrl);
 
-      const provider = result.provider === 'deepgram' ? 'deepgram' : 'assemblyai';
+      const provider = KNOWN.has(result.provider) ? result.provider : 'assemblyai';
       providerRef.current = provider;
       dgCommittedRef.current = '';
 
@@ -204,10 +247,17 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       // So a grant JWT is only accepted as the `bearer` subprotocol. Don't
       // "simplify" this back to a query param — it fails at connect time with a
       // bare onerror, which surfaces as "Voice connection error" and says nothing.
+      //
+      // ElevenLabs takes its single-use token as a plain `?token=` query param and
+      // `commit_strategy=vad` so it decides where an utterance ends, matching what
+      // the other two do on their own.
       const url = provider === 'deepgram'
         ? 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16'
           + '&sample_rate=16000&channels=1&interim_results=true&smart_format=true&punctuate=true'
-        : `wss://streaming.assemblyai.com/v3/ws?token=${result.token}&sample_rate=16000&encoding=pcm_s16le`;
+        : provider === 'elevenlabs'
+          ? `wss://api.elevenlabs.io/v1/speech-to-text/realtime?token=${result.token}`
+            + '&model_id=scribe_v2_realtime&audio_format=pcm_16000&commit_strategy=vad'
+          : `wss://streaming.assemblyai.com/v3/ws?token=${result.token}&sample_rate=16000&encoding=pcm_s16le`;
 
       const ws = provider === 'deepgram'
         ? new WebSocket(url, ['bearer', result.token])
@@ -232,7 +282,20 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
             int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
             sum += s * s;
           }
-          ws.send(int16.buffer);
+          // Two engines take the PCM frames raw; ElevenLabs takes them base64 in a
+          // JSON envelope. Same 16 kHz mono s16le bytes either way — the encoding
+          // is the only thing that differs, which is what keeps a third engine
+          // cheap. Sending raw frames to ElevenLabs is silently accepted by the
+          // socket and transcribes nothing.
+          if (provider === 'elevenlabs') {
+            ws.send(JSON.stringify({
+              message_type: 'input_audio_chunk',
+              audio_base_64: toBase64(new Uint8Array(int16.buffer)),
+              sample_rate: 16000,
+            }));
+          } else {
+            ws.send(int16.buffer);
+          }
           if (onVolumeChange) onVolumeChange(Math.sqrt(sum / float32.length));
         };
 
@@ -264,6 +327,26 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
           // — so a full utterance is every finalized segment since the last one.
           // Treating each message as the whole turn (the AssemblyAI reading)
           // would commit only the last few words of anything you said.
+          // ElevenLabs names the kind on `message_type` and, unlike Deepgram,
+          // hands back the WHOLE committed utterance rather than a segment — so
+          // this reads like AssemblyAI's branch, not Deepgram's, and nothing
+          // accumulates. `final_transcript` and `committed_transcript` both mean
+          // "these words are settled"; the partial is the live one.
+          if (data.message_type) {
+            const text = String(data.text ?? '').trim();
+            if (data.message_type === 'partial_transcript') {
+              onPartialTranscript?.(text);
+            } else if (data.message_type === 'committed_transcript' || data.message_type === 'final_transcript') {
+              if (text) onTranscript(text);
+              onPartialTranscript?.('');
+            } else if (String(data.message_type).endsWith('_error')) {
+              // Auth, quota and rate-limit all arrive here rather than as a socket
+              // error, so without this they close the mic with no explanation.
+              onError?.(String(data.message ?? data.message_type));
+            }
+            return;
+          }
+
           if (data.type === 'Results') {
             const text = String(data.channel?.alternatives?.[0]?.transcript ?? '').trim();
             if (data.is_final) {

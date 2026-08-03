@@ -7,6 +7,7 @@ import type { Db } from './db.js';
 import { seal, unseal } from './crypto.js';
 import {
   isSettingsSecretKey, SETTINGS_SECRET_OWNER, AGENT_SECRET_FIELDS, isOAuthOwnedField,
+  WILDCARD_MAP_PATHS,
   flattenInto, setPath, typeOf, encodeValue, decodeValue,
   isPlainObject, splitAgentSecret, joinAgentSecret,
 } from './keys.ts';
@@ -71,6 +72,54 @@ export async function listAgentSecretMeta(db: Db): Promise<any[]> {
   return rows.map((r) => joinAgentSecret(r, {}));
 }
 
+// ── One-time migration: legacy voice keys ────────────────────────────────────
+
+/**
+ * Move any leftover voice key stored under its OLD name into `voiceKeys.<vendor>`.
+ *
+ * The `secret_value` half of this is done in SQL at the end of `init.sql` — a
+ * rename of an already-encrypted row, which needs no key. This half cannot be:
+ * a key that ended up as a PLAINTEXT `setting` row has to be encrypted on the way
+ * across, and only this process holds the master key.
+ *
+ * That case is real and was found by running it: a Deepgram key sat in `setting`
+ * in the clear. Whatever wrote it, leaving it there after the rename is the worst
+ * of both worlds — nothing reads the old path any more, so the key is dead, AND
+ * it is no longer a declared credential, so the strip stops covering it and it
+ * crosses to the renderer in plaintext.
+ *
+ * Idempotent: after the first run there are no rows left to match. Never
+ * overwrites an existing `voiceKeys.<vendor>` — a value the user has since set
+ * through the current path wins over one recovered from the old one.
+ */
+const LEGACY_VOICE_KEYS: Array<{ old: string; vendor: string }> = [
+  { old: 'transcription.apiKey', vendor: 'assemblyai' },
+  { old: 'transcription.deepgramApiKey', vendor: 'deepgram' },
+];
+
+export async function migrateLegacyVoiceKeys(db: Db, key: Buffer, log?: any): Promise<void> {
+  for (const { old, vendor } of LEGACY_VOICE_KEYS) {
+    const rows = await db.select({ value: setting.value }).from(setting).where(eq(setting.key, old));
+    if (!rows.length) continue;
+
+    const plain = String(rows[0].value ?? '');
+    const field = `voiceKeys.${vendor}`;
+    const existing = await db.select({ owner: secretValue.owner }).from(secretValue)
+      .where(and(eq(secretValue.owner, SETTINGS_SECRET_OWNER), eq(secretValue.field, field)));
+
+    await db.transaction(async (c) => {
+      if (plain && !existing.length) await putSecret(c, key, SETTINGS_SECRET_OWNER, field, plain);
+      // Delete either way. An empty value was never a key, and a row we declined
+      // to move is one the user has already replaced — in both cases leaving the
+      // plaintext behind is a credential nothing reads and nothing protects.
+      await c.delete(setting).where(eq(setting.key, old));
+    });
+
+    log?.warn({ from: old, to: field, moved: !!plain && !existing.length },
+      'migrated a voice key that was stored in the clear — consider rotating it');
+  }
+}
+
 // ── Read the whole settings object (decrypted) ───────────────────────────────
 
 export async function readSettings(db: Db, key: Buffer): Promise<any> {
@@ -98,21 +147,38 @@ export async function writeSettings(db: Db, key: Buffer, patch: any): Promise<an
 
   const flat = new Map<string, any>();
   let agentSecretsPatch: any[] | null = null;
-  let providerKeysPatch: Record<string, any> | null = null;
+  // path -> the slots present in this patch. Merged, never treated as complete.
+  const mapPatches = new Map<string, Record<string, any>>();
 
-  if (isPlainObject(patch['codingAgent.providerKeys'])) {
-    providerKeysPatch = patch['codingAgent.providerKeys'];
-    delete patch['codingAgent.providerKeys'];
+  // Dotted form — how the renderer's settings diff sends a whole map (MAP_KEYS in
+  // settingsDiff.ts). Covers a top-level map (`voiceKeys`) in the same pass.
+  for (const path of WILDCARD_MAP_PATHS) {
+    if (isPlainObject(patch[path])) {
+      mapPatches.set(path, patch[path] as Record<string, any>);
+      delete patch[path];
+    }
   }
+
   for (const [k, value] of Object.entries(patch)) {
     if (k === 'agentSecrets') { agentSecretsPatch = Array.isArray(value) ? value : []; continue; }
     if (k === 'workspaces') continue; // identity via its own endpoint
-    if (k === 'codingAgent' && isPlainObject(value)) {
-      const { providerKeys, ...rest } = value as any;
-      if (isPlainObject(providerKeys)) providerKeysPatch = providerKeys;
+
+    // Nested form — the same map arriving inside its parent object
+    // (`codingAgent: { providerKeys: {…} }`). Lifted out before the rest of the
+    // parent is flattened, or the keys would be written as ordinary leaf rows in
+    // the clear.
+    const nested = WILDCARD_MAP_PATHS.filter((p) => p.startsWith(`${k}.`));
+    if (nested.length && isPlainObject(value)) {
+      const rest: any = { ...(value as any) };
+      for (const p of nested) {
+        const leaf = p.slice(k.length + 1);
+        if (isPlainObject(rest[leaf])) mapPatches.set(p, rest[leaf]);
+        delete rest[leaf];
+      }
       flattenInto(k, rest, flat);
       continue;
     }
+
     flattenInto(k, value, flat);
   }
 
@@ -127,13 +193,17 @@ export async function writeSettings(db: Db, key: Buffer, patch: any): Promise<an
         .values({ key: k, value: encodeValue(value, type), type, updatedAt: now() })
         .onConflictDoUpdate({ target: setting.key, set: { value: encodeValue(value, type), type, updatedAt: now() } });
     }
-    if (providerKeysPatch) await reconcileProviderKeys(c, key, providerKeysPatch);
+    for (const [path, map] of mapPatches) await reconcileCredentialMap(c, key, path, map);
     if (agentSecretsPatch) await writeAgentSecrets(c, key, agentSecretsPatch);
   });
   return readSettings(db, key);
 }
 
-// Write the provider keys PRESENT in the patch. Absent slots are left alone.
+// Write the slots PRESENT in the patch. Absent slots are left alone.
+//
+// One function for every wildcard credential map (`codingAgent.providerKeys`,
+// `voiceKeys`), because the merge rule is a property of the shape, not of which
+// map it is — and a per-map copy is how one starts deleting rows the other owns.
 //
 // This used to treat the map as the complete list and delete every slot missing
 // from it, which is why the desktop had to resend all of them on every unrelated
@@ -142,12 +212,11 @@ export async function writeSettings(db: Db, key: Buffer, patch: any): Promise<an
 // save after would have arrived with an empty map and wiped them.
 //
 // Deleting is still possible and still explicit — an empty string deletes the row
-// (see putSecret), which is what clearing the field sends. Absent and empty are
-// now different things, and only one of them destroys anything.
-async function reconcileProviderKeys(c: Tx, key: Buffer, map: Record<string, any>) {
-  const prefix = 'codingAgent.providerKeys.';
+// (see putSecret), which is what `settings:deleteCredential` sends. Absent and
+// empty are different things, and only one of them destroys anything.
+async function reconcileCredentialMap(c: Tx, key: Buffer, path: string, map: Record<string, any>) {
   for (const [slug, val] of Object.entries(map)) {
-    await putSecret(c, key, SETTINGS_SECRET_OWNER, `${prefix}${slug}`, typeof val === 'string' ? val : '');
+    await putSecret(c, key, SETTINGS_SECRET_OWNER, `${path}.${slug}`, typeof val === 'string' ? val : '');
   }
 }
 

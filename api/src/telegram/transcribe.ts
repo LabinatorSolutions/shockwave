@@ -15,33 +15,34 @@
 // fallback covers) lives in `agent-core/transcribe.ts`, because it is a fact
 // about the provider rather than about Telegram.
 
-import { transcribeVoice, keyFor, type TranscriptionConfig } from '../../../agent-core/transcribe.js';
+import { transcribeVoice, listenKey, type VoiceConfig } from '../../../agent-core/transcribe.js';
 
-export { warmTranscription, providerOf } from '../../../agent-core/transcribe.js';
+export { warmTranscription } from '../../../agent-core/transcribe.js';
+export { listenProviderOf, voiceLabel } from '../../../agent-core/voiceProviders.js';
 
 /**
  * Transcribe a voice note. Returns the text, `null` when no API key is configured
  * (the caller should say so rather than ignore the user), or `''` when the audio
  * held no speech. Throws if the provider reports a failure.
  *
- * Takes the whole `settings.transcription` slice rather than a key, because which
- * key applies depends on which engine is selected and that is `keyFor`'s job, not
- * every caller's.
+ * Takes the whole voice config rather than a key, because which key applies
+ * depends on which vendor is selected for listening, and that is
+ * `voiceProviders.ts`'s job rather than every caller's.
  *
  * `durationSeconds` is Telegram's own `voice.duration` — it decides whether the
- * clip fits AssemblyAI's sync ceiling, and it costs nothing to pass. Deepgram has
- * no such ceiling and ignores it.
+ * clip fits AssemblyAI's sync ceiling, and it costs nothing to pass. Deepgram and
+ * ElevenLabs have no such ceiling and ignore it.
  *
  * Nothing is written to disk on the fast path. A voice note IS the message, not
  * an attachment to it, so there was never anything to keep once it had been read.
  */
 export async function transcribeAudio(
-  config: TranscriptionConfig | undefined,
+  config: VoiceConfig | undefined,
   audio: Buffer,
   durationSeconds?: number,
 ): Promise<string | null> {
   const cfg = config ?? {};
-  if (!keyFor(cfg)) return null;
+  if (!listenKey(cfg)) return null;
 
   try {
     return await transcribeVoice(audio, cfg, durationSeconds);

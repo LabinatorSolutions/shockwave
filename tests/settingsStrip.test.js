@@ -58,20 +58,23 @@ test('a real OAuth secret keeps its oauth object and gets its flags', () => {
 
 test('fixed-path settings credentials become flags beside where they were', () => {
   const out = stripCredentials({
-    transcription: { provider: 'assemblyai', apiKey: 'aai-key' },
+    transcription: { provider: 'assemblyai' },
+    voiceKeys: { assemblyai: 'aai-key', deepgram: 'dg-key', elevenlabs: '' },
     sync: { pat: 'github_pat_x', intervalSeconds: 10 },
     codingAgent: { provider: 'anthropic', providerKeys: { anthropic: 'sk-ant', openai: '' } },
   });
-  assert.equal(out.transcription.hasApiKey, true);
-  assert.equal('apiKey' in out.transcription, false);
-  // Declared but unset reads as unset — a second engine's key is its own field.
-  assert.equal(out.transcription.hasDeepgramApiKey, false);
   assert.equal(out.sync.hasPat, true);
   assert.equal(out.sync.intervalSeconds, 10);
   // The wildcard map's flag is a map, so the box shows dots per provider — and
   // only for providers that actually have a key stored.
   assert.deepEqual(out.codingAgent.hasProviderKey, { anthropic: true });
   assert.equal('providerKeys' in out.codingAgent, false);
+  // Same rule for the vendor-keyed voice map, which lives at the ROOT — a
+  // top-level credential leaves its flag at the root too, with nothing to invent.
+  assert.deepEqual(out.hasVoiceKey, { assemblyai: true, deepgram: true });
+  assert.equal('voiceKeys' in out, false);
+  // The listening half keeps its non-secret fields untouched.
+  assert.equal(out.transcription.provider, 'assemblyai');
 });
 
 test('an absent settings slice is not invented to hold a flag', () => {

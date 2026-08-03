@@ -147,7 +147,7 @@ On a held connection the request throws `ApiError('needsApproval')`, **not** `un
 
 ### Credentials never cross into the renderer
 
-`readSettings` / `readSettingsSafe` return **live credentials** — provider keys, the GitHub PAT, agent tokens. They exist for main's own use: running the agent, pushing to git, minting the voice token. `readSettingsForRenderer` is the stripped read, and it substitutes a presence flag for each credential (`hasPat`, `hasApiKey`, `hasProviderKey`) so Settings can render dots without ever holding a value.
+`readSettings` / `readSettingsSafe` return **live credentials** — provider keys, the GitHub PAT, agent tokens. They exist for main's own use: running the agent, pushing to git, minting the voice token. `readSettingsForRenderer` is the stripped read, and it substitutes a presence flag for each credential (`hasPat`, `hasProviderKey`, `hasVoiceKey`) so Settings can render dots without ever holding a value.
 
 > **An IPC handler may only return the stripped read.** `settings:read` uses it, and so does the `settings:changed` push (`emitChanged`). Nothing in the language stops a future handler returning the wrong one and the leak would be silent — the app would work perfectly while handing every key to the renderer. This was a comment once, which is the same shape of mistake as the certificate check that trusted anything: a policy nobody enforces. `tests/rendererSettingsDoor.test.js` now scans `main.ts` for it (verified by introducing the leak deliberately and watching it fail).
 
@@ -198,10 +198,10 @@ Registered before `app.ready` via `registerSchemesAsPrivileged({scheme: 'app', p
 
 What the desktop host supplies to `agent-core`:
 
-- `builtinDir` (bundled built-in skills), `machine: os.hostname()`, `extraTools: [OPEN_FILE_TOOL, SEND_MESSAGE_TOOL]`, `dataDir: () => app.getPath('userData')` (one global pi scratch dir — the companion uses a per-run dir instead), `scratchDir: (chatId) => <userData>/agent-scratch/<chatId>` (the AGENT's own directory, named in the prompt — distinct from `dataDir`, which is pi's working memory).
+- `builtinDir` (bundled built-in skills), `machine: os.hostname()`, `extraTools: [OPEN_FILE_TOOL, SEND_MESSAGE_TOOL]`, `extraTools` as a FUNCTION of the session (`({workspacePath}) => [open_file, send_message]`), because the reply mode `send_message` reads and writes is per WORKSPACE and the host is built once per process, `dataDir: () => app.getPath('userData')` (one global pi scratch dir — the companion uses a per-run dir instead), `scratchDir: (chatId) => <userData>/agent-scratch/<chatId>` (the AGENT's own directory, named in the prompt — distinct from `dataDir`, which is pi's working memory).
 - Chat persistence closures from `src/main/api/chats.ts` — `getChat`, `upsertChat`, `appendMessages`, `setChatTitle`, `setRunning`, `getTranscript`, `putTranscript`. So **chats are stored on the companion**, not locally; the runtime just calls these.
 - `chatSearch` — `{ searchChats, readChat, recentChats }`, also from `api/chats.ts`, backing the one `search_chats` tool. The field is optional on `AgentHost`; omit it and the tool simply isn't offered.
-- `getTranscription()` — `settings.transcription`, for the `transcribe` tool.
+- `getVoiceConfig()` — the voice settings as one value (which vendor listens, which speaks, the per-vendor keys), for the `transcribe` tool and for speaking.
 - Secret getters (`getAgentSecrets` / `getToken`), injected by `initDesktopAgent()` in `main.ts`. `getToken` calls the companion (`GET /agent-secret/:name/token`), so OAuth refresh happens server-side; the desktop only runs the interactive connect flow (`oauth.ts`).
 
 Chats run concurrently (one live pi session per chat). Events forwarded to the renderer (`agent:event` / `agent:error`) are stamped with `chatId`; `agent:runningChats` returns in-flight ids (the renderer reseeds after a window reload).
@@ -357,11 +357,15 @@ Turning off only the first moves the download decision to the user while leaving
 
 `app:restartToUpdate` only acts while `ready`, and **the renderer confirms first** — it quits, which kills a running agent turn.
 
-## Voice transcription IPC
+## Voice IPC
 
-`voice:getToken` mints a short-lived (60s) streaming token from whichever engine `settings.transcription.provider` names — AssemblyAI's `/v3/token` or Deepgram's `/v1/auth/grant`. **One handler covers both because both offer exactly this**, which is the whole reason the desktop can switch engines without weakening anything: the long-lived key never leaves main, and only the session credential crosses to the renderer.
+`voice:getToken` mints a short-lived streaming token from whichever vendor `settings.transcription.provider` names — AssemblyAI's `/v3/token`, Deepgram's `/v1/auth/grant`, or ElevenLabs' `/v1/single-use-token/realtime_scribe`. **One handler covers all three because all three offer exactly this**, which is why the desktop can switch engines without weakening anything: the long-lived key never leaves main, and only the session credential crosses to the renderer.
 
-It returns **`{ token, provider }`**. The provider has to come back with the token — the renderer needs it to pick the socket URL and to read what comes back, and inferring it from a second settings read would be a second answer that can disagree with the one the token was minted against. `keyFor` (`agent-core/transcribe.ts`) resolves which of the two stored keys applies, so main never branches on the provider string itself.
+It returns **`{ token, provider, tokenTtlMs, singleUse }`**. The provider has to come back with the token — the renderer needs it to pick the socket URL and to read what comes back, and inferring it from a second settings read would be a second answer that can disagree with the one the token was minted against. **`tokenTtlMs` and `singleUse` travel for the same reason and are not decoration**: AssemblyAI and Deepgram issue reusable 60-second tokens, which is what the renderer's cache was built around, while **ElevenLabs' is good for 15 minutes and is consumed on first use**. A constant cache window is wrong for both — it throws away a good ElevenLabs token, and reusing one fails the SECOND microphone click at connect time with a bare `onerror` that says nothing about why the first worked.
+
+`voice:listVoices` returns the voices the SPEAKING vendor offers, for the picker in Settings — in main because listing needs the API key. ElevenLabs pages ten at a time by default, so the handler asks for 100 and follows the page token (a user with a full voice library would otherwise see the first ten and no sign there were more) and supplies a `preview` URL per voice; **Deepgram has no voice endpoint at all** — its voices ARE models, so `GET /v1/models`'s `tts` half is the list, and there is nothing to preview. Nothing is cached: the page asks rarely, and a stale catalogue is worse than a second of waiting.
+
+Which vendor, and which key that implies, is `agent-core/voiceProviders.ts`'s job — main never branches on a provider string itself. That table replaced four `provider === 'deepgram'` ternaries here.
 
 **`voice:verifyKey` is a separate question and must stay separate.** The one transcription key feeds three consumers — the microphone, Telegram voice notes, the agent's `transcribe` tool — and **Deepgram gates them differently**: transcribing needs any valid key, minting a streaming token needs Member or higher. So the mint is not a proxy for "is this key good". It asks `GET /v1/auth/token` and then the grant, returning `{ ok, canStream }`; AssemblyAI has one credential with one capability, so there the mint is still the whole answer.
 
@@ -383,7 +387,7 @@ The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/C
 | OAuth | `oauth:listPresets`, `oauth:startConnect`, `oauth:disconnect` |
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |
-| Voice | `voice:getToken`, `voice:verifyKey` (per-capability key check — see below) |
+| Agent Voice | `voice:getToken` (also reports the token's lifetime + whether it survives use), `voice:verifyKey` (per-capability key check — see below), `voice:listVoices` (the speaking vendor's voices, for the picker) |
 | Agent | `agent:send` (takes `chatId`; steers if that chat is mid-turn), `agent:abort` (per chatId), `agent:runningChats`, `agent:listProviders`, `agent:listModels`, `agent:listThinkingLevels`, `agent:validateConnection` (checks an openai-compatible `{baseUrl}/models`); plus push events `agent:event` / `agent:error` (stamped with `chatId`) |
 | Chat (all over HTTP to the companion) | `chat:list`, `chat:listPinned`, `chat:setPinned`, `chat:search`, `chat:getMessages` (optional `after` seq), `chat:open` (returns the row + messages + this machine's `workspacePath` for the chat's workspace), `chat:delete`, `chat:rename`; plus push event `chat:feedResync` (the live feed reconnected — re-read loaded chats) |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |

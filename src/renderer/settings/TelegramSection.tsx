@@ -124,12 +124,12 @@ export default function TelegramSection({ workspaces, transcription, onTranscrip
       <SettingsDivider />
 
       {/* Voice notes to the bot are transcribed on the COMPANION (AssemblyAI, the
-          same `transcription.apiKey` the desktop mic uses) because the agent takes
+          same key the desktop mic uses) because the agent takes
           text only — so there is a transcript here that the desktop mic path never
           produces, and this decides whether the bot says it out loud before acting.
           Spread the whole slice: `onTranscriptionChange` REPLACES the renderer's
-          copy, so a bare `{echoTelegramTranscript}` would drop `hasApiKey` and make
-          the Transcription page read as if no key were stored until the next push. */}
+          copy, so a bare `{echoTelegramTranscript}` would drop the sibling fields and make
+          the Voice page read as if nothing were configured until the next push. */}
       <SettingsGroup title="Voice notes">
         <Field>
           <Label className="gap-2.5 text-[13px] font-normal">

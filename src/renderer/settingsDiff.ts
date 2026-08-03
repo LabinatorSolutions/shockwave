@@ -40,7 +40,7 @@ export const MAIN_OWNED_KEYS = ['windowBounds'];
 //
 // Everything else in settings has fixed keys (appearance, sync, …) or
 // reconciles as a collection (workspaces, agentSecrets).
-export const MAP_KEYS = ['codingAgent.providerKeys'];
+export const MAP_KEYS = ['codingAgent.providerKeys', 'voiceKeys'];
 
 /**
  * Remove empty credentials from a patch before it is sent.

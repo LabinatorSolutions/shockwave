@@ -4,14 +4,39 @@
 // reaches it over HTTP (`POST /telegram/send`). Reads the account at call time,
 // so it works whenever Telegram is connected and explains itself when it isn't.
 
+import path from 'node:path';
+import fs from 'node:fs/promises';
 import { TelegramClient, splitMessage, type SendKind } from './client.js';
 import * as store from '../store.js';
 import type { PgPool } from '../db.js';
 import { getDb } from '../db.js';
+import { voiceConfigOf } from '../../../agent-core/voiceProviders.js';
+import { speakToFile } from '../../../agent-core/speak.js';
+import { readVoiceReply, writeVoiceReply, sendsText, speaks } from '../../../agent-core/voiceReply.js';
+import type { SendOptions, SendResult } from '../../../agent-core/sendMessage.js';
+import { logger } from '../log.js';
 
-export type SendResult = { ok: true } | { ok: false; error: string };
+export type { SendResult };
 
-export async function sendTelegramMessage(pool: PgPool, key: Buffer, text: string): Promise<SendResult> {
+const tlog = logger('telegram');
+
+export async function sendTelegramMessage(
+  pool: PgPool,
+  key: Buffer,
+  text: string,
+  opts: SendOptions & {
+    /**
+     * The workspace checkout this message belongs to, when there is one.
+     *
+     * Needed for `output` (reading the standing preference) and for `save`
+     * (writing it). A caller with no workspace — the desktop's copy of the tool,
+     * which posts over HTTP — passes none and gets text, which is right: it has
+     * no checkout to read a preference out of, and inventing one would make the
+     * same request behave differently depending on which side ran it.
+     */
+    workspacePath?: string | null;
+  } = {},
+): Promise<SendResult> {
   try {
     const db = getDb(pool);
     const acc = await store.getTelegramAccount(db);
@@ -21,10 +46,78 @@ export async function sendTelegramMessage(pool: PgPool, key: Buffer, text: strin
     const token = await store.getTelegramSecret(db, key, 'botToken');
     if (!token) return { ok: false, error: 'Telegram bot token is missing.' };
     const client = new TelegramClient(token);
-    for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId, c);
-    return { ok: true };
+
+    // Explicit beats stored; stored beats the default. Reading the workspace's
+    // preference costs one small file read and only happens when the caller left
+    // it to us.
+    const mode = opts.output ?? await readVoiceReply(opts.workspacePath);
+
+    // Save BEFORE sending, so a send that fails halfway still leaves the
+    // preference the user asked for. The two are independent requests either way.
+    let savedMode: SendOptions['output'];
+    let saveFailed = false;
+    if (opts.save && opts.output) {
+      if (await writeVoiceReply(opts.workspacePath, opts.output)) savedMode = opts.output;
+      else saveFailed = true;
+    }
+
+    // Text first when the mode sends it at all. Voice-only is the one mode that
+    // withholds it, and it is opt-in twice over precisely because a voice note
+    // can't be skimmed, searched or quoted.
+    if (sendsText(mode)) {
+      for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId, c);
+    }
+
+    if (speaks(mode)) {
+      const spoke = await speakInto(db, key, client, acc.dmChatId, text, opts.workspacePath ?? null);
+      // Voice-only withheld the text, so a synthesis failure would deliver
+      // NOTHING. Fall back to sending it rather than losing the message — the
+      // mode is a preference, and an undelivered answer is not a way to honour it.
+      if (!spoke && !sendsText(mode)) {
+        for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId, c);
+      }
+    }
+
+    return { ok: true, ...(savedMode ? { savedMode } : {}), ...(saveFailed ? { saveFailed } : {}) };
   } catch (e: any) {
     return { ok: false, error: 'Could not send the message: ' + (e?.message || e) };
+  }
+}
+
+/**
+ * Speak `text` and send it as a voice bubble. Returns whether a voice note
+ * actually went out, which the voice-ONLY path needs: it withheld the text, so a
+ * silent failure there would deliver nothing at all.
+ */
+export async function speakInto(
+  db: ReturnType<typeof getDb>,
+  key: Buffer,
+  client: TelegramClient,
+  chatId: number,
+  text: string,
+  workDir: string | null,
+): Promise<boolean> {
+  let file: string | null = null;
+  try {
+    const settings = await store.readSettings(db, key);
+    const config = voiceConfigOf(settings);
+    // Write beside the run rather than into the checkout: the audio is a delivery
+    // artifact, not the user's content, and everything in a checkout is committed.
+    const dir = workDir ? path.join(workDir, '..') : '/tmp';
+    file = await speakToFile(
+      text,
+      config,
+      path.join(dir, `reply-${Date.now()}.ogg`),
+      (message) => tlog.warn({ err: message }, 'speaking the reply failed'),
+    );
+    if (!file) return false;
+    await client.sendFile('voice', chatId, file);
+    return true;
+  } catch (e: any) {
+    tlog.warn({ err: e?.message ?? String(e) }, 'sending the voice reply failed');
+    return false;
+  } finally {
+    if (file) await fs.rm(file, { force: true }).catch(() => { /* best-effort */ });
   }
 }
 

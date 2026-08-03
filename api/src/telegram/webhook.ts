@@ -18,7 +18,10 @@ import { checkInWithFixer } from '../gitFixer.js';
 import { TelegramClient } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
-import { transcribeAudio, warmTranscription, providerOf } from './transcribe.js';
+import { transcribeAudio, warmTranscription, listenProviderOf, voiceLabel } from './transcribe.js';
+import { voiceConfigOf } from '../../../agent-core/voiceProviders.js';
+import { readVoiceReply, sendsText, speaks, type VoiceReply } from '../../../agent-core/voiceReply.js';
+import { speakInto } from './sendTool.js';
 import { cacheAttachment, composeMessage, MAX_INBOUND_BYTES, type CachedAttachment } from './attachments.js';
 import { getCatalogModel } from '../../../agent-core/modelCatalog.js';
 import { chatFilesDir } from '../dataDirs.js';
@@ -345,7 +348,7 @@ async function resolveInput(
   const typed = typedTextOf(msgs);
 
   const settings = await store.readSettings(db, key);
-  const tr = settings?.transcription;
+  const voiceCfg = voiceConfigOf(settings);
 
   // A voice note is the message itself, not an attachment to it. Keep the whole
   // message, not just its `voice` field — the reactions below go on that bubble,
@@ -369,19 +372,19 @@ async function resolveInput(
     // bytes. Both are round trips and neither needs the other, so the handshake
     // costs nothing instead of ~150ms on the critical path. Best-effort — it
     // resolves to nothing useful and never rejects.
-    const warming = warmTranscription(tr ?? {});
+    const warming = warmTranscription(voiceCfg);
     const audio = await client.downloadFile(voice.file_id);
     await warming;
     // `voice.duration` is Telegram's own, in seconds — it decides whether this
     // fits the sync API's two-minute ceiling.
-    const transcript = await transcribeAudio(tr, audio, voice.duration)
+    const transcript = await transcribeAudio(voiceCfg, audio, voice.duration)
       .catch(async (e) => { await react(); throw e; });
     if (transcript === null) {
       await react();
       // Name the engine Settings is actually set to, or this sends someone to add
       // a key for a provider they aren't using.
-      const name = providerOf(tr ?? {}) === 'deepgram' ? 'Deepgram' : 'AssemblyAI';
-      await client.sendMessage(dm, `🎤 Voice transcription is not set up — add a ${name} key in the desktop app under Transcription.`);
+      const name = voiceLabel(listenProviderOf(voiceCfg));
+      await client.sendMessage(dm, `🎤 Voice transcription is not set up — add a ${name} key in the desktop app under Settings → Agent Voice.`);
       return null;
     }
     if (!transcript) {
@@ -393,9 +396,9 @@ async function resolveInput(
     await react(REACT_HEARD);
     // Optional: show what was heard before acting on it, so a mis-transcription is
     // distinguishable from a misunderstood instruction. Off unless switched on
-    // (Settings → Transcription) — `?? false` at the point of use, since the
+    // (Settings → Agent Voice) — `?? false` at the point of use, since the
     // companion stores no defaults and an unset row must not fake a value.
-    if (tr?.echoTelegramTranscript ?? false) await client.sendMessage(dm, `🎤 “${transcript}”`);
+    if (voiceCfg.transcription?.echoTelegramTranscript ?? false) await client.sendMessage(dm, `🎤 “${transcript}”`);
     return { text: transcript, images: [] };
   }
 
@@ -461,6 +464,11 @@ interface PreparedRun {
   /** Carried rather than re-read: the settings read happens in prepareRun, which
    *  now runs on the other side of the fan-out from the turn that needs this. */
   timezone: string | undefined;
+  /** How this workspace wants replies delivered. Read in prepareRun for the same
+   *  reason, and additionally so that the agent's own `send_message(save: true)`
+   *  mid-turn takes effect on the NEXT reply rather than retroactively on the one
+   *  already being composed. */
+  voiceReply: VoiceReply;
 }
 
 /** A reason to stop, phrased for the user. Returned rather than thrown so the
@@ -509,6 +517,12 @@ async function prepareRun(
   const apiKey = (ca.providerKeys ?? {})[ca.provider] ?? '';
   let wsBuiltinSkills: Record<string, any> = {};
   try { wsBuiltinSkills = JSON.parse(await fs.readFile(path.join(dir, '.shockwave', 'workspace.json'), 'utf8'))?.builtinSkills ?? {}; } catch { /* defaults */ }
+  // How this workspace wants replies delivered. Read here, off the checkout this
+  // turn is running in, rather than at the end of the turn — by then the agent's
+  // own `send_message(save: true)` may have rewritten the file, and a request to
+  // start speaking should take effect on the NEXT reply, not retroactively on the
+  // one that was already being composed as text.
+  const voiceReply = await readVoiceReply(dir);
 
   if (existing) {
     // Events during boot go to the feed only; agentSend re-points the session at
@@ -523,7 +537,7 @@ async function prepareRun(
     }, feed.publish).catch(() => { /* agentSend reports it */ });
   }
 
-  return { ws, chatId, dir, auth, ca, apiKey, wsBuiltinSkills, timezone: settings.timezone };
+  return { ws, chatId, dir, auth, ca, apiKey, wsBuiltinSkills, timezone: settings.timezone, voiceReply };
 }
 
 async function runTurnInner(
@@ -531,11 +545,18 @@ async function runTurnInner(
   input: ResolvedInput, msg: any, prepared: PreparedRun,
 ) {
   const { text, images } = input;
-  const { ws, chatId, dir, auth, ca, apiKey, wsBuiltinSkills, timezone } = prepared;
+  const { ws, chatId, dir, auth, ca, apiKey, wsBuiltinSkills, timezone, voiceReply } = prepared;
 
   // The only two folders a file may be sent from: the workspace the agent is
   // working in, and where its own attachments were saved.
-  const sink = makeTelegramSink(client, dm, [dir, chatFilesDir(chatId)]);
+  // The workspace's reply mode, read once in prepareRun off the checkout this turn
+  // is running in. Absent `speak` is what `text` means — see makeTelegramSink.
+  const sink = makeTelegramSink(client, dm, [dir, chatFilesDir(chatId)], {
+    speak: speaks(voiceReply)
+      ? (text: string) => speakInto(db, key, client, dm, text, dir)
+      : undefined,
+    textToo: sendsText(voiceReply),
+  });
   let finalMessages: any[] | undefined;
   const emit = (e: any) => {
     if (e?.type === 'agent_end') finalMessages = e.messages;

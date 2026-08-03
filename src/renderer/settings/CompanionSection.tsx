@@ -3,7 +3,7 @@ import { SettingsSection, SettingsGroup } from './SectionUI';
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useCommitField } from './useCommitField';
+import { useCommitField, useCredentialField } from './useCommitField';
 import CredentialRow from './CredentialRow';
 import CompanionUpdateDialog from '../CompanionUpdateDialog.jsx';
 
@@ -45,9 +45,12 @@ export default function CompanionSection() {
   const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState('');
   // Write-only: the key never reads back (api:read returns hasApiKey, not the
-  // key), so this stays a local draft cleared once stored, rather than a
-  // useCommitField over a stored value there is no way to read.
-  const [keyDraft, setKeyDraft] = useState('');
+  // key), so it's a draft cleared once stored — `useCredentialField`, not
+  // `useCommitField`, which has no stored value here to follow.
+  const keyField = useCredentialField((next) => {
+    save({ url: urlField.value.trim(), apiKey: next });
+  });
+  const keyDraft = keyField.value;
   // The certificate the server offered, when it isn't the approved one.
   // `approved === null` = never approved (first connection); a value = approved
   // once and has since changed. Different question, different wording.
@@ -152,15 +155,8 @@ export default function CompanionSection() {
     if (status === 'connected' || status === 'needsApproval') disconnect('Press Connect to use the new address.');
   };
   const onKeyChange = (next: string) => {
-    setKeyDraft(next);
+    keyField.onChange(next);
     if (status === 'connected' || status === 'needsApproval') disconnect('Press Connect to use the new key.');
-  };
-
-  const commitKey = () => {
-    if (!keyDraft) return;
-    const value = keyDraft;
-    setKeyDraft('');
-    save({ url: urlField.value.trim(), apiKey: value });
   };
 
   // The typed key if one is sitting in the box (it may not have blurred yet),
@@ -246,7 +242,7 @@ export default function CompanionSection() {
             saved={hasStoredKey}
             value={keyDraft}
             onChange={(e) => onKeyChange(e.target.value)}
-            onBlur={commitKey}
+            onBlur={keyField.onBlur}
           />
           <FieldDescription>
             Also printed by the installer. Encrypted in your OS keychain.

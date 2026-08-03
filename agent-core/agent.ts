@@ -20,7 +20,7 @@ import { agentDirFor, agentSkillsDir, ensureDirs, listBuiltinSkills, listWorkspa
 import { assembleSystemPrompt, rebuildSystemPrompt } from './defaults/index.js';
 import { activeToolNames } from './defaults/tools.js';
 import { makeAgentTokenTools } from './agentTokens.js';
-import { makeTranscribeTool } from './transcribe.js';
+import { makeTranscribeTool, type VoiceConfig } from './transcribe.js';
 import { makeDailyNoteTool } from './dailyNoteTool.js';
 import { makeSkillTools } from './skillTool.js';
 import { makeMemoryTool } from './memoryTool.js';
@@ -56,7 +56,19 @@ export interface ChatRow {
 export interface AgentHost {
   builtinDir: string;                       // bundled built-in skills
   machine: string;                          // running_machine / provenance stamp
-  extraTools: any[];                        // host-only tools (desktop: [open_file]; server: [])
+  /**
+   * Host-only tools (desktop: `[open_file, send_message]`; companion:
+   * `[send_message]`). Every one must ALSO be named in `TOOL_CATALOG` or pi drops
+   * it silently — see the warning below.
+   *
+   * A FUNCTION when a tool needs to know which chat or workspace it is serving.
+   * It is resolved at session boot, where those are already in scope, which is
+   * the same place `makeDailyNoteTool` and `makeTranscribeTool` are built. The
+   * companion's `send_message` needs the workspace path to read and write that
+   * workspace's reply mode; a plain array cannot see it, because the host is
+   * built once per process and the workspace is per turn.
+   */
+  extraTools: any[] | ((ctx: { chatId: string; workspacePath: string; source?: string }) => any[]);
   dataDir(chatId: string): string;       // pi scratch-dir root; per-session so the server can isolate runs
   /**
    * The AGENT's own directory for this chat — working files, downloads, anything
@@ -68,8 +80,10 @@ export interface AgentHost {
    * indistinguishable to anything walking the tree.
    */
   scratchDir(chatId: string): string;
-  /** Speech-to-text config for the `transcribe` tool — `settings.transcription`. */
-  getTranscription(): Promise<{ provider?: string; apiKey?: string }>;
+  /** The voice settings — which vendor listens, which speaks, and the per-vendor
+   *  keys. Read as a whole because which key applies depends on which vendor is
+   *  selected for the job in hand; see agent-core/voiceProviders.ts. */
+  getVoiceConfig(): Promise<VoiceConfig>;
   // persistence — dumb I/O; the core does the mapping/ordering:
   getChat(id: string): Promise<any | null>;
   upsertChat(row: { chatId: string; workspaceId: string; systemPrompt?: string | null; model?: string | null; source?: string | null; sourceId?: string | null; machine?: string | null }): Promise<void>;
@@ -394,7 +408,7 @@ export function createAgentRuntime(host: AgentHost) {
     //
     // Built per session because it writes into THIS chat's scratch pad.
     const transcribeTools = allowed.includes('transcribe')
-      ? [makeTranscribeTool(host.getTranscription, scratchDir)]
+      ? [makeTranscribeTool(host.getVoiceConfig, scratchDir)]
       : [];
     // Built per session because it resolves paths inside THIS workspace. Its
     // config is read off disk per call, so a settings change mid-chat is picked
@@ -419,8 +433,11 @@ export function createAgentRuntime(host: AgentHost) {
     // The handle is built above (the prompt needs its render); this only decides
     // whether the run may WRITE. A memory run holds this and nothing else.
     const memoryTools = allowed.includes('memory') ? memoryHandle.tools : [];
-    const extraTools = host.extraTools.filter((t: any) => allowed.includes(t?.name));
-    for (const t of host.extraTools) {
+    const hostTools = typeof host.extraTools === 'function'
+      ? host.extraTools({ chatId, workspacePath, source })
+      : host.extraTools;
+    const extraTools = hostTools.filter((t: any) => allowed.includes(t?.name));
+    for (const t of hostTools) {
       if (!allowed.includes(t?.name)) console.warn(`[agent] host tool "${t?.name}" is not offered on ${source ?? 'desktop'} runs — add it to TOOL_CATALOG to enable it.`);
     }
 

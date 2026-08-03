@@ -29,10 +29,10 @@ test('every known credential is declared', () => {
   assert.deepEqual(paths, [
     'codingAgent.providerKeys',
     'sync.pat',
-    // AssemblyAI's key kept the generic name it was stored under; Deepgram's is
-    // its own field so switching engines to compare them loses neither.
-    'transcription.apiKey',
-    'transcription.deepgramApiKey',
+    // Keyed by VENDOR, not by job. Speech runs in two directions across three
+    // vendors, and choosing one vendor for both is one account with one key — a
+    // field per job would ask for it twice and store it twice.
+    'voiceKeys',
   ]);
 
   const secretPaths = AGENT_SECRET_CREDENTIALS.map((c) => c.path).sort();
@@ -62,16 +62,21 @@ test('only the OAuth-flow-owned pair is marked as such', () => {
 test('the companion patterns match real keys and nothing else', () => {
   const match = (k) => settingsCredentialPatterns().some((re) => re.test(k));
   assert.equal(match('sync.pat'), true);
-  assert.equal(match('transcription.apiKey'), true);
   assert.equal(match('codingAgent.providerKeys.anthropic'), true);
   assert.equal(match('codingAgent.providerKeys.openai-compatible'), true);
-  // The map itself is not a leaf — it's reconciled, not stored as one row.
+  // A top-level wildcard map matches the same way a nested one does.
+  assert.equal(match('voiceKeys.assemblyai'), true);
+  assert.equal(match('voiceKeys.elevenlabs'), true);
+  // Neither map is a leaf itself — both are reconciled, not stored as one row.
   assert.equal(match('codingAgent.providerKeys'), false);
+  assert.equal(match('voiceKeys'), false);
   // Nested deeper than one slug isn't a key either.
   assert.equal(match('codingAgent.providerKeys.a.b'), false);
+  assert.equal(match('voiceKeys.a.b'), false);
   // Neighbours that merely look similar.
   assert.equal(match('sync.pullIntervalSeconds'), false);
   assert.equal(match('transcription.provider'), false);
+  assert.equal(match('speech.voiceId'), false);
   assert.equal(match('codingAgent.model'), false);
 });
 
@@ -134,9 +139,13 @@ test('every declared credential is deletable', () => {
   // and the old value stayed on the companion, so a leaked key couldn't be revoked
   // from the app. The allowlist is this same declaration, so the two can't drift.
   assert.equal(isDeletableCredential('sync.pat'), true);
-  assert.equal(isDeletableCredential('transcription.apiKey'), true);
   assert.equal(isDeletableCredential('codingAgent.providerKeys.anthropic'), true);
   assert.equal(isDeletableCredential('codingAgent.providerKeys.openai-compatible'), true);
+  // Revoking one vendor's voice key must not require clearing the others.
+  assert.equal(isDeletableCredential('voiceKeys.deepgram'), true);
+  assert.equal(isDeletableCredential('voiceKeys.elevenlabs'), true);
+  // The map itself is not deletable — that would take every vendor's key at once.
+  assert.equal(isDeletableCredential('voiceKeys'), false);
 });
 
 test('a non-credential settings path is refused', () => {

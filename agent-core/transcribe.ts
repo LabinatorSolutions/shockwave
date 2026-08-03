@@ -6,10 +6,13 @@
 // segments — no other file changes, and the output format can't drift because the
 // provider never produces it.
 //
-// Which engine runs is `settings.transcription.provider` — AssemblyAI or Deepgram,
-// chosen on the settings page, applying to EVERYTHING (this module, Telegram voice
-// notes, and the desktop microphone's streaming socket). Each engine stores its own
-// key, so switching to compare them doesn't destroy the one you switched away from.
+// Which engine runs is `settings.transcription.provider` — AssemblyAI, Deepgram or
+// ElevenLabs, chosen on the settings page, applying to EVERYTHING that listens
+// (this module, Telegram voice notes, and the desktop microphone's streaming
+// socket). Keys are stored per VENDOR rather than per job, so picking one vendor
+// for both listening and speaking asks for its key once; which vendor is selected
+// and which key that implies is `agent-core/voiceProviders.ts`'s job, not this
+// file's and not every caller's.
 //
 // TWO SHAPES OF WORK, and they want different APIs. A RECORDING (`transcribeFile`,
 // the `transcribe` tool) can be an hour long with several people in it, so it goes
@@ -30,6 +33,11 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { AssemblyAI } from 'assemblyai';
 import { formatTranscript, extensionFor } from './transcriptFormat.js';
+import {
+  type VoiceConfig, listenProviderOf, listenKey, voiceLabel,
+} from './voiceProviders.js';
+
+export type { VoiceConfig };
 
 export interface Segment {
   startMs: number;
@@ -45,30 +53,11 @@ export interface Transcript {
   durationMs: number;
 }
 
-export interface TranscriptionConfig {
-  provider?: string;
-  /** AssemblyAI's key. Keeps the generic name it was stored under. */
-  apiKey?: string;
-  deepgramApiKey?: string;
-}
-
-/** The default when nothing is stored — every provider read goes through here. */
-export const DEFAULT_PROVIDER = 'assemblyai';
-
-export function providerOf(config: TranscriptionConfig): string {
-  return config.provider || DEFAULT_PROVIDER;
-}
-
-/**
- * The key for whichever engine is selected.
- *
- * Each engine has its OWN stored key, so switching between them to compare
- * quality doesn't destroy the one you switched away from. Callers pass the whole
- * `settings.transcription` slice and never have to know which field applies.
- */
-export function keyFor(config: TranscriptionConfig): string | undefined {
-  return providerOf(config) === 'deepgram' ? config.deepgramApiKey : config.apiKey;
-}
+// `providerOf` / `keyFor` used to live here as a pair of ternaries on the vendor
+// slug. They moved to voiceProviders.ts when a third vendor and a second direction
+// made a ternary the wrong shape; re-exported under their listening-specific names
+// so a caller reads which direction it is asking about.
+export { listenProviderOf, listenKey };
 
 /** Video containers we can pull an audio track out of before transcribing. */
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.mpeg', '.mpg', '.3gp']);
@@ -79,6 +68,11 @@ const ASSEMBLYAI_POLL_MS = 200;
 /** Deepgram's flagship model, and the one every number we compared was measured on. */
 const DEEPGRAM_MODEL = 'nova-3';
 const DEEPGRAM_URL = 'https://api.deepgram.com/v1/listen';
+
+const ELEVENLABS_MODEL = 'scribe_v2';
+const ELEVENLABS_URL = 'https://api.elevenlabs.io/v1/speech-to-text';
+/** Silence long enough to end a cue when the same person is still speaking. */
+const ELEVENLABS_SPEAKER_GAP_MS = 1500;
 
 // ── Providers ────────────────────────────────────────────────────────────────
 
@@ -190,9 +184,122 @@ async function deepgram(filePath: string, apiKey: string): Promise<Transcript> {
   return deepgramRequest(await fs.readFile(filePath), apiKey, { diarize: true });
 }
 
+/**
+ * ElevenLabs Scribe: multipart in, JSON out, ONE request — same shape as
+ * Deepgram, so it needs no separate fast path either, and it takes Telegram's
+ * OGG/Opus as-is so **ffmpeg never runs on this path**.
+ *
+ * `recording` says which of the two jobs this is, and it gates three options
+ * rather than one. A RECORDING wants speaker labels, word timings, and the
+ * `(laughter)` / `(footsteps)` annotations that make a subtitle file readable. A
+ * VOICE NOTE wants none of them: it is one person, the timings are thrown away
+ * the moment the text becomes a prompt, and — this is the one that matters —
+ * `tag_audio_events` DEFAULTS TO TRUE, so leaving it alone writes stage
+ * directions into the middle of what the user said and hands them to the model as
+ * if they were words. That is a correctness bug, not a slow path.
+ */
+async function elevenLabsRequest(
+  audio: Buffer,
+  filename: string,
+  apiKey: string,
+  { recording }: { recording: boolean },
+): Promise<Transcript> {
+  const form = new FormData();
+  form.set('model_id', ELEVENLABS_MODEL);
+  form.set('file', new Blob([new Uint8Array(audio)]), filename);
+  form.set('diarize', recording ? 'true' : 'false');
+  form.set('timestamps_granularity', recording ? 'word' : 'none');
+  form.set('tag_audio_events', recording ? 'true' : 'false');
+
+  const res = await fetch(ELEVENLABS_URL, {
+    method: 'POST',
+    headers: { 'xi-api-key': apiKey },
+    body: form,
+  });
+
+  if (!res.ok) {
+    // ElevenLabs nests the reason under `detail`, which is sometimes a string and
+    // sometimes `{ message }`. Fall back to the status when it is neither.
+    const body = await res.text().catch(() => '');
+    let reason = `HTTP ${res.status}`;
+    try {
+      const detail = JSON.parse(body)?.detail;
+      reason = (typeof detail === 'string' ? detail : detail?.message) || reason;
+    } catch { /* keep the status */ }
+    throw new Error(`ElevenLabs rejected the audio: ${reason}`);
+  }
+
+  const json: any = await res.json();
+  const text = String(json?.text ?? '').trim();
+  const segments = segmentsFromWords(json?.words);
+  const durationMs = segments.length
+    ? segments[segments.length - 1].endMs
+    : Math.round((json?.words?.[json.words.length - 1]?.end ?? 0) * 1000);
+
+  // Same fallback as the other two: a valid recording must never produce an empty
+  // transcript file, and asking for no timestamps yields no words to group.
+  if (!segments.length && text) segments.push({ startMs: 0, endMs: durationMs, text });
+
+  return { text, segments, durationMs };
+}
+
+/**
+ * Group ElevenLabs' flat word list into speaker turns.
+ *
+ * The other two engines hand back utterances already grouped; this one gives
+ * words, so the cue boundaries have to be drawn here. A new segment starts when
+ * the speaker changes or after a silence — anything else would make one cue of a
+ * whole recording. `spacing` entries carry the whitespace between words and are
+ * appended rather than treated as words; `audio_event` entries are not speech.
+ */
+function segmentsFromWords(words: any[] | undefined): Segment[] {
+  const out: Segment[] = [];
+  let current: Segment | null = null;
+
+  for (const w of words ?? []) {
+    const type = String(w?.type ?? 'word');
+    if (type === 'audio_event') continue;
+    const text = String(w?.text ?? '');
+    if (!text) continue;
+    if (type === 'spacing') {
+      if (current) current.text += text;
+      continue;
+    }
+    const startMs = Math.round((w?.start ?? 0) * 1000);
+    const endMs = Math.round((w?.end ?? 0) * 1000);
+    // `speaker_id` comes back as `speaker_0`; the other engines give a letter and
+    // an integer. All three end up "Speaker X" so transcriptFormat.ts never learns
+    // the difference.
+    const raw = w?.speaker_id;
+    const speaker = raw === undefined || raw === null
+      ? undefined
+      : `Speaker ${String(raw).replace(/^speaker[_-]?/i, '')}`;
+
+    // Inlined rather than hoisted into a `newTurn` boolean so the else branch
+    // narrows `current` to non-null.
+    if (!current
+      || speaker !== current.speaker
+      || startMs - current.endMs > ELEVENLABS_SPEAKER_GAP_MS) {
+      if (current) out.push(current);
+      current = { startMs, endMs, text, speaker };
+    } else {
+      current.text += text;
+      current.endMs = endMs;
+    }
+  }
+  if (current) out.push(current);
+
+  return out.map((s) => ({ ...s, text: s.text.trim() })).filter((s) => s.text);
+}
+
+async function elevenlabs(filePath: string, apiKey: string): Promise<Transcript> {
+  return elevenLabsRequest(await fs.readFile(filePath), path.basename(filePath), apiKey, { recording: true });
+}
+
 const PROVIDERS: Record<string, (filePath: string, apiKey: string) => Promise<Transcript>> = {
   assemblyai,
   deepgram,
+  elevenlabs,
 };
 
 /** Extract an audio track to `outPath`. Requires ffmpeg (shipped in the companion image). */
@@ -214,13 +321,13 @@ function extractAudio(input: string, outPath: string): Promise<void> {
  */
 export async function transcribeFile(
   filePath: string,
-  config: TranscriptionConfig,
+  config: VoiceConfig,
   workDir: string,
 ): Promise<Transcript> {
-  const provider = providerOf(config);
+  const provider = listenProviderOf(config);
   const run = PROVIDERS[provider];
   if (!run) throw new Error(`"${provider}" is not a speech-to-text provider this app knows.`);
-  const apiKey = keyFor(config);
+  const apiKey = listenKey(config);
   if (!apiKey) throw new Error('no-key');
 
   let audioPath = filePath;
@@ -309,14 +416,31 @@ function decodeToPcm(input: Buffer): Promise<Buffer> {
  * pooled connection is process-global (the SDK uses the global `fetch`, so Node
  * pools per origin), which is why warming here helps a call made anywhere else.
  */
-export async function warmTranscription(config: TranscriptionConfig): Promise<void> {
-  const apiKey = keyFor(config);
+export async function warmTranscription(config: VoiceConfig): Promise<void> {
+  const apiKey = listenKey(config);
   if (!apiKey) return;
+  const provider = listenProviderOf(config);
+
+  if (provider === 'assemblyai') {
+    await new AssemblyAI({ apiKey }).sync.warm().catch(() => false);
+    return;
+  }
+
+  // ElevenLabs has no SDK session to open, but it does have an origin nothing
+  // else in this process talks to — so the handshake is unpaid for until the
+  // voice note itself pays it. The cheapest authenticated GET it offers opens the
+  // connection Node then pools for the transcription request. Deliberately not a
+  // transcription: warming must never cost quota.
+  if (provider === 'elevenlabs') {
+    await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+      headers: { 'xi-api-key': apiKey },
+    }).then((r) => r.body?.cancel()).catch(() => false);
+    return;
+  }
+
   // Deepgram needs none of this: its request goes to the same origin Node has
   // already pooled a connection to if anything else has called it, and there is
   // no SDK-level session to open. Nothing to warm, so nothing to do.
-  if (providerOf(config) !== 'assemblyai') return;
-  await new AssemblyAI({ apiKey }).sync.warm().catch(() => false);
 }
 
 /** The sync endpoint: audio in, text out, one HTTP request, nothing to poll. */
@@ -344,13 +468,13 @@ async function assemblyaiSync(audio: Buffer, apiKey: string): Promise<string> {
  */
 export async function transcribeVoice(
   audio: Buffer,
-  config: TranscriptionConfig,
+  config: VoiceConfig,
   durationSeconds?: number,
 ): Promise<string> {
-  const apiKey = keyFor(config);
+  const apiKey = listenKey(config);
   if (!apiKey) throw new Error('no-key');
 
-  const provider = providerOf(config);
+  const provider = listenProviderOf(config);
   const shortEnough = durationSeconds === undefined || durationSeconds <= SYNC_MAX_SECONDS;
 
   // Deepgram has ONE endpoint for everything, so there is no fast path to choose
@@ -362,6 +486,19 @@ export async function transcribeVoice(
       return (await deepgramRequest(audio, apiKey, { diarize: false })).text;
     } catch (e: any) {
       console.warn(`[transcribe] deepgram voice request failed, falling back: ${e?.message ?? e}`);
+    }
+  }
+
+  // ElevenLabs is the same shape as Deepgram — one endpoint, no ceiling, takes
+  // the OGG/Opus byte-for-byte — so this path never touches ffmpeg either. What
+  // `recording: false` buys is not only speed: it also turns OFF the audio-event
+  // tagging that is on by default and would otherwise put "(laughter)" inside the
+  // user's own sentence and hand it to the model as something they said.
+  if (provider === 'elevenlabs') {
+    try {
+      return (await elevenLabsRequest(audio, 'voice.ogg', apiKey, { recording: false })).text;
+    } catch (e: any) {
+      console.warn(`[transcribe] elevenlabs voice request failed, falling back: ${e?.message ?? e}`);
     }
   }
 
@@ -405,7 +542,7 @@ const INLINE_LIMIT = 4000;
  * over-host-I/O shape as `makeSendMessageTool`.
  */
 export function makeTranscribeTool(
-  getConfig: () => Promise<TranscriptionConfig>,
+  getConfig: () => Promise<VoiceConfig>,
   scratchDir: string,
 ): any {
   return {
@@ -450,10 +587,10 @@ export function makeTranscribeTool(
         if (e?.message === 'no-key') {
           // Name the engine that's actually selected — sending someone to add an
           // AssemblyAI key when Settings is set to Deepgram is worse than silence.
-          const name = providerOf(config) === 'deepgram' ? 'Deepgram' : 'AssemblyAI';
+          const name = voiceLabel(listenProviderOf(config));
           return fail(
             'Speech-to-text is not set up, so I can\'t transcribe that. '
-            + `Tell the user to add a ${name} key in the desktop app under Settings → Transcription.`,
+            + `Tell the user to add a ${name} key in the desktop app under Settings → Agent Voice.`,
           );
         }
         return fail(`I couldn't transcribe that: ${e?.message ?? e}`);

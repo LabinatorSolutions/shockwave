@@ -54,3 +54,53 @@ export function useCommitField<T = string>(
 
   return { value: draft, onChange: change, onBlur: commit };
 }
+
+// The write-only variant, for credential boxes. Same blur rule, different
+// lifecycle — and the difference is why it can't just be `useCommitField('')`.
+//
+// A credential field is not a text box with a secret sitting in it. The renderer
+// is never given the stored value (main strips it), so the box is ALWAYS empty
+// and the dots are a placeholder. Three things follow, none of which
+// `useCommitField` can express:
+//
+//   - There is no stored value to follow, so the resync effect has nothing to do.
+//   - An empty draft means UNCHANGED, never "delete this" — clearing the box
+//     cannot remove a key (see `removeCredential`), so an empty commit is a no-op
+//     rather than a write.
+//   - After a commit the draft must go back to empty, so the dots come back and
+//     the field reads as stored again. That is the only reason the reset is here
+//     and not left to each caller.
+//
+// Left to each caller is exactly what happened, and they disagreed: GitHub and
+// Companion reset the draft themselves, while Voice and Agent Chat passed a
+// constant '' to `useCommitField` — whose resync effect keys on `[value]` and so
+// never re-fired, leaving the typed key sitting in the box until the section
+// unmounted. Same field, two behaviours, depending on which page you were on.
+export function useCredentialField(
+  onCommit: (next: string) => void,
+): { value: string; onChange: (next: string) => void; onBlur: () => void } {
+  const [draft, setDraft] = useState('');
+
+  const draftRef = useRef(draft);
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+
+  const change = useCallback((next: string) => {
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
+
+  const commit = useCallback(() => {
+    const next = draftRef.current;
+    if (!next) return;
+    draftRef.current = '';
+    setDraft('');
+    commitRef.current(next);
+  }, []);
+
+  // Same reason as above: closing Settings with the cursor still in the box must
+  // not drop what was typed.
+  useEffect(() => () => { commit(); }, [commit]);
+
+  return { value: draft, onChange: change, onBlur: commit };
+}

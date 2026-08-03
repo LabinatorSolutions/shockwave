@@ -3,7 +3,7 @@ import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD } from '.
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { useCommitField } from './useCommitField';
+import { useCommitField, useCredentialField } from './useCommitField';
 import { removeCredential } from './credentialField';
 import CredentialRow from './CredentialRow';
 import ErrorMessage from '../ErrorMessage.jsx';
@@ -53,8 +53,11 @@ export default function GitHubSection({ sync, onSyncChange }) {
   // settings (re-encrypting through the keychain) AND restarts the sync engine,
   // so typing a token character by character did ~90 of each, against ~90
   // partial tokens.
-  // Write-only: main never sends the token down, so this is a draft only.
-  const [patDraft, setPatDraft] = useState('');
+  // Write-only: main never sends the token down, so this is a draft only, and
+  // `useCredentialField` is what resets it once committed so the dots come back.
+  const patField = useCredentialField((next) => {
+    savingRef.current = Promise.resolve(updateSync({ pat: next }));
+  });
   const [verifyState, setVerifyState] = useState<any>({ status: 'idle' });
   const [gitState, setGitState] = useState<any>({ status: 'checking' });
   // Tracks the thumb while dragging; the real write happens on release.
@@ -80,14 +83,21 @@ export default function GitHubSection({ sync, onSyncChange }) {
   // resets the result to idle) still got overwritten by the in-flight response —
   // a green "Signed in as X" beside a token that was never checked.
   const verifyReq = useRef(0);
+  // The save started by the blur, so Verify can wait for it. Clicking the button
+  // is what blurs the field, and the draft resets the moment it commits, so by
+  // the time we get here there is nothing typed to send and main is checking the
+  // STORED token — which is the previous one until this promise settles.
+  const savingRef = useRef<Promise<any> | null>(null);
   const onVerify = async () => {
     // Empty draft is not "nothing to do" — it's the normal state, because the
     // renderer is never given the stored token. Main verifies the saved one when
     // nothing is typed; returning early here is what made Verify dead for anyone
     // who already had a token.
-    const value = patDraft.trim();
+    const value = patField.value.trim();
     const req = ++verifyReq.current;
     setVerifyState({ status: 'checking' });
+    await savingRef.current;
+    if (verifyReq.current !== req) return;
     const res = await window.api.sync.verifyPat(value);
     if (verifyReq.current !== req) return;
     setVerifyState(res.ok
@@ -97,13 +107,9 @@ export default function GitHubSection({ sync, onSyncChange }) {
 
   // A stale green check next to a changed token would be actively misleading.
   const onPatChange = (e) => {
-    setPatDraft(e.target.value);
+    patField.onChange(e.target.value);
     verifyReq.current++;   // invalidate any verify already in flight
     if (verifyState.status !== 'idle') setVerifyState({ status: 'idle' });
-  };
-
-  const commitPat = () => {
-    if (patDraft) { updateSync({ pat: patDraft }); setPatDraft(''); }
   };
 
   // Removing the token is a separate call from saving one — see removeCredential.
@@ -149,9 +155,9 @@ export default function GitHubSection({ sync, onSyncChange }) {
           <CredentialRow
             id="sync-pat"
             saved={hasPat}
-            value={patDraft}
+            value={patField.value}
             onChange={onPatChange}
-            onBlur={commitPat}
+            onBlur={patField.onBlur}
             actions={
               <>
                 {/* This page's one primary: checking the token is the action you come
@@ -159,7 +165,7 @@ export default function GitHubSection({ sync, onSyncChange }) {
                     either typed here or already stored. Gating it on the draft alone
                     disabled it forever, since the draft is empty unless you're
                     mid-edit. */}
-                <Button onClick={onVerify} disabled={(!patDraft.trim() && !hasPat) || verifyState.status === 'checking'}>
+                <Button onClick={onVerify} disabled={(!patField.value.trim() && !hasPat) || verifyState.status === 'checking'}>
                   {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
                 </Button>
                 {/* Only route that removes a stored token — clearing the box can't, by

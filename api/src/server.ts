@@ -267,7 +267,13 @@ app.post('/telegram/connect', handle(async (req) => {
 app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, masterKey); return { ok: true }; }));
 // Send a DM to the user. Backs the desktop's copy of the `send_message` agent
 // tool — the bot token is here, so the desktop asks rather than holds it.
-app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''))));
+// `output` is resolved by the CALLER against its own checkout — the desktop reads
+// its local workspace, the companion reads the one the turn is running in — so no
+// workspace is passed here and none is guessed. `save` is deliberately not
+// accepted: the caller writes its own copy and sync carries it.
+app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''), {
+  output: req.body?.output === 'voice' ? 'voice' : 'text',
+})));
 app.get('/telegram/status', handle(() => tgStatus(pool)));
 // Set the workspace Telegram runs against (same semantics as /workspace in the
 // bot: switching always starts a fresh chat). The desktop's Telegram settings
@@ -367,6 +373,10 @@ async function settleTls(): Promise<void> {
   normalizeTlsEnv(); // must run before ANY reader of COMPANION_HOST/DOMAIN
   await settleTls();
   await ensureSchema(pool);
+  // The half of the voice-key rename that SQL cannot do: a key left as a
+  // plaintext `setting` row has to be encrypted on the way across, and only this
+  // process holds the master key. See migrateLegacyVoiceKeys.
+  await store.migrateLegacyVoiceKeys(getDb(pool), masterKey, log);
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
   initSweeper(pool, masterKey);                 // reclaims idle per-run working dirs (TTL)
   initCheckoutPool(pool, masterKey);            // keeps a warm checkout ready for a new Telegram chat

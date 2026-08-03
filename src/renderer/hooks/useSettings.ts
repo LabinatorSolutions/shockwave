@@ -2,13 +2,14 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSyncRef } from './useSyncRef';
 import { buildPatch, dropEmptyCredentials } from '../settingsDiff.js';
 import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS } from '../constants';
-import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
+import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret, VoiceReply } from '../../shared/settings';
 
 // dailyNote + templates moved to the per-workspace WorkspaceData.
 type DailyNote = WorkspaceData['dailyNote'];
 type TreePanel = Settings['appearance']['treePanel'];
 type Templates = WorkspaceData['templates'];
 type Transcription = Settings['transcription'];
+type Speech = NonNullable<Settings['speech']>;
 type SyncSettings = Settings['sync'];
 
 // Empty-shaped placeholder to satisfy the Settings type before hydrate() seeds
@@ -21,7 +22,9 @@ const DEFAULT_CANONICAL: Settings = {
   appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
   codingAgent: { provider: '', model: '', hasProviderKey: {}, baseUrl: '', thinkingLevel: 'medium' },
   agentSecrets: [],
-  transcription: { provider: 'assemblyai', hasApiKey: false },
+  transcription: { provider: 'assemblyai' },
+  speech: {},
+  hasVoiceKey: {},
   sync: { hasPat: false, pullIntervalSeconds: 10 },
   timezone: 'UTC',
   chatSidebarOpen: true,
@@ -68,10 +71,17 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // Per-workspace built-in skill toggles: folderName → 'enabled' | 'disabled'.
   // Absent ⇒ enabled (default-on). Loaded with the workspace; written to its file.
   const [builtinSkills, setBuiltinSkills] = useState<Record<string, 'enabled' | 'disabled'>>({});
+  // Per-workspace, loaded with the workspace like builtinSkills above.
+  const [voiceReply, setVoiceReply] = useState<VoiceReply>('text');
   const [treeSortOrder, setTreeSortOrder] = useState<TreeSortOrder>(TREE_SORT_ORDERS.NAME_ASC);
   const [codingAgentSettings, setCodingAgentSettings] = useState<CodingAgentSettings>(DEFAULT_CANONICAL.codingAgent);
   const [agentSecrets, setAgentSecrets] = useState<AgentSecret[]>([]);
-  const [transcription, setTranscription] = useState<Transcription>({ provider: 'assemblyai', hasApiKey: false });
+  const [transcription, setTranscription] = useState<Transcription>({ provider: 'assemblyai' });
+  // The speaking half, and the per-vendor key flags both halves render dots from.
+  // `hasVoiceKey` is a MAP (slug -> true), the shape a wildcard credential's flag
+  // takes — see stripCredentials.
+  const [speech, setSpeech] = useState<Speech>({});
+  const [hasVoiceKey, setHasVoiceKey] = useState<Record<string, boolean>>({});
   const [sync, setSync] = useState<SyncSettings>({ hasPat: false, pullIntervalSeconds: 10 });
   const syncRef = useSyncRef(sync);
   const [timezone, setTimezone] = useState('UTC');
@@ -79,6 +89,13 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // Local cache of everything persisted, for rendering and for building whole
   // sub-objects in per-field setters. NOT the source of truth — the store is.
   const settingsRef = useRef<Settings>(DEFAULT_CANONICAL);
+
+  // `hydrateSettings` is defined far below (it needs every setter), and the
+  // settings:changed listener above it needs to call it on a resync. Held in a
+  // ref and assigned after the declaration — the same pattern the settings pages
+  // use for `recheck` — so the listener keeps a stable identity and does not tear
+  // down and re-subscribe on every render.
+  const hydrateRef = useRef<((disk: any) => void) | null>(null);
 
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const inFlightSavesRef = useRef(0);
@@ -189,6 +206,15 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     if (activeWorkspacePath) await window.api.workspaceSettings.update(activeWorkspacePath, { templates: next });
   }, [activeWorkspacePath]);
 
+  // How this workspace wants Telegram replies delivered. Per workspace, and in
+  // the workspace file rather than synced settings, because the companion reads
+  // it out of the checkout it is already working in and the agent can change it
+  // mid-turn — see agent-core/voiceReply.ts.
+  const onVoiceReplyChange = useCallback(async (next: VoiceReply) => {
+    setVoiceReply(next);
+    if (activeWorkspacePath) await window.api.workspaceSettings.update(activeWorkspacePath, { voiceReply: next });
+  }, [activeWorkspacePath]);
+
   // Seed daily-note + templates from a loaded workspace-data object (called by
   // App's loadWorkspace). Resets to defaults when data is null.
   const loadWorkspaceData = useCallback((data: any) => {
@@ -202,6 +228,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     dailyNoteRef.current = dn;
     setTemplates(tpl);
     setBuiltinSkills(data?.builtinSkills && typeof data.builtinSkills === 'object' ? data.builtinSkills : {});
+    setVoiceReply(data?.voiceReply === 'voice' ? 'voice' : 'text');
   }, [dailyNoteRef]);
 
   // Per-workspace built-in on/off. Built-ins are default-on (absent key ⇒
@@ -249,7 +276,24 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // never calls persistSettings — the store is already correct; this is the
   // renderer catching up, not a change to write back.
   useEffect(() => {
-    const off = window.api.settings.onChanged(({ keys, settings }: { keys: string[]; settings: any }) => {
+    const off = window.api.settings.onChanged(({ keys, settings, resync }: { keys: string[]; settings: any; resync?: boolean }) => {
+      // A RESYNC is a complete snapshot, not a set of changes — main sends one
+      // when the companion becomes reachable, and the copy we are holding at that
+      // moment is empty everywhere rather than stale in one place. Re-seed
+      // through the same function boot uses, so every key is covered by
+      // construction and there is no list here to fall behind the one in main.
+      //
+      // A PULL, never a push: `hydrateSettings` only seeds local state and the
+      // canonical ref. Nothing on this path writes, which is the point — the
+      // blanks an offline boot invented must never reach the companion.
+      if (resync) {
+        hydrateRef.current?.(settings);
+        // The workspace list lives in App, not here, and boot may have had none
+        // to load. Same call the old workspaces-only push made, so a reconnect
+        // still opens a workspace the offline boot couldn't.
+        onWorkspacesPushed?.(settings.workspaces ?? [], settings.activeWorkspaceId ?? null);
+        return;
+      }
       const changed = new Set(keys);
       // Workspaces are MAIN-owned now — only main creates, removes, or flips
       // sync on one — so main pushing them is the renderer's only correct
@@ -273,6 +317,18 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
         setTranscription(settings.transcription);
         settingsRef.current = { ...settingsRef.current, transcription: settings.transcription };
       }
+      if (changed.has('speech') && settings.speech) {
+        setSpeech(settings.speech);
+        settingsRef.current = { ...settingsRef.current, speech: settings.speech };
+      }
+      // The flag map is main's answer to "which vendors have a key stored", so a
+      // push carrying it replaces ours outright — a merge would keep a dot lit for
+      // a key that had just been deleted.
+      if (changed.has('voiceKeys') || changed.has('hasVoiceKey')) {
+        const flags = settings.hasVoiceKey ?? {};
+        setHasVoiceKey(flags);
+        settingsRef.current = { ...settingsRef.current, hasVoiceKey: flags };
+      }
       if (changed.has('codingAgent') && settings.codingAgent) {
         setCodingAgentSettings(settings.codingAgent);
         settingsRef.current = { ...settingsRef.current, codingAgent: settings.codingAgent };
@@ -292,6 +348,29 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   const onTranscriptionChange = useCallback(async (next: Transcription) => {
     setTranscription(next);
     await persistSettings({ transcription: next });
+  }, [persistSettings]);
+
+  const onSpeechChange = useCallback(async (next: Speech) => {
+    setSpeech(next);
+    await persistSettings({ speech: next });
+  }, [persistSettings]);
+
+  /**
+   * Store one vendor's API key.
+   *
+   * Sends ONLY the slot being typed into. The companion merges a credential map
+   * rather than treating it as complete (`reconcileCredentialMap`), so the other
+   * vendors' keys are untouched — and there is nothing to resend, because the
+   * renderer never holds a key value in the first place.
+   *
+   * Removing is a separate call (`settings:deleteCredential`): an empty value
+   * can't carry the intent, since every credential the renderer holds reads as
+   * empty and empties are stripped from saves.
+   */
+  const onVoiceKeyChange = useCallback(async (slug: string, value: string) => {
+    if (!slug || !value) return;
+    setHasVoiceKey((prev) => ({ ...prev, [slug]: true }));
+    await persistSettings({ voiceKeys: { [slug]: value } });
   }, [persistSettings]);
 
   // Goes through persistSettings like every other setting. The Cron page used to
@@ -321,10 +400,18 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     // is why every box read as empty.
     const tr: Transcription = {
       provider: disk.transcription?.provider || 'assemblyai',
-      hasApiKey: !!disk.transcription?.hasApiKey,
-      hasDeepgramApiKey: !!disk.transcription?.hasDeepgramApiKey,
       echoTelegramTranscript: !!disk.transcription?.echoTelegramTranscript,
     };
+    // Speaking is opt-in, so an unset provider stays unset — there is no vendor
+    // it would be right to guess, and guessing one would show a configured-looking
+    // page for an account that doesn't exist.
+    const sp: Speech = {
+      provider: disk.speech?.provider || '',
+      voiceId: disk.speech?.voiceId || '',
+      modelId: disk.speech?.modelId || '',
+    };
+    // A MAP of flags, not a boolean — one entry per vendor that has a key stored.
+    const vk: Record<string, boolean> = { ...(disk.hasVoiceKey ?? {}) };
     const sy: SyncSettings = {
       hasPat: !!disk.sync?.hasPat,
       pullIntervalSeconds: typeof disk.sync?.pullIntervalSeconds === 'number' && disk.sync.pullIntervalSeconds > 0 ? disk.sync.pullIntervalSeconds : 10,
@@ -353,6 +440,8 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       codingAgent: ca,
       agentSecrets: secrets,
       transcription: tr,
+      speech: sp,
+      hasVoiceKey: vk,
       sync: sy,
       timezone: typeof disk.timezone === 'string' ? disk.timezone : 'UTC',
       chatSidebarOpen: typeof disk.chatSidebarOpen === 'boolean' ? disk.chatSidebarOpen : true,
@@ -375,20 +464,26 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     if (disk.codingAgent) setCodingAgentSettings(ca);
     if (Array.isArray(disk.agentSecrets)) setAgentSecrets(secrets);
     if (disk.transcription) setTranscription(tr);
+    if (disk.speech) setSpeech(sp);
+    // Unconditional: an empty flag map is the honest answer for a fresh install,
+    // and gating on presence would leave the dots from a previous workspace up.
+    setHasVoiceKey(vk);
     if (disk.sync) { setSync(sy); syncRef.current = sy; }
     if (typeof disk.timezone === 'string') setTimezone(disk.timezone);
   }, [dailyNoteRef, syncRef]);
+  hydrateRef.current = hydrateSettings;
 
   return {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     chatSources,
-    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
-    codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
+    dailyNote, dailyNoteRef, templates, builtinSkills, voiceReply, treeSortOrder,
+    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, timezone,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange,
-    onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
+    onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onVoiceReplyChange, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
+    onSpeechChange, onVoiceKeyChange,
     onSyncChange, onTimezoneChange,
   };
 }

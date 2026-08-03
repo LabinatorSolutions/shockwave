@@ -119,7 +119,7 @@ Flags: `--yes` (accept all prompts), `--domain=`, `--cert-email=`, `--no-firewal
 
 ### Telegram (optional)
 
-Create a bot with [@BotFather](https://t.me/BotFather), grab your numeric user id from [@userinfobot](https://t.me/userinfobot), then connect both in **Settings → Telegram**. Only your user id can talk to the bot, and it works against the workspace you pick there. In the chat, `/help` lists everything: `/new`, `/chats`, `/workspaces`, `/status`, `/btw` (ask about a running job without interrupting it). Voice notes work too (transcribed with the key from **Settings → Voice**), and the agent can answer you out loud — set that per workspace on the same page, or just ask it to.
+Create a bot with [@BotFather](https://t.me/BotFather), grab your numeric user id from [@userinfobot](https://t.me/userinfobot), then connect both in **Settings → Telegram**. Only your user id can talk to the bot, and it works against the workspace you pick there. In the chat, `/help` lists everything: `/new`, `/chats`, `/workspaces`, `/status`, `/btw` (ask about a running job without interrupting it). Voice notes work too (transcribed with the key from **Settings → Agent Voice**), and the agent can answer you out loud — set that per workspace on the same page, or just ask it to.
 
 ### Scheduled runs (optional)
 

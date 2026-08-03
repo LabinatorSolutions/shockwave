@@ -17,6 +17,7 @@ import { getDb } from './db.js';
 import * as store from './store.js';
 import { mintToken } from './oauth.js';
 import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
+import { voiceConfigOf } from '../../agent-core/voiceProviders.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
 import { logger, errStr } from './log.js';
 
@@ -38,14 +39,20 @@ export function makeCompanionRuntime(pool: PgPool, key: Buffer) {
     machine: os.hostname(),
     // Proactively DM the user on Telegram. The bot token lives here, so this
     // host sends directly; the desktop's copy of the tool posts to /telegram/send.
-    extraTools: [makeSendMessageTool((text) => sendTelegramMessage(pool, key, text))],
+    //
+    // Built per session rather than once, because the reply mode is per WORKSPACE
+    // and lives in that workspace's checkout — so the tool has to know which
+    // checkout this turn is running in to read it, and to write it on `save`.
+    extraTools: ({ workspacePath }) => [
+      makeSendMessageTool((text, opts) => sendTelegramMessage(pool, key, text, { ...opts, workspacePath })),
+    ],
     // Per-run scratch dir so concurrent runs don't share pi's settings.json.
     dataDir: (chatId) => runScratchDir(chatId),
     // The same directory inbound Telegram attachments are written to, so a file
     // the user sent and a file the agent made sit together — which is what the
     // agent is told, and what delivery reads from.
     scratchDir: (chatId) => chatFilesDir(chatId),
-    getTranscription: async () => (await store.readSettings(db, key))?.transcription ?? {},
+    getVoiceConfig: async () => voiceConfigOf(await store.readSettings(db, key)),
     getChat: (id) => store.getChat(db, id),
     upsertChat: (row) => store.upsertChat(db, { ...row, now: Date.now() } as any),
     appendMessages: (id, rows) => store.appendMessages(db, id, rows as any),

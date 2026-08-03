@@ -267,8 +267,14 @@ export interface ShockwaveApi {
     write(obj: Partial<Settings>): Promise<void>;
     /** Fires when MAIN writes settings on its own (OAuth tokens, window bounds,
      *  cron, auto-provisioned secret slots). Never fires for the renderer's own
-     *  writes. Apply only the reported `keys`. Returns an unsubscribe fn. */
-    onChanged(cb: (payload: { keys: string[]; settings: Settings }) => void): () => void;
+     *  writes. Apply only the reported `keys`. Returns an unsubscribe fn.
+     *
+     *  `resync: true` means the opposite: `settings` is a COMPLETE snapshot and
+     *  `keys` is empty. Main sends one when the companion becomes reachable, where
+     *  the renderer's copy is empty everywhere rather than stale in one place — so
+     *  the receiver re-seeds wholesale instead of applying named keys. It is a
+     *  pull: nothing on that path may write back. */
+    onChanged(cb: (payload: { keys: string[]; settings: Settings; resync?: boolean }) => void): () => void;
     /** The API connection config (server URL + whether a key is stored). The key
      *  itself never leaves main. */
     /** `certFingerprint` is the approved companion certificate, shown so the user
@@ -410,8 +416,25 @@ export interface ShockwaveApi {
 
   voice: {
     /** `provider` names the engine the token belongs to (`assemblyai` |
-     *  `deepgram`), so the renderer knows which socket to open. */
-    getToken(): Promise<{ token?: string; provider?: string; error?: string }>;
+     *  `deepgram` | `elevenlabs`), so the renderer knows which socket to open.
+     *
+     *  `tokenTtlMs` and `singleUse` are facts about THIS token, not about the
+     *  engine the settings happen to name later. ElevenLabs' is consumed on first
+     *  use, so a cache that reuses one breaks the second microphone click. */
+    getToken(): Promise<{
+      token?: string;
+      provider?: string;
+      tokenTtlMs?: number;
+      singleUse?: boolean;
+      error?: string;
+    }>;
+    /** The voices the SPEAKING vendor offers, for the picker in Settings. Fetched
+     *  in main because listing needs the API key. `preview` is an audio URL and
+     *  only ElevenLabs supplies one — Deepgram's voices are models with no sample. */
+    listVoices(): Promise<{
+      voices?: Array<{ id: string; name: string; preview?: string }>;
+      error?: string;
+    }>;
     /** Per-capability key check. `ok` means the key transcribes; `canStream`
      *  means it can also mint a microphone token. Deepgram can be the first
      *  without the second (a restricted key), which is not a failure. */

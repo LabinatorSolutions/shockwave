@@ -36,12 +36,15 @@ import { resolveGitBinary } from './gitBinary.js';
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
 // encryption were replaced wholesale; the signatures here are unchanged, so
 // every call site below (and in oauth.ts / cron.ts) is untouched.
-import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
+import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged, notifySettingsResync } from './settingsStore.js';
 import { readApiConfig, writeApiConfig } from './api/config.js';
 // The one declaration of which settings paths are credentials — shared with the
 // companion and the renderer. Gates settings:deleteCredential.
 import { isDeletableCredential } from '../../agent-core/credentials.js';
-import { providerOf, keyFor } from '../../agent-core/transcribe.js';
+import {
+  voiceConfigOf, voiceProvider, voiceLabel,
+  listenProviderOf, listenKey, speakProviderOf, speakKey,
+} from '../../agent-core/voiceProviders.js';
 import {
   approveFingerprint, forgetFingerprint, approvedFingerprint,
   onCertNeedsApproval, readServerCert, getPendingCert, hostOf,
@@ -708,6 +711,10 @@ function workspaceDefaults() {
     templates: { folder: '' },
     // Built-in skill folderName → 'enabled' | 'disabled'. Absent ⇒ enabled.
     builtinSkills: {},
+    // How the agent's Telegram replies come back. Text unless asked otherwise —
+    // speaking costs money on every reply, so it is never the thing you get by
+    // doing nothing.
+    voiceReply: 'text',
   };
 }
 
@@ -730,6 +737,10 @@ function normalizeWorkspaceData(raw) {
     if (raw.builtinSkills && typeof raw.builtinSkills === 'object') {
       d.builtinSkills = { ...raw.builtinSkills };
     }
+    // Anything but the three legal values reads as the default. The agent can
+    // write this file's key itself, so an unrecognized string must not become a
+    // mode nothing knows how to render.
+    if (raw.voiceReply === 'voice' || raw.voiceReply === 'both') d.voiceReply = raw.voiceReply;
   }
   return d;
 }
@@ -1149,13 +1160,13 @@ ipcMain.handle('oauth:disconnect', async (_evt, name) => {
 async function resolveVoiceEngine() {
   const { settings, online, reason } = await readSettingsSafe();
   if (!online) return { error: reason || "Can't reach your companion server." } as const;
-  const tr = settings.transcription ?? {};
-  const provider = providerOf(tr);
-  const engineName = provider === 'deepgram' ? 'Deepgram' : 'AssemblyAI';
-  const apiKey = keyFor(tr);
-  // Name the engine: with two of them, "not configured" left you checking the
+  const config = voiceConfigOf(settings);
+  const provider = listenProviderOf(config);
+  const engineName = voiceLabel(provider);
+  const apiKey = listenKey(config);
+  // Name the engine: with three of them, "not configured" left you checking the
   // field you'd just filled in, for the provider you weren't using.
-  if (!apiKey) return { error: `No ${engineName} key — add one under Settings → Transcription.` } as const;
+  if (!apiKey) return { error: `No ${engineName} key — add one under Settings → Agent Voice.` } as const;
   return { provider, engineName, apiKey } as const;
 }
 
@@ -1171,7 +1182,13 @@ async function resolveVoiceEngine() {
 async function voiceFailure(res: Response, provider: string, engineName: string) {
   const body = await res.text().catch(() => '');
   let detail = '';
-  try { detail = JSON.parse(body)?.err_msg || JSON.parse(body)?.error || ''; } catch { detail = ''; }
+  try {
+    const parsed = JSON.parse(body);
+    // Each vendor nests its reason somewhere different, and ElevenLabs' `detail`
+    // is sometimes a string and sometimes an object with a message on it.
+    const nested = typeof parsed?.detail === 'string' ? parsed.detail : parsed?.detail?.message;
+    detail = parsed?.err_msg || parsed?.error || nested || '';
+  } catch { detail = ''; }
   if (res.status === 401 || res.status === 403) {
     return provider === 'deepgram'
       ? `${engineName} rejected the key for streaming (HTTP ${res.status}). It needs Member permissions or higher to mint a token — a restricted key can transcribe but not grant.`
@@ -1180,23 +1197,49 @@ async function voiceFailure(res: Response, provider: string, engineName: string)
   return `${engineName} refused the token request: ${detail || `HTTP ${res.status}`}`;
 }
 
-/** Mint the 60s streaming credential. `{ token }` or `{ error }`. */
+/**
+ * Mint the streaming credential the renderer opens its socket with.
+ *
+ * **The lifetime is not the same for all three, and the renderer has to be told.**
+ * AssemblyAI and Deepgram both issue a 60-second token that may be reused until
+ * it expires, which is what the mic's 50-second cache is built around.
+ * ElevenLabs issues a 15-minute token that is **consumed on first use** — cache
+ * that one and the second click connects with a spent credential. So the TTL and
+ * the single-use flag travel back with the token, out of `VOICE_PROVIDERS`,
+ * rather than being a number the renderer assumes.
+ */
 async function mintVoiceToken(provider: string, engineName: string, apiKey: string) {
+  const mic = voiceProvider(provider)?.mic;
+  if (!mic) return { error: `${engineName} has no live microphone support.` };
+
   if (provider === 'deepgram') {
-    // `ttl_seconds` matches AssemblyAI's 60 so the renderer's one cache rule
-    // (50s, below the TTL) holds whichever engine is selected.
     const res = await fetch('https://api.deepgram.com/v1/auth/grant', {
       method: 'POST',
       headers: { Authorization: `Token ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ ttl_seconds: 60 }),
+      body: JSON.stringify({ ttl_seconds: Math.round(mic.tokenTtlMs / 1000) }),
     });
     if (!res.ok) return { error: await voiceFailure(res, provider, engineName) };
     const data = await res.json();
     if (!data?.access_token) return { error: `${engineName} returned no token.` };
     return { token: data.access_token as string };
   }
+
+  if (provider === 'elevenlabs') {
+    // The token type is part of the path, and `realtime_scribe` is the only one
+    // this app wants — a token minted for anything else is refused by the socket.
+    const res = await fetch('https://api.elevenlabs.io/v1/single-use-token/realtime_scribe', {
+      method: 'POST',
+      headers: { 'xi-api-key': apiKey },
+    });
+    if (!res.ok) return { error: await voiceFailure(res, provider, engineName) };
+    const data = await res.json();
+    const token = data?.token ?? data?.single_use_token;
+    if (!token) return { error: `${engineName} returned no token.` };
+    return { token: String(token) };
+  }
+
   const res = await fetch(
-    'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60',
+    `https://streaming.assemblyai.com/v3/token?expires_in_seconds=${Math.round(mic.tokenTtlMs / 1000)}`,
     { headers: { Authorization: apiKey } },
   );
   if (!res.ok) return { error: await voiceFailure(res, provider, engineName) };
@@ -1211,7 +1254,14 @@ ipcMain.handle('voice:getToken', async () => {
   const { provider, engineName, apiKey } = engine;
   try {
     const minted = await mintVoiceToken(provider, engineName, apiKey);
-    return 'error' in minted ? minted : { token: minted.token, provider };
+    if ('error' in minted) return minted;
+    // The provider AND its token rules travel with the token. The renderer needs
+    // the provider to pick a socket URL and read what comes back; it needs the
+    // rules because caching a single-use token breaks the second click. Deriving
+    // either from a second settings read would be a second answer that can
+    // disagree with the one this token was minted against.
+    const mic = voiceProvider(provider)!.mic!;
+    return { token: minted.token, provider, tokenTtlMs: mic.tokenTtlMs, singleUse: mic.singleUse };
   } catch (err: any) {
     console.warn(`[voice] ${provider} token request failed:`, err.message);
     return { error: `Couldn't reach ${engineName}: ${err?.message ?? 'network error'}` };
@@ -1270,6 +1320,79 @@ ipcMain.handle('voice:verifyKey', async () => {
   } catch (err: any) {
     console.warn(`[voice] ${provider} verify failed:`, err.message);
     return { ok: false, error: `Couldn't reach ${engineName}: ${err?.message ?? 'network error'}` };
+  }
+});
+
+/**
+ * The voices the SPEAKING vendor offers, for the picker in Settings.
+ *
+ * In main because listing needs the API key, and the key never crosses into the
+ * renderer — same reason the token mint lives here. Nothing is cached: the list
+ * is fetched when the settings page asks for it, which is rare, and a stale
+ * catalogue is worse than a second of waiting.
+ *
+ * The two vendors answer very differently and both answers are normalized to
+ * `{ id, name, preview }`:
+ *   - ElevenLabs pages, ten at a time by default. Ask for the maximum and follow
+ *     the page token, or a user with a full voice library sees the first ten and
+ *     no sign there are more.
+ *   - Deepgram has no voice endpoint at all — its voices ARE models, so the model
+ *     list is the voice list, and the `tts` half of it is the answer.
+ */
+async function listVoicesFor(provider: string, apiKey: string) {
+  if (provider === 'elevenlabs') {
+    const voices: Array<{ id: string; name: string; preview?: string }> = [];
+    let pageToken: string | undefined;
+    // Bounded: a runaway `has_more` must not loop the main process forever.
+    for (let page = 0; page < 20; page++) {
+      const qs = new URLSearchParams({ page_size: '100', ...(pageToken ? { next_page_token: pageToken } : {}) });
+      const res = await fetch(`https://api.elevenlabs.io/v2/voices?${qs}`, {
+        headers: { 'xi-api-key': apiKey },
+      });
+      if (!res.ok) return { error: await voiceFailure(res, provider, voiceLabel(provider)) };
+      const data: any = await res.json();
+      for (const v of data?.voices ?? []) {
+        if (v?.voice_id) voices.push({ id: String(v.voice_id), name: String(v.name ?? v.voice_id), preview: v.preview_url || undefined });
+      }
+      if (!data?.has_more || !data?.next_page_token) break;
+      pageToken = String(data.next_page_token);
+    }
+    return { voices };
+  }
+
+  if (provider === 'deepgram') {
+    const res = await fetch('https://api.deepgram.com/v1/models', {
+      headers: { Authorization: `Token ${apiKey}` },
+    });
+    if (!res.ok) return { error: await voiceFailure(res, provider, voiceLabel(provider)) };
+    const data: any = await res.json();
+    const voices = (data?.tts ?? [])
+      .filter((m: any) => m?.canonical_name || m?.name)
+      .map((m: any) => ({
+        // `canonical_name` is what the speak endpoint's `model=` takes; `name` is
+        // the human one. Falling back either way keeps an unfamiliar shape usable.
+        id: String(m.canonical_name ?? m.name),
+        name: String(m.name ?? m.canonical_name),
+      }));
+    return { voices };
+  }
+
+  return { error: `${voiceLabel(provider)} does not do text to speech.` };
+}
+
+ipcMain.handle('voice:listVoices', async () => {
+  const { settings, online, reason } = await readSettingsSafe();
+  if (!online) return { error: reason || "Can't reach your companion server." };
+  const config = voiceConfigOf(settings);
+  const provider = speakProviderOf(config);
+  if (!provider) return { error: 'Choose a provider for speaking first.' };
+  const apiKey = speakKey(config);
+  if (!apiKey) return { error: `No ${voiceLabel(provider)} key — add one under Settings → Agent Voice.` };
+  try {
+    return await listVoicesFor(provider, apiKey);
+  } catch (err: any) {
+    console.warn(`[voice] ${provider} voice list failed:`, err.message);
+    return { error: `Couldn't reach ${voiceLabel(provider)}: ${err?.message ?? 'network error'}` };
   }
 });
 
@@ -2041,7 +2164,13 @@ const REFRESH_RETRY_MS = [2000, 5000, 15_000];
 async function refreshCompanionData(attempt = 0) {
   if (refreshRetry) { clearTimeout(refreshRetry); refreshRetry = null; }
   if (!companionOnline) return; // went offline mid-flight; the next open retries
-  if (await notifyWorkspacesChanged()) return;
+  // A FULL snapshot, not a list of keys. The renderer's copy after a boot with the
+  // companion down isn't stale in one place — it is empty everywhere, because
+  // `readSettingsSafe` returns machine-local values only. Re-pushing just the
+  // workspace list left every other page reading blank until the app was
+  // restarted, and naming more keys would only move the problem to whoever
+  // forgets the next one. See notifySettingsResync.
+  if (await notifySettingsResync()) return;
   const delay = REFRESH_RETRY_MS[attempt];
   if (delay === undefined) {
     console.warn('[companion] gave up refreshing workspaces after reconnect');
@@ -2561,7 +2690,7 @@ initDesktopAgent({
   getToken: (name) => api.get(`/agent-secret/${encodeURIComponent(name)}/token`),
   // The same AssemblyAI key the microphone uses. Main holds it; only the
   // renderer's copy is stripped, and the agent runs here.
-  getTranscription: async () => (await readSettingsSafe())?.settings?.transcription ?? {},
+  getVoiceConfig: async () => voiceConfigOf((await readSettingsSafe())?.settings),
 });
 
 // Reclaim scratch dirs from chats nobody has touched lately — except pinned

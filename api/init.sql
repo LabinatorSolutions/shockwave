@@ -286,3 +286,31 @@ CREATE TABLE IF NOT EXISTS attachment (
   created_at bigint NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attachment_msg ON attachment (chat_id, entry_id);
+
+-- ── Rename: per-job voice keys → one key per vendor ──────────────────────────
+-- Speech runs in two directions now (listening and speaking) across three
+-- vendors, and picking one vendor for both jobs is ONE account with ONE key. The
+-- old shape had a field per job, which would have asked for the same Deepgram key
+-- twice and stored it twice. The new shape is `voiceKeys.<vendor>`, declared once
+-- in agent-core/credentials.ts as a wildcard credential.
+--
+-- `transcription.apiKey` was AssemblyAI's under a generic name; the Deepgram one
+-- said so. Both move to their vendor slug. Guarded on the destination not already
+-- existing, because (owner, field) is the primary key — an unguarded UPDATE would
+-- abort the whole boot script on a database where both rows somehow exist, and
+-- taking the server down is a far worse outcome than leaving a stale row behind.
+-- Re-running this file (every boot) is a no-op once the rows have moved.
+UPDATE secret_value s SET field = 'voiceKeys.assemblyai'
+ WHERE s.owner = 'settings' AND s.field = 'transcription.apiKey'
+   AND NOT EXISTS (SELECT 1 FROM secret_value d
+                    WHERE d.owner = 'settings' AND d.field = 'voiceKeys.assemblyai');
+UPDATE secret_value s SET field = 'voiceKeys.deepgram'
+ WHERE s.owner = 'settings' AND s.field = 'transcription.deepgramApiKey'
+   AND NOT EXISTS (SELECT 1 FROM secret_value d
+                    WHERE d.owner = 'settings' AND d.field = 'voiceKeys.deepgram');
+-- Any row the guard above skipped is now unreachable: nothing reads the old field
+-- names, so leaving it would keep an encrypted key alive that no screen can show
+-- and no action can revoke.
+DELETE FROM secret_value
+ WHERE owner = 'settings'
+   AND field IN ('transcription.apiKey', 'transcription.deepgramApiKey');

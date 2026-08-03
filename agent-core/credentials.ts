@@ -23,14 +23,15 @@
  * `wildcard` — the path ends in a map keyed by something open-ended (provider
  *              slug), so the leaf name isn't known up front.
  */
-// `transcription.apiKey` is AssemblyAI's and keeps that name — renaming it would
-// mean migrating every stored row for no gain. Deepgram gets its own field rather
-// than sharing one, so switching engines to compare them doesn't destroy the key
-// you switched away from; the settings page shows only the active engine's.
+// `voiceKeys` is a map keyed by VENDOR, not by job. Speech runs in two directions
+// now (listening and speaking) across three vendors, and picking the same vendor
+// for both is one account with one key — a field per job would ask for it twice
+// and store it twice. It replaced `transcription.apiKey` (AssemblyAI's, under a
+// generic name) and `transcription.deepgramApiKey`; those two rows are renamed in
+// place on the companion by the migration at the end of `api/init.sql`.
 export const SETTINGS_CREDENTIALS = [
   { path: 'codingAgent.providerKeys', flag: 'hasProviderKey', wildcard: true },
-  { path: 'transcription.apiKey', flag: 'hasApiKey' },
-  { path: 'transcription.deepgramApiKey', flag: 'hasDeepgramApiKey' },
+  { path: 'voiceKeys', flag: 'hasVoiceKey', wildcard: true },
   { path: 'sync.pat', flag: 'hasPat' },
 ];
 

@@ -14,7 +14,9 @@ import path from 'node:path';
 import { app } from 'electron';
 import { createAgentRuntime, listThinkingLevels } from '../../agent-core/agent.js';
 import type { AgentHost, RunOpts, Emit } from '../../agent-core/agent.js';
-import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
+import type { VoiceConfig } from '../../agent-core/voiceProviders.js';
+import { makeSendMessageTool, type SendOutput } from '../../agent-core/sendMessage.js';
+import { readVoiceReply, writeVoiceReply } from '../../agent-core/voiceReply.js';
 import { sweepScratchDirs } from '../../agent-core/scratchSweep.js';
 import { getChat, upsertChat, appendMessages, setChatTitle, setRunning, getTranscript, putTranscript,
   searchChatMessages, readChatWindow, recentChats } from './api/chats.js';
@@ -24,14 +26,33 @@ import { OPEN_FILE_TOOL } from './openFileExtension.js';
 // The desktop's `send_message`: same tool the companion offers, but the sending
 // happens over there — the bot token never leaves the companion. Without this, a
 // chat started in Telegram and continued here couldn't answer on Telegram.
-const SEND_MESSAGE_TOOL = makeSendMessageTool(async (text) => {
-  try {
-    const res = await api.post('/telegram/send', { text });
-    return res?.ok ? { ok: true } : { ok: false, error: res?.error || 'Could not send the message.' };
-  } catch (e: any) {
-    return { ok: false, error: `Could not reach the Shockwave server to send it: ${e?.message ?? e}` };
-  }
-});
+// The reply MODE is read and written HERE, against this machine's checkout —
+// the copy the turn is running in — and the existing GitHub sync carries a change
+// to the companion's copy. The companion does the same against its own checkout.
+// One rule, no coordination, and no way for the two sides to write different
+// files for the same request.
+//
+// Delivery and synthesis still happen over there: the bot token and ffmpeg are
+// both companion-only. So this resolves the mode locally and sends it EXPLICITLY,
+// which also means the server never has to guess a workspace it can't see.
+function makeDesktopSendTool(workspacePath: string) {
+  return makeSendMessageTool(async (text, opts) => {
+    let savedMode: SendOutput | undefined;
+    let saveFailed = false;
+    if (opts.save && opts.output) {
+      if (await writeVoiceReply(workspacePath, opts.output)) savedMode = opts.output;
+      else saveFailed = true;
+    }
+    const output = opts.output ?? await readVoiceReply(workspacePath);
+    try {
+      const res = await api.post('/telegram/send', { text, output });
+      if (!res?.ok) return { ok: false, error: res?.error || 'Could not send the message.' };
+      return { ok: true, ...(savedMode ? { savedMode } : {}), ...(saveFailed ? { saveFailed } : {}) };
+    } catch (e: any) {
+      return { ok: false, error: `Could not reach the Shockwave server to send it: ${e?.message ?? e}` };
+    }
+  });
+}
 
 // The agent's own directory for a chat — working files and anything it is
 // producing to send rather than to keep. Kept OUT of the workspace, because the
@@ -79,15 +100,15 @@ export function initDesktopAgent(deps: {
   builtinDir: string;
   getSecrets: () => Promise<any[]>;
   getToken: (name: string) => Promise<string>;
-  getTranscription: () => Promise<{ provider?: string; apiKey?: string }>;
+  getVoiceConfig: () => Promise<VoiceConfig>;
 }) {
   const host: AgentHost = {
     builtinDir: deps.builtinDir,
     machine: os.hostname(),
-    extraTools: [OPEN_FILE_TOOL, SEND_MESSAGE_TOOL],
+    extraTools: ({ workspacePath }) => [OPEN_FILE_TOOL, makeDesktopSendTool(workspacePath)],
     dataDir: () => app.getPath('userData'), // one global pi scratch dir on the desktop
     scratchDir: (chatId) => chatScratchDir(chatId),
-    getTranscription: deps.getTranscription,
+    getVoiceConfig: deps.getVoiceConfig,
     getChat,
     upsertChat,
     appendMessages,

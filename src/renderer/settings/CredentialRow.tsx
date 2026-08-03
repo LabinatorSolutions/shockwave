@@ -18,26 +18,38 @@ import { credentialPlaceholder } from './credentialField';
 // The width comes from the container (the 360px settings measure — dialogs that
 // host one of these are sized to match), never from a per-call-site class. That
 // is what keeps them equal across sections. Don't pass a width in `className`.
+//
+// It also owns the FOCUS state, which is why every box gets the click-to-clear
+// behaviour without a single call site knowing about it. The state has to live
+// here rather than in the placeholder helper because a placeholder is a string
+// and focus is not; and here rather than in the sections because there are seven
+// of them and this is the one thing they all already share. `onFocus`/`onBlur`
+// are chained, never replaced — two callers pass neither and the rest pass a
+// blur that commits the draft.
 export default function CredentialRow({
   id,
   saved,
   value,
   onChange,
+  onFocus,
   onBlur,
   actions,
   className,
   ...props
 }: any) {
+  const [focused, setFocused] = React.useState(false);
+
   return (
     <div className="flex flex-col gap-2">
       <Input
         id={id}
         type="password"
         className={['w-full font-mono', className].filter(Boolean).join(' ')}
-        placeholder={credentialPlaceholder(!!saved)}
+        placeholder={credentialPlaceholder(!!saved, focused)}
         value={value}
         onChange={onChange}
-        onBlur={onBlur}
+        onFocus={(e) => { setFocused(true); onFocus?.(e); }}
+        onBlur={(e) => { setFocused(false); onBlur?.(e); }}
         spellCheck={false}
         autoComplete="off"
         autoCorrect="off"

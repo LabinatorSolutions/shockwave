@@ -273,14 +273,15 @@ export default function App() {
   const {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     chatSources,
-    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
-    codingAgentSettings, agentSecrets, transcription, sync, syncRef, timezone,
+    dailyNote, dailyNoteRef, templates, builtinSkills, voiceReply, treeSortOrder,
+    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, timezone,
     settingsRef,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
+    onSpeechChange, onVoiceKeyChange, onVoiceReplyChange,
     onSyncChange, onTimezoneChange,
   } = useSettings({
     activeWorkspacePath: workspacePath,
@@ -2490,6 +2491,12 @@ export default function App() {
         onReloadSecrets={reloadAgentSecrets}
         transcription={transcription}
         onTranscriptionChange={onTranscriptionChange}
+        speech={speech}
+        onSpeechChange={onSpeechChange}
+        hasVoiceKey={hasVoiceKey}
+        onVoiceKeyChange={onVoiceKeyChange}
+        voiceReply={voiceReply}
+        onVoiceReplyChange={onVoiceReplyChange}
         sync={sync}
         onSyncChange={onSyncChange}
         timezone={timezone}

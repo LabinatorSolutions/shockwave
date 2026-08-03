@@ -14,9 +14,30 @@
 // truncated hint rather than a stored value.
 const DOTS = '•'.repeat(40);
 
-/** Placeholder for a credential input. Same two strings in every field. */
-export function credentialPlaceholder(saved: boolean): string {
-  return saved ? DOTS : 'Paste your key';
+/**
+ * Placeholder for a credential input. Same three strings in every field.
+ *
+ * WHY FOCUS MATTERS HERE, when it matters nowhere else in Settings. Chromium
+ * keeps a placeholder visible while an empty input is focused, and this box is
+ * always empty — so clicking into a stored key changed nothing on screen and the
+ * field read as locked. Backspace reinforced it: there is nothing to delete, so
+ * nothing happened. Then typing one character replaced forty dots with a single
+ * bullet, which looks precisely like having just wiped the key down to one
+ * character — at a moment when nothing has been written at all.
+ *
+ * So focus swaps the dots for what typing will actually do. Clearing them is the
+ * feedback ("you are in an empty box now"); saying `replace` is the answer to the
+ * question an empty box raises ("did I just delete it?"). Blur brings the dots
+ * back, because by then the draft has been committed and reset — see
+ * `useCredentialField`.
+ *
+ * This is not a format-example placeholder and must never become a lookalike for
+ * a stored value; that rule is what the dots-on-blur already sit right at the
+ * edge of.
+ */
+export function credentialPlaceholder(saved: boolean, focused = false): string {
+  if (!saved) return 'Paste your key';
+  return focused ? 'Paste a new key to replace' : DOTS;
 }
 
 /**

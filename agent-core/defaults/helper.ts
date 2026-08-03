@@ -15,7 +15,7 @@
 // a type in a value import is a missing export at runtime.
 import { TOOL_CATALOG, formatToolList } from './tools.ts';
 import type { ToolDescriptor } from './tools.ts';
-import { SENDING_FILES, isCompanionSource } from './companion.ts';
+import { SENDING_FILES, SPEAKING, isCompanionSource } from './companion.ts';
 
 // First line of the helper, and the seam the stored prompt is split on so the
 // helper can be rebuilt on a later run while the workspace's SOUL stays frozen
@@ -332,6 +332,10 @@ export function buildShockwaveHelper(
     // reply, so documenting the syntax there would have the agent announce a
     // delivery that never happens.
     ...(isCompanionSource(source) ? [SENDING_FILES] : []),
+    // Same gate, and additionally on holding `send_message`: the section is a
+    // how-to for that tool's two options, so a run without it would be reading an
+    // instruction it cannot follow. Same rule as REACHING_THE_USER and LINK_GRAPH.
+    ...(isCompanionSource(source) && tools.some((t) => t.name === 'send_message') ? [SPEAKING] : []),
     WORKSPACE,
     WIKILINKS,
     ASSOCIATION,

@@ -200,7 +200,20 @@ export interface WorkspaceData {
   // enabled (built-ins are default-on). This is the only tier — there is no
   // global default.
   builtinSkills: Record<string, SkillState>;
+  /**
+   * How the agent's Telegram replies come back: `'text'` (the default),
+   * `'voice'` (a voice note only), or `'both'`.
+   *
+   * Per workspace rather than global, and here rather than in synced settings,
+   * because it travels with the workspace: the companion reads it out of the
+   * checkout it is already working in, and the agent can change it mid-turn via
+   * `send_message(save: true)` — the run's own commit carries that back.
+   */
+  voiceReply: VoiceReply;
 }
+
+/** `'text'` — text only. `'voice'` — a voice note only. `'both'` — voice and text. */
+export type VoiceReply = 'text' | 'voice' | 'both';
 
 export interface Settings {
   workspaces: WorkspaceEntry[];
@@ -213,19 +226,34 @@ export interface Settings {
   // `WorkspaceData` below), loaded on workspace switch.
   codingAgent: CodingAgentSettings;
   agentSecrets: AgentSecret[];
-  // `apiKey` is present in MAIN only; the renderer gets `hasApiKey`.
-  // `echoTelegramTranscript`: after transcribing an inbound Telegram voice note,
-  // post the transcript back to the chat as `🎤 "…"` before running the turn.
-  // Unset ⇒ off (the consumer reads `?? false` — see api/src/telegram/webhook.ts).
-  /** `provider` is `'assemblyai' | 'deepgram'` and applies to EVERYTHING — the
-   *  desktop mic, Telegram voice notes, and the agent's `transcribe` tool. Each
-   *  engine keeps its own key so switching between them loses neither. */
+  // ── Voice ──────────────────────────────────────────────────────────────────
+  // Two directions, chosen INDEPENDENTLY, because the vendor matrix is not
+  // square: AssemblyAI listens but cannot speak. See agent-core/voiceProviders.ts
+  // for the table both processes read.
+  //
+  /** Listening. `provider` applies to EVERYTHING that hears — the desktop mic,
+   *  Telegram voice notes, and the agent's `transcribe` tool.
+   *  `echoTelegramTranscript`: after transcribing an inbound voice note, post the
+   *  transcript back as `🎤 "…"` before running the turn. Unset ⇒ off (the
+   *  consumer reads `?? false` — see api/src/telegram/webhook.ts). */
   transcription: {
     provider: string;
-    apiKey?: string; hasApiKey?: boolean;
-    deepgramApiKey?: string; hasDeepgramApiKey?: boolean;
     echoTelegramTranscript?: boolean;
   };
+  /** Speaking. An unset `provider` means speech is not configured, and every
+   *  caller falls back to text without complaining — it is opt-in. */
+  speech?: {
+    provider?: string;
+    /** Deepgram: the Aura model (`aura-2-thalia-en`), which IS its voice.
+     *  ElevenLabs: the voice id, with `modelId` chosen separately. */
+    voiceId?: string;
+    modelId?: string;
+  };
+  /** Vendor slug -> API key, shared by both directions: pick one vendor for both
+   *  and you enter its key once. Present in MAIN only; the renderer gets
+   *  `hasVoiceKey` (a map of slug -> true). */
+  voiceKeys?: Record<string, string>;
+  hasVoiceKey?: Record<string, boolean>;
   // `pat` is present in MAIN only; the renderer gets `hasPat`.
   sync: { pat?: string; hasPat?: boolean; pullIntervalSeconds: number };
   // The one unified system timezone (synced). The companion uses it for cron

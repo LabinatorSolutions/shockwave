@@ -15,7 +15,7 @@
 // renderer's don't-send-it-back guard: three copies of one fact, where a mismatch
 // leaks a key to the screen or deletes it on save.
 import {
-  settingsCredentialPatterns, agentSecretFields, oauthOwnedFields,
+  SETTINGS_CREDENTIALS, settingsCredentialPatterns, agentSecretFields, oauthOwnedFields,
 } from '../../agent-core/credentials.ts';
 
 // Standalone credentials, owned by 'settings' in secret_value. The settings key
@@ -24,6 +24,19 @@ import {
 export const SETTINGS_SECRET_PATTERNS = settingsCredentialPatterns();
 
 export const SETTINGS_SECRET_OWNER = 'settings';
+
+/**
+ * The credential paths that are open-ended MAPS (`<path>.<slug>` -> a key),
+ * derived from the one declaration in agent-core rather than named here.
+ *
+ * These cannot be written as ordinary flattened leaves. A map arrives carrying
+ * only the slot the user just edited — the server MERGES rather than treating it
+ * as the complete list — so `writeSettings` pulls each one out of the patch and
+ * hands it to `reconcileCredentialMap`. There were two of these the moment voice
+ * keys became per-vendor, and a second hand-written copy of the pull-and-merge is
+ * how one of them would quietly start deleting the other's rows.
+ */
+export const WILDCARD_MAP_PATHS = SETTINGS_CREDENTIALS.filter((c) => c.wildcard).map((c) => c.path);
 
 export function isSettingsSecretKey(key) {
   return SETTINGS_SECRET_PATTERNS.some((re) => re.test(key));

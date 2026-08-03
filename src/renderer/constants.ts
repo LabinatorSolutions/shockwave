@@ -18,7 +18,7 @@ export {
 export const SETTINGS_SECTIONS = Object.freeze({
   COMPANION: 'companion',
   GENERAL: 'general',
-  TRANSCRIPTION: 'transcription',
+  VOICE: 'voice',
   UPDATES: 'updates',
   ADVANCED: 'advanced',
   // Workspace group — Workspaces list + per-(active-)workspace config.
