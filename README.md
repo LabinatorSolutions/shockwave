@@ -2,11 +2,11 @@
 
 <h1><img src="build/icon.png" width="40" align="top" alt="" />&nbsp;Shockwave</h1>
 
-**Close the laptop. It keeps working.**
+**An Obsidian-style markdown editor with a built-in AI agent — and free sync.**
 
-A markdown workspace with a coding agent in it, and a server of yours holding a copy.
-
-So the 6 a.m. job still runs. Your phone still gets an answer. And what it learned about you last month is already there when you sit back down.
+A local, file-based notes app where your work stays as plain `.md` files in a folder you own.
+It ships with a real coding agent baked right in (no separate Claude Code), and syncs through
+your own GitHub repo for free.
 
 [**Download ↓**](#install-the-app) · macOS · Windows · Linux
 
@@ -20,7 +20,7 @@ Want to learn to build apps like this? Join the **[AI Architects](https://skool.
 
 ## Why Shockwave
 
-### 🛰 It doesn't stop when you do
+### 🛰 Close the laptop. It keeps working.
 
 Every agent you've used dies when the window closes. This one lives on a box you own.
 
