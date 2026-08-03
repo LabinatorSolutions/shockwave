@@ -2,11 +2,11 @@
 
 <h1><img src="build/icon.png" width="40" align="top" alt="" />&nbsp;Shockwave</h1>
 
-**An Obsidian-style markdown editor with a built-in AI agent — and free sync.**
+**Close the laptop. It keeps working.**
 
-A local, file-based notes app where your work stays as plain `.md` files in a folder you own.
-It ships with a real coding agent baked right in (no separate Claude Code), and syncs through
-your own GitHub repo for free.
+A markdown workspace with a coding agent in it, and a server of yours holding a copy.
+
+So the 6 a.m. job still runs. Your phone still gets an answer. And what it learned about you last month is already there when you sit back down.
 
 [**Download ↓**](#install-the-app) · macOS · Windows · Linux
 
@@ -14,39 +14,49 @@ your own GitHub repo for free.
 
 ---
 
-Want to learn to build apps like this? Join the <a href="https://skool.com/ai-architects">AI Architects</a>.
+Want to learn to build apps like this? Join the **[AI Architects](https://skool.com/ai-architects)**.
 
 ---
 
 ## Why Shockwave
 
-### 🤖 Integrated AI Agent
+### 🛰 It doesn't stop when you do
 
-A full coding agent lives in the right-hand sidebar — it reads and edits your notes directly, so you don't need a separate tool open.
+Every agent you've used dies when the window closes. This one lives on a box you own.
 
-- **Bring your own key** — Anthropic or OpenAI; pick the model and customize the system prompt.
-- **Skills** — drop in reusable `SKILL.md` skill folders and enable them globally or per-workspace.
-- **Secrets** — store named API tokens (encrypted at rest) the agent can use.
-- **Voice input** — dictate to the agent with the mic, transcribed in real time.
-- **Send context** — attach images and code/text files, or "Message Agent" to hand it the current file and your selection.
+- **It works while you're gone** — scheduled jobs fire, Telegram gets answered, the lid stays shut.
+- **Every machine is the same machine** — settings, secrets and every chat, wherever you sign in.
+- **One line to install** — any $5 VPS. No account, no company in the middle.
 
-### 🔄 Free GitHub Sync
+### 🤖 It edits the files, not a chat window
 
-Sync any workspace to **your own GitHub repo** — no subscription, no third-party server, your history stays yours.
+You stop being the copy-paste layer between two apps.
 
-- **One token, set once** — a GitHub PAT, encrypted at rest, used across all workspaces.
-- **Flexible setup** — clone an existing repo, create a brand-new one, or adopt a folder that's already a git repo.
-- **Hands-off** — auto-syncs on an interval, with a status icon showing idle / syncing / paused.
-- **Conflicts handled in-app** — when two machines edit the same file, a red badge shows what clashed. Resolve each file (keep yours, take theirs, or merge by hand) or reset the whole workspace either way — no terminal, no git knowledge needed.
+- **Your key, your model** — Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint.
+- **Teach it with skills** — drop a `SKILL.md` folder into the workspace.
+- **Hand it your tokens** — named secrets, encrypted, so it can work in your accounts.
 
-### 🛰 Your Own Companion Server
+### 🧬 It only needs telling once
 
-A small self-hosted server that is the home base for everything that should outlive one machine.
+You've explained how you work to this thing a hundred times.
 
-- **Settings, secrets, and chats live there** — every desktop you sign in from sees the same workspaces, agent config, and full chat history. Credentials are encrypted at rest; the desktop keeps none of them.
-- **Telegram** — message your agent from your phone. Text or voice notes; replies stream back, and the finished work is committed and pushed to your repo.
-- **Scheduled runs** — define jobs in a `cron.json` at the workspace root and the companion runs the agent on a schedule (nightly triage, weekly summaries, whatever you script).
-- **Watch it live** — a turn started from Telegram or cron streams into the desktop chat sidebar in real time.
+- **Stop re-explaining yourself** — `MEMORY.md` and `USER.md`, read at the start of every turn.
+- **Corrections stick** — after enough work it rewrites its own skills, between your sessions.
+- **Not a black box** — they're markdown. Wrong line, delete it.
+
+### 🔄 Sync that costs nothing
+
+Most notes apps rent you sync. Yours is a GitHub repo you already own.
+
+- **One token, once** — set it, and every workspace uses it.
+- **Conflicts settled in the app** — keep yours or take theirs. No terminal, no git.
+- **Any folder becomes a workspace** — clone a repo, create one, or adopt one you already have.
+
+---
+
+## Why not Obsidian and Claude Code?
+
+You can. Two apps, two windows, and you paste between them. But the agent stops when you close the terminal — it can't fire at 6 a.m., can't answer a text, and can't work on a repo you aren't sitting in front of.
 
 ---
 
@@ -94,14 +104,14 @@ Non-interactive install (no prompts):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/stephengpope/shockwave/main/api/install.sh \
-  | sh -s -- --yes --domain=notes.example.com --email=you@example.com
+  | sh -s -- --yes --domain=notes.example.com --cert-email=you@example.com
 ```
 
-Flags: `--yes` (accept all prompts), `--domain=`, `--email=`, `--no-firewall`.
+Flags: `--yes` (accept all prompts), `--domain=`, `--cert-email=`, `--no-firewall`.
 
 ### After the install
 
-- **Connect the desktop** — Settings → Companion → paste the printed Server URL + API key. Every other settings page unlocks once it connects.
+- **Connect the desktop** — **Settings → Companion** → paste the printed Server URL + API key. Every other settings page unlocks once it connects.
 - **Ports** — 80 and 443 must be reachable from the internet. On a cloud VPS that usually means opening them in the provider's firewall / security group too.
 - **Update** — re-run the same one-liner. Your data lives on Docker volumes and your `.env` (secrets) is never overwritten.
 - **Logs** — `cd /opt/shockwave-companion && docker compose logs -f api`
@@ -109,7 +119,7 @@ Flags: `--yes` (accept all prompts), `--domain=`, `--email=`, `--no-firewall`.
 
 ### Telegram (optional)
 
-Create a bot with [@BotFather](https://t.me/BotFather), grab your numeric user id from [@userinfobot](https://t.me/userinfobot), then connect both in **Settings → Telegram**. Only your user id can talk to the bot, and it works against the workspace you pick there. In the chat, `/help` lists everything: `/new`, `/chats`, `/workspaces`, `/status`, `/btw` (ask about a running job without interrupting it). Voice notes work too (transcribed with the AssemblyAI key from Settings → Transcription).
+Create a bot with [@BotFather](https://t.me/BotFather), grab your numeric user id from [@userinfobot](https://t.me/userinfobot), then connect both in **Settings → Telegram**. Only your user id can talk to the bot, and it works against the workspace you pick there. In the chat, `/help` lists everything: `/new`, `/chats`, `/workspaces`, `/status`, `/btw` (ask about a running job without interrupting it). Voice notes work too (transcribed with the key from **Settings → Voice**), and the agent can answer you out loud — set that per workspace on the same page, or just ask it to.
 
 ### Scheduled runs (optional)
 
@@ -123,46 +133,6 @@ Add a `cron.json` to a workspace root and the companion runs the agent on your s
 
 Each job takes `name`, `schedule` (standard cron syntax, in your configured timezone), `prompt`, and optionally `"enabled": false` to pause it.
 
-Job status (next run, last run, manual run-now) is in **Settings → Cron** in the desktop app.
+For a job that should run once and then be gone, set `"once": true` and give `schedule` an ISO datetime (`"2026-03-14T18:50:00"`, in the same timezone). It removes its own entry from `cron.json` after it runs.
 
----
-
-## What it does
-
-Every notes app has a chat sidebar now. This one has a server.
-
-Your workspace is a git repo. An agent holds a copy on a machine you own — so the work keeps going after you shut the laptop.
-
-### 🧠 Notes that link to each other
-
-- **Files link with `[[brackets]]`**: one click to what's related.
-- **Rename anything**: every link follows. You never fix one.
-- **Plain `.md` in a folder**: copy it and you have everything.
-
-### 🤖 An agent that edits them
-
-- **It edits, you don't paste**: no copying answers back into the file.
-- **It reads the whole workspace**: you don't hunt for the file first.
-- **Your key, your model**: swap it the day a better one ships.
-
-### 🧬 It only needs telling once
-
-- **Stop re-explaining yourself**: what you told it in June still holds in October.
-- **Correct it once**: the fix sticks instead of coming back next week.
-- **Not a black box**: memory is a file. Wrong line, delete it.
-
-### ⏰ Work while you're gone
-
-- **It doesn't die with the terminal**: it runs on your server.
-- **Jobs on a schedule**: open the app to work already done.
-- **Text or talk from anywhere**: it starts before you sit down.
-
-### 🔄 Sync that costs nothing
-
-- **Your own GitHub repo**: no subscription, ever.
-- **Conflicts settled in-app**: keep yours or take theirs. No terminal.
-- **One line on a $5 box**: your server, nobody in the middle.
-
-### Why not Obsidian and Claude Code?
-
-You can. Two apps, two windows, and you paste between them. But the agent stops when you close the terminal — it can't fire at 6 a.m., can't answer a text, and can't work on a repo you aren't sitting in front of.
+Job status (next run, last run, manual run-now) is behind the clock icon in the desktop app's left rail.
