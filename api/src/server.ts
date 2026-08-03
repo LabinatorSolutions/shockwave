@@ -235,6 +235,12 @@ app.get('/workspaces', handle(() => store.listWorkspaces(db)));
 app.post('/workspaces', handle((req) => store.upsertWorkspace(db, req.body)));
 app.patch('/workspaces', handle((req) => store.updateWorkspaceOrder(db, req.body)));
 app.delete('/workspaces/:id', handle((req) => store.deleteWorkspace(db, req.params.id)));
+// How this workspace's Telegram replies come back. The same value `/voice` sets,
+// so the desktop toggle and the bot command are one setting with two front doors.
+app.post('/workspaces/:id/voice', handle(async (req) => {
+  await store.setVoiceReply(db, req.params.id, req.body?.mode);
+  return { ok: true };
+}));
 
 // ── Telegram (desktop Settings triggers these companion actions) ─────────────
 app.post('/telegram/connect', handle(async (req) => {
@@ -267,12 +273,13 @@ app.post('/telegram/connect', handle(async (req) => {
 app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, masterKey); return { ok: true }; }));
 // Send a DM to the user. Backs the desktop's copy of the `send_message` agent
 // tool — the bot token is here, so the desktop asks rather than holds it.
-// `output` is resolved by the CALLER against its own checkout — the desktop reads
-// its local workspace, the companion reads the one the turn is running in — so no
-// workspace is passed here and none is guessed. `save` is deliberately not
-// accepted: the caller writes its own copy and sync carries it.
+// `output` overrides the workspace's preference for this ONE message; absent, the
+// server reads that preference off the workspace row. There is deliberately no
+// way to CHANGE it here — that is `/voice`, so no message-sending path is also a
+// settings write.
 app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''), {
-  output: req.body?.output === 'voice' ? 'voice' : 'text',
+  output: ['text', 'voice', 'both'].includes(req.body?.output) ? req.body.output : undefined,
+  workspaceId: typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : null,
 })));
 app.get('/telegram/status', handle(() => tgStatus(pool)));
 // Set the workspace Telegram runs against (same semantics as /workspace in the

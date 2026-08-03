@@ -273,7 +273,7 @@ export default function App() {
   const {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     chatSources,
-    dailyNote, dailyNoteRef, templates, builtinSkills, voiceReply, treeSortOrder,
+    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, timezone,
     settingsRef,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
@@ -2495,8 +2495,8 @@ export default function App() {
         onSpeechChange={onSpeechChange}
         hasVoiceKey={hasVoiceKey}
         onVoiceKeyChange={onVoiceKeyChange}
-        voiceReply={voiceReply}
-        onVoiceReplyChange={onVoiceReplyChange}
+        voiceReply={workspaces.find((w: any) => w.id === activeWorkspaceId)?.voiceReply ?? 'text'}
+        onVoiceReplyChange={(mode: any) => onVoiceReplyChange(activeWorkspaceId ?? '', mode)}
         sync={sync}
         onSyncChange={onSyncChange}
         timezone={timezone}

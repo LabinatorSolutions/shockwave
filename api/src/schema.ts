@@ -22,6 +22,12 @@ export const workspace = pgTable('workspace', {
   repoName: text('repo_name').notNull(),
   defaultBranch: text('default_branch').notNull().default('main'),
   sortOrder: doublePrecision('sort_order').notNull(),
+  // How the agent's Telegram replies come back for this workspace: 'text' |
+  // 'voice' | 'both'. HERE and not in the workspace's own `.shockwave/
+  // workspace.json`, because /voice is a slash command — answered straight from
+  // this database with no checkout prepared, like every other command. A file in
+  // the checkout would have made a preference change cost a clone.
+  voiceReply: text('voice_reply').notNull().default('text'),
 }, (t) => [
   index('idx_workspace_sort').on(t.sortOrder),
   index('idx_workspace_repo').on(t.repoOwner, t.repoName),

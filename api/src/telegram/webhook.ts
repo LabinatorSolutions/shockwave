@@ -20,7 +20,7 @@ import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
 import { transcribeAudio, warmTranscription, listenProviderOf, voiceLabel } from './transcribe.js';
 import { voiceConfigOf } from '../../../agent-core/voiceProviders.js';
-import { readVoiceReply, sendsText, speaks, type VoiceReply } from '../../../agent-core/voiceReply.js';
+import { normalizeVoiceReply, sendsText, speaks, type VoiceReply } from '../../../agent-core/voiceReply.js';
 import { speakInto } from './sendTool.js';
 import { cacheAttachment, composeMessage, MAX_INBOUND_BYTES, type CachedAttachment } from './attachments.js';
 import { getCatalogModel } from '../../../agent-core/modelCatalog.js';
@@ -178,7 +178,7 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
   const db = getDb(pool);
   const dm = acc.dmChatId as number;
   const msg = msgs[0];
-  let stopTyping = () => { /* nothing started yet */ };
+  let typing: { set(a: string): void; stop(): void } = { set() {}, stop() {} };
   try {
     const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'));
     // Say we're here BEFORE doing any of the work. The first sign of life used
@@ -186,7 +186,7 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
     // — so on a plain text message the user watched an empty chat through a
     // clone and a session boot, with nothing to say whether the bot had even
     // received it.
-    stopTyping = startTyping(client, dm);
+    typing = startTyping(client, dm);
     // Attachments land in the chat's own staging dir, so saving one needs the chat
     // to exist. Minting it lazily keeps `/help` and friends from creating a chat
     // just by being typed — they never carry a file.
@@ -232,13 +232,13 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
       return;
     }
 
-    await runTurnInner(db, key, runtime, acc, client, dm, input, msg, ready.value);
+    await runTurnInner(db, key, runtime, acc, client, dm, input, msg, ready.value, typing);
   } catch (err: any) {
     const token = await store.getTelegramSecret(db, key, 'botToken').catch(() => '');
     if (token) await new TelegramClient(token).sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
     throw err;
   } finally {
-    stopTyping();
+    typing.stop();
   }
 }
 
@@ -292,11 +292,24 @@ function settle<T>(p: Promise<T>): Promise<Settled<T>> {
   return p.then((value) => ({ ok: true as const, value }), (error) => ({ ok: false as const, error }));
 }
 
-function startTyping(client: TelegramClient, dm: number): () => void {
-  const ping = () => { client.sendChatAction(dm).catch(() => { /* best-effort */ }); };
+/**
+ * Keep an action showing for the whole turn, and let the caller change WHICH one.
+ *
+ * Telegram expires an action after ~5s, so it has to be re-sent on a timer — which
+ * means a one-off `record_voice` sent from elsewhere would be overwritten by the
+ * next `typing` tick. The switch belongs to the loop rather than to whoever wants
+ * the change.
+ */
+function startTyping(client: TelegramClient, dm: number) {
+  let action = 'typing';
+  const ping = () => { client.sendChatAction(dm, action).catch(() => { /* best-effort */ }); };
   ping();
   const timer = setInterval(ping, TYPING_INTERVAL_MS);
-  return () => clearInterval(timer);
+  return {
+    /** Show something else from now on, immediately and on every later tick. */
+    set(next: string) { action = next; ping(); },
+    stop() { clearInterval(timer); },
+  };
 }
 
 // Every file-bearing field Telegram can put on a message, in the order we prefer
@@ -464,10 +477,7 @@ interface PreparedRun {
   /** Carried rather than re-read: the settings read happens in prepareRun, which
    *  now runs on the other side of the fan-out from the turn that needs this. */
   timezone: string | undefined;
-  /** How this workspace wants replies delivered. Read in prepareRun for the same
-   *  reason, and additionally so that the agent's own `send_message(save: true)`
-   *  mid-turn takes effect on the NEXT reply rather than retroactively on the one
-   *  already being composed. */
+  /** How this workspace wants replies delivered, off the workspace row. */
   voiceReply: VoiceReply;
 }
 
@@ -517,12 +527,9 @@ async function prepareRun(
   const apiKey = (ca.providerKeys ?? {})[ca.provider] ?? '';
   let wsBuiltinSkills: Record<string, any> = {};
   try { wsBuiltinSkills = JSON.parse(await fs.readFile(path.join(dir, '.shockwave', 'workspace.json'), 'utf8'))?.builtinSkills ?? {}; } catch { /* defaults */ }
-  // How this workspace wants replies delivered. Read here, off the checkout this
-  // turn is running in, rather than at the end of the turn — by then the agent's
-  // own `send_message(save: true)` may have rewritten the file, and a request to
-  // start speaking should take effect on the NEXT reply, not retroactively on the
-  // one that was already being composed as text.
-  const voiceReply = await readVoiceReply(dir);
+  // How this workspace wants replies delivered. Straight off the workspace row —
+  // `/voice` writes it there, so there is no file to read and no checkout needed.
+  const voiceReply = normalizeVoiceReply(ws.voiceReply);
 
   if (existing) {
     // Events during boot go to the feed only; agentSend re-points the session at
@@ -543,6 +550,7 @@ async function prepareRun(
 async function runTurnInner(
   db: Db, key: Buffer, runtime: any, acc: any, client: TelegramClient, dm: number,
   input: ResolvedInput, msg: any, prepared: PreparedRun,
+  typing: { set(a: string): void; stop(): void },
 ) {
   const { text, images } = input;
   const { ws, chatId, dir, auth, ca, apiKey, wsBuiltinSkills, timezone, voiceReply } = prepared;
@@ -556,6 +564,10 @@ async function runTurnInner(
       ? (text: string) => speakInto(db, key, client, dm, text, dir)
       : undefined,
     textToo: sendsText(voiceReply),
+    // Swap the indicator while the audio is being made. It has to go through the
+    // typing loop rather than be sent once: Telegram expires an action after ~5s,
+    // so the loop's next `typing` tick would paint over a one-off.
+    onSpeakStart: () => typing.set('record_voice'),
   });
   let finalMessages: any[] | undefined;
   const emit = (e: any) => {

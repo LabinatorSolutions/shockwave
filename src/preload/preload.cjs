@@ -252,8 +252,8 @@ contextBridge.exposeInMainWorld('api', {
     companionState: () => ipcRenderer.invoke('companion:getState'),
     /** Fires when the companion becomes reachable or stops being reachable.
      *  Edge-triggered, so reconnect churn doesn't spam. Becoming reachable is
-     *  also what refreshes the workspace list — main follows this with a
-     *  `settings:changed` push carrying `workspaces`.
+     *  also what refreshes settings — main follows it with a `settings:changed`
+     *  push carrying a complete snapshot.
      *  @param {(s: {online: boolean}) => void} cb @returns {() => void} unsubscribe */
     onCompanionState: (cb) => {
       const h = (_evt, payload) => cb(payload);
@@ -290,11 +290,12 @@ contextBridge.exposeInMainWorld('api', {
     /** Writes only the keys present in `patch`; secrets are encrypted before write.
      *  @param {object} obj @returns {Promise<void>} */
     write: (obj) => ipcRenderer.invoke('settings:write', obj),
-    /** Fires when MAIN writes settings on its own (OAuth tokens, window bounds,
-     *  cron, auto-provisioned secret slots) so the renderer's copy can't go
-     *  stale. Never fires for the renderer's own writes. Payload:
-     *  `{ keys: string[], settings: object }` — apply only `keys`.
-     *  @param {(payload: {keys: string[], settings: object}) => void} cb
+    /** Fires when MAIN writes settings on its own (OAuth tokens, cron,
+     *  auto-provisioned secret slots) and when the companion becomes reachable
+     *  again, so the renderer's copy can't go stale. Never fires for the
+     *  renderer's own writes. `settings` is always a COMPLETE snapshot — re-seed
+     *  wholesale; there is no key list to apply.
+     *  @param {(payload: {settings: object}) => void} cb
      *  @returns {() => void} unsubscribe */
     onChanged: (cb) => {
       const listener = (_evt, payload) => cb(payload);
@@ -542,6 +543,12 @@ contextBridge.exposeInMainWorld('api', {
      *  vanished — the repo is still valid, so the identity must survive.
      *  @param {{ id: string }} opts @returns {Promise<{ ok: boolean }>} */
     forgetLocal: (opts) => ipcRenderer.invoke('workspace:forgetLocal', opts),
+    /** How this workspace's Telegram replies come back: 'text' | 'voice' | 'both'.
+     *  The same setting the bot's /voice command changes, on the companion's
+     *  workspace row. Main re-pushes the workspace list after.
+     *  @param {string} id @param {'text'|'voice'|'both'} mode
+     *  @returns {Promise<{ ok: boolean }>} */
+    setVoiceReply: (id, mode) => ipcRenderer.invoke('workspace:setVoiceReply', { id, mode }),
     /** The workspace default file set and which of them are missing here.
      *  @param {{ workspacePath: string }} opts
      *  @returns {Promise<{ ok: boolean, files?: Array<{name: string, purpose: string}>, missing?: string[], error?: string }>} */

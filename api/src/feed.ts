@@ -29,3 +29,21 @@ export function publish(event: any): number {
   for (const r of subs) { try { r.write(payload); } catch { /* dropped on next close */ } }
   return subs.size;
 }
+
+/**
+ * Tell every connected desktop that a setting changed HERE.
+ *
+ * The companion can change settings on its own — `/voice` from the bot is the
+ * first, and it will not be the last — and the desktop otherwise has no way to
+ * find out. Main only pushes `settings:changed` after its OWN writes, so a change
+ * made through Telegram left the app showing a stale value until a reconnect or a
+ * restart. That is the same "the companion isn't really the source of truth"
+ * shape as the reconnect gap, one step further out.
+ *
+ * Deliberately carries NO payload. The desktop re-reads and pushes a full
+ * snapshot; sending the value here would be a second copy of the truth travelling
+ * a different route, which is the thing worth not having.
+ */
+export function publishSettingsChanged(): number {
+  return publish({ type: 'settings_changed' });
+}

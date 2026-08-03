@@ -68,7 +68,7 @@ export interface AgentHost {
    * workspace's reply mode; a plain array cannot see it, because the host is
    * built once per process and the workspace is per turn.
    */
-  extraTools: any[] | ((ctx: { chatId: string; workspacePath: string; source?: string }) => any[]);
+  extraTools: any[] | ((ctx: { chatId: string; workspaceId: string; workspacePath: string; source?: string }) => any[]);
   dataDir(chatId: string): string;       // pi scratch-dir root; per-session so the server can isolate runs
   /**
    * The AGENT's own directory for this chat — working files, downloads, anything
@@ -302,7 +302,7 @@ export function createAgentRuntime(host: AgentHost) {
   }
 
   async function bootSession(chatId: string, opts: RunOpts, emitEvent: Emit): Promise<Entry> {
-    const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, wsBuiltinSkills, unattended, source, cronTitle, timezone } = opts;
+    const { workspaceId, workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, wsBuiltinSkills, unattended, source, cronTitle, timezone } = opts;
     const level = toPiThinkingLevel(thinkingLevel || 'off');
 
     const dataDir = host.dataDir(chatId);
@@ -434,7 +434,7 @@ export function createAgentRuntime(host: AgentHost) {
     // whether the run may WRITE. A memory run holds this and nothing else.
     const memoryTools = allowed.includes('memory') ? memoryHandle.tools : [];
     const hostTools = typeof host.extraTools === 'function'
-      ? host.extraTools({ chatId, workspacePath, source })
+      ? host.extraTools({ chatId, workspaceId, workspacePath, source })
       : host.extraTools;
     const extraTools = hostTools.filter((t: any) => allowed.includes(t?.name));
     for (const t of hostTools) {

@@ -41,10 +41,13 @@ export function makeCompanionRuntime(pool: PgPool, key: Buffer) {
     // host sends directly; the desktop's copy of the tool posts to /telegram/send.
     //
     // Built per session rather than once, because the reply mode is per WORKSPACE
-    // and lives in that workspace's checkout — so the tool has to know which
-    // checkout this turn is running in to read it, and to write it on `save`.
-    extraTools: ({ workspacePath }) => [
-      makeSendMessageTool((text, opts) => sendTelegramMessage(pool, key, text, { ...opts, workspacePath })),
+    // and the host is built once per process — so the tool has to be told which
+    // workspace this turn belongs to in order to read that preference. It cannot
+    // write it; that is `/voice`.
+    extraTools: ({ workspaceId, workspacePath }) => [
+      makeSendMessageTool((text, opts) => sendTelegramMessage(pool, key, text, {
+        ...opts, workspaceId, workDir: workspacePath,
+      })),
     ],
     // Per-run scratch dir so concurrent runs don't share pi's settings.json.
     dataDir: (chatId) => runScratchDir(chatId),

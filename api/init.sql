@@ -314,3 +314,8 @@ UPDATE secret_value s SET field = 'voiceKeys.deepgram'
 DELETE FROM secret_value
  WHERE owner = 'settings'
    AND field IN ('transcription.apiKey', 'transcription.deepgramApiKey');
+
+-- The Telegram reply mode, per workspace: 'text' | 'voice' | 'both'.
+-- Lives here rather than in the workspace's checkout because `/voice` is a slash
+-- command, and those are answered from this database with no checkout prepared.
+ALTER TABLE workspace ADD COLUMN IF NOT EXISTS voice_reply text NOT NULL DEFAULT 'text';

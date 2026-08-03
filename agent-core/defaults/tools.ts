@@ -87,7 +87,7 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   { name: 'open_file', origin: 'custom', only: ['desktop'], desc: 'Open a file in the app UI (a new tab) so the user can see it. Use when the user asks you to open, show, or display a file. The path is workspace-relative; only files the app can display (.md, images, video, .excalidraw) can be opened.' },
   // Every source: a desktop chat can DM the user too (it routes through the
   // companion, which holds the bot token).
-  { name: 'send_message', origin: 'custom', desc: "Send the user a message on Telegram. Use to reach them proactively — a finished job, or something that needs their attention. `output: 'voice'` speaks that message aloud as well as sending the text; `save: true` makes that the workspace's setting for every reply after." },
+  { name: 'send_message', origin: 'custom', desc: "Send the user a message on Telegram. Use to reach them proactively — a finished job, or something that needs their attention. `output` picks how that one message is delivered — `text`, `voice` (audio only), or `both`." },
   // Speech to text. Every source: a recording in the workspace is as likely to
   // need reading on the desktop as one sent over Telegram.
   { name: 'transcribe', origin: 'custom', desc: 'Transcribe an audio or video file into text with timestamps and speaker labels. Writes a transcript file and returns its path. Use whenever you need to know what was said in a recording.' },

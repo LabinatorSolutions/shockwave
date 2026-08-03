@@ -1,18 +1,35 @@
 // The renderer-facing shape of a workspace (see `WorkspaceEntry` in
 // src/shared/settings.ts).
 //
-// No electron import, so `node --test` can pin the one thing
-// here that's easy to get silently backwards: the sync flag's polarity.
+// ONE projection, and it is the one that runs — `settingsStore.overlayLocal`
+// calls it for every workspace on every read. It used to be an inline copy over
+// there with this module imported by nothing but its own test: the shape the UI
+// actually received was untested, and the tested one was fiction. A field added
+// to the wrong copy simply never arrived, which is how `voiceReply` reached the
+// settings page as undefined.
 //
-// Its own module rather than living in `workspaceFolder.ts` — that file answers
-// "what IS this folder on disk", this one shapes a database row for the
-// renderer. They were together only because the tests could reach it there.
+// A workspace is assembled from TWO sources and this is where they meet:
+//   - identity, from the companion — id, name, repo, and the reply mode
+//   - machine-local, from userData — where it is checked out here, and whether
+//     it syncs on THIS machine
+//
+// No electron import, so `node --test` can pin the things here that are easy to
+// get silently backwards.
 
 /**
- * The column is `sync_disabled` (0 / absent = syncing, because a zero row should
- * mean normal behaviour) while everything above this sees `syncEnabled`. That
- * negation happens exactly ONCE, here — it used to leak into the renderer and
- * get negated three more times inside the single switch that renders it.
+ * `syncEnabled` is passed THROUGH, not derived.
+ *
+ * It used to be `!row.syncDisabled`, from a `sync_disabled` column on the
+ * companion (0 or absent = syncing, so a zero row meant normal behaviour). **That
+ * column is gone** — the toggle is machine-local now and `getWorkspaceLocal`
+ * already answers in the positive — so negating here inverts every Sync switch
+ * with nothing failing. Absent still means syncing, which is what a workspace
+ * nobody has touched should do.
+ *
+ * `voiceReply` is normalized rather than trusted: it is plain text on the
+ * companion and two things write it (the bot's `/voice`, the settings page), so
+ * an unrecognized value must read as the default instead of reaching the UI as a
+ * mode nothing renders.
  */
 export function projectWorkspaceRow(row) {
   return {
@@ -20,6 +37,7 @@ export function projectWorkspaceRow(row) {
     name: row.name,
     path: row.path ?? null,
     repo: `${row.repoOwner}/${row.repoName}`,
-    syncEnabled: !row.syncDisabled,
+    syncEnabled: row.syncEnabled !== false,
+    voiceReply: row.voiceReply === 'voice' || row.voiceReply === 'both' ? row.voiceReply : 'text',
   };
 }

@@ -1,27 +1,19 @@
-// How the agent's Telegram replies come back for a workspace: text, or a voice
-// note plus the text.
+// How the agent's Telegram replies come back, and the two questions every
+// delivery path asks of that.
 //
-// Stored in `<workspace>/.shockwave/workspace.json` beside the daily-note config
-// and the built-in skill toggles, for the same reason those live there — it is
-// scoped to one workspace and it should travel with it. That placement is what
-// makes the whole feature work without a new sync path: the companion reads it
-// out of the checkout it is already working in, the agent can change it mid-turn,
-// and the run's own commit carries the change back to the desktop.
+// PURE POLICY — no disk, no store. The value itself lives on the companion, in
+// `workspace.voice_reply`, because `/voice` is a slash command: those are
+// answered straight from that database with no checkout prepared, and a file in
+// the checkout would have made changing a preference cost a clone. It also means
+// the setting is not a git-synced file the agent has to read-modify-write, and
+// not something a run's commit has to carry back.
 //
-// It reads the file per call rather than caching, exactly like `dailyNoteTool.ts`
-// — a setting changed from the desktop, or by the agent's previous turn, lands on
-// the next reply instead of on the next restart.
-//
-// Dependency-free apart from `node:fs`, so both builds import it plainly.
-
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
+// Dependency-free, so `node --test` loads it directly and both builds import it
+// without ceremony — same as `credentials.ts` and `voiceProviders.ts`.
 
 /**
- * How a reply is delivered.
- *
  * - `'text'`  — text only. The default.
- * - `'voice'` — a voice note only. Nothing to skim, so it is opt-in twice over.
+ * - `'voice'` — a voice note only. Nothing to skim, so it is opt-in knowingly.
  * - `'both'`  — a voice note AND the text.
  */
 export type VoiceReply = 'text' | 'voice' | 'both';
@@ -32,67 +24,27 @@ export const DEFAULT_VOICE_REPLY: VoiceReply = 'text';
 
 export const VOICE_REPLY_MODES: VoiceReply[] = ['text', 'voice', 'both'];
 
-function workspaceFile(workspacePath: string): string {
-  return path.join(workspacePath, '.shockwave', 'workspace.json');
-}
+/** What each mode is called where a person reads it. */
+export const VOICE_REPLY_LABELS: Record<VoiceReply, string> = {
+  text: 'text only',
+  voice: 'voice only',
+  both: 'voice and text',
+};
 
-/** Anything that isn't one of the three reads as the default — the agent writes
- *  this key itself, so a typo must not become a mode nothing renders. */
+/** Anything that isn't one of the three reads as the default. The column is plain
+ *  text and more than one writer can reach it, so normalize on the way in AND out
+ *  rather than trusting whoever wrote last. */
 export function normalizeVoiceReply(value: unknown): VoiceReply {
   return value === 'voice' || value === 'both' ? value : DEFAULT_VOICE_REPLY;
+}
+
+/** Is this a mode at all? `/voice bogus` should say so rather than silently
+ *  setting text. */
+export function isVoiceReply(value: unknown): value is VoiceReply {
+  return VOICE_REPLY_MODES.includes(value as VoiceReply);
 }
 
 /** Does this mode send the written text? False only for voice-only. */
 export const sendsText = (mode: VoiceReply): boolean => mode !== 'voice';
 /** Does this mode speak? */
 export const speaks = (mode: VoiceReply): boolean => mode !== 'text';
-
-/**
- * Read the mode. Never throws: a workspace with no `.shockwave/workspace.json`
- * (or an unreadable one) is simply a workspace on the default, and failing a
- * reply over it would be absurd.
- */
-export async function readVoiceReply(workspacePath: string | null | undefined): Promise<VoiceReply> {
-  if (!workspacePath) return DEFAULT_VOICE_REPLY;
-  try {
-    const raw = JSON.parse(await fs.readFile(workspaceFile(workspacePath), 'utf8'));
-    return normalizeVoiceReply(raw?.voiceReply);
-  } catch {
-    return DEFAULT_VOICE_REPLY;
-  }
-}
-
-/**
- * Set the mode, preserving everything else in the file.
- *
- * Read-modify-write, because this file holds bookmarks and skill toggles the
- * agent has no business rewriting. Written atomically (temp + rename) so a
- * crashed write can't leave the workspace with an unparseable settings file —
- * which would silently reset the daily-note config and every skill toggle.
- *
- * Returns false if it could not be written, so the caller can tell the user the
- * mode changed for this message only rather than claiming it stuck.
- */
-export async function writeVoiceReply(
-  workspacePath: string | null | undefined,
-  mode: VoiceReply,
-): Promise<boolean> {
-  if (!workspacePath) return false;
-  const file = workspaceFile(workspacePath);
-  try {
-    let data: any = {};
-    try {
-      const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
-      if (parsed && typeof parsed === 'object') data = parsed;
-    } catch { /* absent or corrupt — write a fresh one below */ }
-
-    data.voiceReply = normalizeVoiceReply(mode);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-    await fs.rename(tmp, file);
-    return true;
-  } catch {
-    return false;
-  }
-}

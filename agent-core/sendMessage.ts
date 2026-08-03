@@ -11,29 +11,28 @@
 //
 // ── OUTPUT MODE ──────────────────────────────────────────────────────────────
 //
-// `output` is deliberately THREE-valued, and the third value is ABSENT. Omitted
-// means "whatever this workspace is set to", which is what makes a standing
-// preference work at all: a two-valued flag defaulting to text would override the
-// setting on every proactive message, so switching to voice would change ordinary
-// replies and silently not these.
+// `output` picks how ONE message is delivered, and the meaningful fourth state is
+// ABSENT: omitted means "whatever this workspace is set to". That is what makes
+// the standing preference work at all — a flag that defaulted to text would
+// override the setting on every proactive message, so switching to voice would
+// change ordinary replies and silently not these.
 //
-// `save` is what turns one message into that standing preference. Off by default,
-// because "say this one out loud" is a far more common request than "speak to me
-// from now on", and of the two ways to guess wrong, the one that keeps talking is
-// the one the user has to go and undo.
+// **It cannot CHANGE that preference, deliberately.** This is a tool for sending
+// a message; a tool that also mutates configuration is a category error, and it
+// put a settings write on the end of a path reachable from any Telegram message
+// or repo file. Changing the mode is `/voice` — a slash command, answered from
+// the database with no turn and no agent involved, which is where a preference
+// about how the bot talks to you belongs. hermes reached the same place with its
+// own `/voice`.
 
 export type SendOutput = 'text' | 'voice' | 'both';
 
 export interface SendOptions {
   /** Unset ⇒ follow the workspace's stored preference. */
   output?: SendOutput;
-  /** Also make `output` the workspace's standing preference. */
-  save?: boolean;
 }
 
-export type SendResult =
-  | { ok: true; savedMode?: SendOutput; saveFailed?: boolean }
-  | { ok: false; error: string };
+export type SendResult = { ok: true } | { ok: false; error: string };
 
 export function makeSendMessageTool(
   send: (text: string, opts: SendOptions) => Promise<SendResult>,
@@ -47,9 +46,10 @@ export function makeSendMessageTool(
       + 'Leave `output` unset to follow whatever the user has chosen for this workspace. Otherwise: '
       + '`text` sends writing only, `voice` sends a voice note only, `both` sends the voice note AND '
       + 'the text. Prefer `both` when the message carries anything worth re-reading — a path, a number, '
-      + 'a list — since a voice note cannot be skimmed or searched. Add `save: true` only when the user '
-      + 'asks for a lasting change ("talk to me from now on", "stop sending voice notes"), and it '
-      + 'becomes the setting for every reply after.',
+      + 'a list — since a voice note cannot be skimmed or searched.\n\n'
+      + 'This affects ONE message. If the user asks for a lasting change ("talk to me from now on", '
+      + '"stop sending voice notes"), tell them to send /voice text, /voice voice or /voice both — you '
+      + 'cannot set it yourself.',
     promptSnippet: 'Message the user on Telegram (a result or an alert), spoken aloud if they want that.',
     parameters: {
       type: 'object',
@@ -62,12 +62,6 @@ export function makeSendMessageTool(
             'How this message is delivered. Omit to follow the workspace setting. '
             + '`voice` is audio only; `both` is audio plus the written text.',
         },
-        save: {
-          type: 'boolean',
-          description:
-            'Make `output` the standing preference for this workspace, so every later reply follows it. '
-            + 'Only when the user asked for a lasting change. Defaults to false.',
-        },
       },
       required: ['text'],
       additionalProperties: false,
@@ -75,21 +69,9 @@ export function makeSendMessageTool(
     async execute(_id: string, params: any) {
       try {
         const output = ['text', 'voice', 'both'].includes(params?.output) ? params.output as SendOutput : undefined;
-        // `save` with no `output` names no mode to save, so it is ignored rather
-        // than guessed at — saving "whatever the setting already is" is a no-op
-        // dressed up as an action.
-        const save = !!params?.save && !!output;
-
-        const res = await send(String(params?.text ?? ''), { output, save });
+        const res = await send(String(params?.text ?? ''), { output });
         if (!res?.ok) return { content: [{ type: 'text', text: res?.error || 'Could not send the message.' }], isError: true };
-
-        // Report what HAPPENED, not what was asked for. A save that quietly failed
-        // is how the agent ends up promising a lasting change that lasted one
-        // message, with the user finding out three replies later.
-        let note = 'Message sent to the user on Telegram.';
-        if (res.savedMode) note += ` Replies for this workspace are now ${res.savedMode}.`;
-        else if (res.saveFailed) note += ' The preference could not be saved, so this applied to that message only.';
-        return { content: [{ type: 'text', text: note }] };
+        return { content: [{ type: 'text', text: 'Message sent to the user on Telegram.' }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: 'Could not send the message: ' + (e?.message || e) }], isError: true };
       }

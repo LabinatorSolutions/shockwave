@@ -18,7 +18,7 @@ import { cronRead, cronRunNow } from './api/cron.js';
 import { listChats, listPinned, pinnedChatIds, searchChats, getMessages, openChat as openChatApi, deleteChat, setChatTitle, setChatPinned, postEvent } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
-  createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
+  createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled, setWorkspaceVoiceReply,
 } from './api/workspaces.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isWatchIgnored, isTreeHidden } from './pathResolver.js';
 import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../../agent-core/defaults/files.js';
@@ -231,7 +231,14 @@ function attachWindowBoundsPersistence(win) {
     const maximized = win.isMaximized();
     const bounds = maximized ? normalBounds : win.getBounds();
     if (!maximized) normalBounds = bounds;
-    writeSettings({ windowBounds: { ...bounds, maximized } }).catch((err) => {
+    // `notify: false`, and it matters more than it looks. This fires on a 400ms
+    // debounce for the whole of a window drag, and every settings push now carries
+    // a FULL snapshot — so notifying here would re-seed the renderer several times
+    // a second while you resize. The renderer has no use for the value either: it
+    // is in MAIN_OWNED_KEYS precisely so nothing over there can author it, and
+    // nothing renders it. It was only ever free because the old key-list handler
+    // had no branch for it.
+    writeSettings({ windowBounds: { ...bounds, maximized } }, { notify: false }).catch((err) => {
       console.warn('[settings] failed to persist window bounds:', err.message);
     });
   };
@@ -711,10 +718,6 @@ function workspaceDefaults() {
     templates: { folder: '' },
     // Built-in skill folderName → 'enabled' | 'disabled'. Absent ⇒ enabled.
     builtinSkills: {},
-    // How the agent's Telegram replies come back. Text unless asked otherwise —
-    // speaking costs money on every reply, so it is never the thing you get by
-    // doing nothing.
-    voiceReply: 'text',
   };
 }
 
@@ -737,10 +740,6 @@ function normalizeWorkspaceData(raw) {
     if (raw.builtinSkills && typeof raw.builtinSkills === 'object') {
       d.builtinSkills = { ...raw.builtinSkills };
     }
-    // Anything but the three legal values reads as the default. The agent can
-    // write this file's key itself, so an unrecognized string must not become a
-    // mode nothing knows how to render.
-    if (raw.voiceReply === 'voice' || raw.voiceReply === 'both') d.voiceReply = raw.voiceReply;
   }
   return d;
 }
@@ -1794,6 +1793,15 @@ async function stopEngineForWorkspace(id: string) {
 
 // Removal is its own call, not a settings save that happens to omit an id.
 // That's both what the user action actually is, and what stops a stale renderer
+// How this workspace's Telegram replies come back. Writes the companion's
+// workspace row — the same value `/voice` sets on the bot — then re-pushes the
+// list, so the page updates from the store rather than from local state.
+ipcMain.handle('workspace:setVoiceReply', async (_evt, { id, mode }) => {
+  await setWorkspaceVoiceReply(id, mode);
+  await notifyWorkspacesChanged();
+  return { ok: true };
+});
+
 // list from deleting a workspace it never knew about — see `updateWorkspaces`.
 // Nothing on disk is touched: not the checkout, not the GitHub repo.
 ipcMain.handle('workspace:remove', async (_evt, { id }) => {
@@ -2212,6 +2220,11 @@ function startLiveFeed() {
   try {
     feedAbort = api.stream('/events', (e) => {
       feedBackoff = 1000;
+      // The companion changed a setting itself — `/voice` from the bot is the
+      // first of these. Re-read and push a full snapshot; the event deliberately
+      // carries no value, so there is one source of truth and one route to it.
+      // Checked BEFORE the chatId bail below, which every non-chat event fails.
+      if (e?.type === 'settings_changed') { void notifySettingsResync(); return; }
       if (!e?.chatId) return;
       // Our own runs already reach the renderer over IPC; the copy coming back
       // down the feed (we POST every one of them up) would double-render.

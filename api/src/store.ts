@@ -5,6 +5,10 @@
 import crypto from 'node:crypto';
 import type { Db } from './db.js';
 import { seal, unseal } from './crypto.js';
+import { publishSettingsChanged } from './feed.js';
+import {
+  normalizeVoiceReply, DEFAULT_VOICE_REPLY, type VoiceReply,
+} from '../../agent-core/voiceReply.js';
 import {
   isSettingsSecretKey, SETTINGS_SECRET_OWNER, AGENT_SECRET_FIELDS, isOAuthOwnedField,
   WILDCARD_MAP_PATHS,
@@ -16,6 +20,24 @@ import {
   attachment,
 } from './schema.js';
 import { and, eq, lt, gt, desc, asc, ilike, like, sql, inArray } from 'drizzle-orm';
+
+/**
+ * Tell every connected desktop that something here changed.
+ *
+ * In the STORE and not in the routes, because the routes are one door and the
+ * bot's slash commands are another — both come through these functions, so this
+ * is the only place that covers both by construction. A writer added later is
+ * covered by calling the mutator, not by remembering to announce.
+ *
+ * Fire-and-forget and contentless: the desktop re-reads and pushes a full
+ * snapshot. Sending the value here would be a second copy of the truth taking a
+ * different route, which is the thing worth not having. The desktop that made the
+ * change hears its own announcement too — one idempotent re-read, and the price
+ * of not having to know who asked.
+ */
+function announce(): void {
+  try { publishSettingsChanged(); } catch { /* a lost notification is not worth failing a write over */ }
+}
 
 const KEY_VERSION = 1;
 const now = () => Date.now();
@@ -196,6 +218,7 @@ export async function writeSettings(db: Db, key: Buffer, patch: any): Promise<an
     for (const [path, map] of mapPatches) await reconcileCredentialMap(c, key, path, map);
     if (agentSecretsPatch) await writeAgentSecrets(c, key, agentSecretsPatch);
   });
+  announce();
   return readSettings(db, key);
 }
 
@@ -276,6 +299,7 @@ export async function patchOAuth(db: Db, key: Buffer, name: string, patch: Recor
       if (k in patch) await putSecret(c, key, name, field, patch[k] ?? '');
     }
   });
+  announce();
 }
 
 // ── Workspace identity ───────────────────────────────────────────────────────
@@ -285,7 +309,31 @@ export async function listWorkspaces(db: Db) {
   return rows.map((r) => ({
     id: r.id, name: r.name, repoOwner: r.repoOwner, repoName: r.repoName,
     defaultBranch: r.defaultBranch, sortOrder: r.sortOrder,
+    voiceReply: normalizeVoiceReply(r.voiceReply),
   }));
+}
+
+/** One workspace row, for callers that have an id rather than the whole list. */
+export async function getWorkspace(db: Db, id: string) {
+  const rows = await db.select().from(workspace).where(eq(workspace.id, id));
+  return rows[0] ?? null;
+}
+
+/**
+ * How this workspace's Telegram replies come back. Normalized on read, because
+ * the column is plain text and `/voice` is not the only thing that could write it.
+ */
+export async function getVoiceReply(db: Db, workspaceId: string | null | undefined): Promise<VoiceReply> {
+  if (!workspaceId) return DEFAULT_VOICE_REPLY;
+  const row = await getWorkspace(db, workspaceId);
+  return normalizeVoiceReply(row?.voiceReply);
+}
+
+export async function setVoiceReply(db: Db, workspaceId: string, mode: VoiceReply): Promise<void> {
+  await db.update(workspace)
+    .set({ voiceReply: normalizeVoiceReply(mode) })
+    .where(eq(workspace.id, workspaceId));
+  announce();
 }
 
 export async function upsertWorkspace(db: Db, w: { id: string; name: string; repoOwner: string; repoName: string; defaultBranch?: string }) {
@@ -296,10 +344,12 @@ export async function upsertWorkspace(db: Db, w: { id: string; name: string; rep
       .values({ id: w.id, name: w.name, repoOwner: w.repoOwner, repoName: w.repoName, defaultBranch: w.defaultBranch ?? 'main', sortOrder: next })
       .onConflictDoUpdate({ target: workspace.id, set: { name: w.name, repoOwner: w.repoOwner, repoName: w.repoName } });
   });
+  announce();
 }
 
 export async function deleteWorkspace(db: Db, id: string) {
   await db.delete(workspace).where(eq(workspace.id, id));
+  announce();
 }
 
 export async function updateWorkspaceOrder(db: Db, list: Array<{ id: string; name: string }>) {
@@ -310,6 +360,7 @@ export async function updateWorkspaceOrder(db: Db, list: Array<{ id: string; nam
       await c.update(workspace).set({ name: w.name ?? '', sortOrder: i + 1 }).where(eq(workspace.id, w.id));
     }
   });
+  announce();
 }
 
 // ── Chats ────────────────────────────────────────────────────────────────────
@@ -675,6 +726,7 @@ export async function saveTelegramAccount(
       set: { authorizedTgUserId: meta.authorizedTgUserId, dmChatId: meta.dmChatId, botUsername: meta.botUsername, enabled: meta.enabled, updatedAt: now() },
     });
   });
+  announce();
 }
 
 export async function clearTelegramAccount(db: Db) {
@@ -682,6 +734,7 @@ export async function clearTelegramAccount(db: Db) {
     await c.delete(secretValue).where(eq(secretValue.owner, TG));
     await c.delete(telegramAccount).where(eq(telegramAccount.id, 'default'));
   });
+  announce();
 }
 
 export async function setTelegramActiveChat(db: Db, chatId: string | null) {
@@ -694,6 +747,7 @@ export async function setTelegramActiveWorkspace(db: Db, workspaceId: string) {
   await db.update(telegramAccount)
     .set({ activeWorkspaceId: workspaceId, activeChatId: null, updatedAt: now() })
     .where(eq(telegramAccount.id, 'default'));
+  announce();
 }
 
 // Dedup: advance the high-water mark only if this update_id is newer. Returns

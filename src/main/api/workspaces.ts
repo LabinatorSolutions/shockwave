@@ -55,6 +55,12 @@ export async function createWorkspace(w: {
   setWorkspaceLocal(w.id, { path: w.path });
 }
 
+/** How this workspace's Telegram replies come back. The same value `/voice` sets
+ *  on the bot, so the two front doors write one setting. */
+export async function setWorkspaceVoiceReply(id: string, mode: string): Promise<void> {
+  await api.post(`/workspaces/${encodeURIComponent(id)}/voice`, { mode });
+}
+
 export async function removeWorkspace(id: string): Promise<void> {
   await api.del(`/workspaces/${encodeURIComponent(id)}`);
   const cur = readLocalSettings();

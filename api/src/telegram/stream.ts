@@ -41,16 +41,21 @@ const PLACEHOLDER = '…';
  * case, so nothing here has to read a setting to find out.
  *
  * `textToo` is separate from `speak` because the three modes are not a scale:
- * text, voice, and both. Voice-ONLY still streams while the turn runs — the
- * placeholder and the tool lines are how you know it is working — and then takes
- * the written reply back down once the voice note has landed. Suppressing the
- * stream instead would leave the user watching an empty chat for the whole turn.
+ * text, voice, and both.
+ *
+ * **Voice-only never renders the answer at all.** Progress still shows — the
+ * placeholder bubble and a line per tool call — so the chat is not empty while
+ * the turn runs, and `onSpeakStart` switches the indicator to "recording" once
+ * there are words to say. What it does NOT do is type the reply out and then
+ * delete it, which is what this did first: you watched the whole answer appear
+ * and vanish. Progress is the placeholder and the tool lines; the answer is the
+ * voice note.
  */
 export function makeTelegramSink(
   client: TelegramClient,
   chatId: number,
   deliverRoots: string[] = [],
-  opts: { speak?: (text: string) => Promise<boolean>; textToo?: boolean } = {},
+  opts: { speak?: (text: string) => Promise<boolean>; textToo?: boolean; onSpeakStart?: () => void } = {},
 ) {
   let text = '';            // current assistant text segment
   // Everything the agent has said THIS turn, across tool boundaries. `text` is
@@ -101,6 +106,11 @@ export function makeTelegramSink(
   }
 
   async function flushInner(force: boolean) {
+    // Voice-only says nothing in writing. The placeholder and the tool lines still
+    // render, so the turn is visibly working — but the ANSWER is the voice note,
+    // and typing it out here only to delete it at the end is what made this
+    // awkward the first time round.
+    if (opts.textToo === false) { dirty = false; return; }
     if (!dirty) return;
     if (!force && Date.now() - lastEdit < 1300) return;
     dirty = false; lastEdit = Date.now();
@@ -211,34 +221,34 @@ export function makeTelegramSink(
     }
 
     if (final.trim()) {
-      const extra: number[] = [];   // ids of the overflow chunks, for the cleanup below
-      try {
-        const chunks = splitMessage(final);
-        if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0]);
-        else { const m = await client.sendMessage(chatId, chunks[0]); messageId = m?.message_id ?? null; }
-        for (const c of chunks.slice(1)) {
-          const m = await client.sendMessage(chatId, c);
-          if (m?.message_id != null) extra.push(m.message_id);
-        }
-      } catch { /* best-effort */ }
+      const voiceOnly = opts.textToo === false;
 
-      // Speaking happens AFTER the text has landed, never before: synthesis is a
-      // network call that can fail, and the answer must not wait on it. `speak`
-      // reports its own failures and does not throw, so a false here means no
-      // voice note went out.
+      // Say it out loud first when that is the whole delivery, so the wait is
+      // spent recording rather than after a wall of text. `speak` reports its own
+      // failures and never throws, so a false here means no voice note went out.
       //
       // It runs on the CLEANED text, after file tags have been cut, so the reply
       // is never read aloud with a file path in the middle of it.
-      const spoke = opts.speak ? await opts.speak(final) : false;
+      let spoke = false;
+      if (opts.speak) {
+        opts.onSpeakStart?.();
+        spoke = await opts.speak(final);
+      }
 
-      // Voice-only: the words were shown while the turn ran so the user could
-      // follow it, and now that the voice note has landed they come back down.
-      // ONLY once it actually landed — a failed synthesis leaves the text in
-      // place, because a mode preference is not worth delivering nothing over.
-      if (spoke && opts.textToo === false) {
-        if (messageId != null) await client.deleteMessage(chatId, messageId).catch(() => {});
-        for (const id of extra) await client.deleteMessage(chatId, id).catch(() => {});
-        messageId = null;
+      // Write the answer unless the mode said not to — and write it ANYWAY when
+      // the voice note failed, because a mode preference is not worth delivering
+      // nothing over. That fallback is the only reason voice-only can be silent
+      // about the text at all.
+      if (!voiceOnly || !spoke) {
+        try {
+          const chunks = splitMessage(final);
+          if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0]);
+          else await client.sendMessage(chatId, chunks[0]);
+          for (const c of chunks.slice(1)) await client.sendMessage(chatId, c);
+        } catch { /* best-effort */ }
+      } else {
+        // Nothing was ever written into it, so the bubble is still the "…" slot.
+        await dropPlaceholder();
       }
     } else {
       // The turn said nothing and nothing ever claimed the bubble. Take it back —

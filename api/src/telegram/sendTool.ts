@@ -12,7 +12,7 @@ import type { PgPool } from '../db.js';
 import { getDb } from '../db.js';
 import { voiceConfigOf } from '../../../agent-core/voiceProviders.js';
 import { speakToFile } from '../../../agent-core/speak.js';
-import { readVoiceReply, writeVoiceReply, sendsText, speaks } from '../../../agent-core/voiceReply.js';
+import { sendsText, speaks } from '../../../agent-core/voiceReply.js';
 import type { SendOptions, SendResult } from '../../../agent-core/sendMessage.js';
 import { logger } from '../log.js';
 
@@ -25,16 +25,12 @@ export async function sendTelegramMessage(
   key: Buffer,
   text: string,
   opts: SendOptions & {
-    /**
-     * The workspace checkout this message belongs to, when there is one.
-     *
-     * Needed for `output` (reading the standing preference) and for `save`
-     * (writing it). A caller with no workspace — the desktop's copy of the tool,
-     * which posts over HTTP — passes none and gets text, which is right: it has
-     * no checkout to read a preference out of, and inventing one would make the
-     * same request behave differently depending on which side ran it.
-     */
-    workspacePath?: string | null;
+    /** Whose preference applies when `output` is absent. Unset ⇒ the default,
+     *  which is what a caller with no workspace in hand should get. */
+    workspaceId?: string | null;
+    /** Where to write the audio file, when there is a run directory to put it
+     *  beside. Purely a scratch location — nothing is read from it. */
+    workDir?: string | null;
   } = {},
 ): Promise<SendResult> {
   try {
@@ -47,19 +43,10 @@ export async function sendTelegramMessage(
     if (!token) return { ok: false, error: 'Telegram bot token is missing.' };
     const client = new TelegramClient(token);
 
-    // Explicit beats stored; stored beats the default. Reading the workspace's
-    // preference costs one small file read and only happens when the caller left
-    // it to us.
-    const mode = opts.output ?? await readVoiceReply(opts.workspacePath);
-
-    // Save BEFORE sending, so a send that fails halfway still leaves the
-    // preference the user asked for. The two are independent requests either way.
-    let savedMode: SendOptions['output'];
-    let saveFailed = false;
-    if (opts.save && opts.output) {
-      if (await writeVoiceReply(opts.workspacePath, opts.output)) savedMode = opts.output;
-      else saveFailed = true;
-    }
+    // Explicit beats stored; stored beats the default. Nothing here WRITES the
+    // preference — that is `/voice`, a slash command, so a message-sending path
+    // is never also a settings write.
+    const mode = opts.output ?? await store.getVoiceReply(db, opts.workspaceId);
 
     // Text first when the mode sends it at all. Voice-only is the one mode that
     // withholds it, and it is opt-in twice over precisely because a voice note
@@ -69,7 +56,7 @@ export async function sendTelegramMessage(
     }
 
     if (speaks(mode)) {
-      const spoke = await speakInto(db, key, client, acc.dmChatId, text, opts.workspacePath ?? null);
+      const spoke = await speakInto(db, key, client, acc.dmChatId, text, opts.workDir ?? null);
       // Voice-only withheld the text, so a synthesis failure would deliver
       // NOTHING. Fall back to sending it rather than losing the message — the
       // mode is a preference, and an undelivered answer is not a way to honour it.
@@ -78,7 +65,7 @@ export async function sendTelegramMessage(
       }
     }
 
-    return { ok: true, ...(savedMode ? { savedMode } : {}), ...(saveFailed ? { saveFailed } : {}) };
+    return { ok: true };
   } catch (e: any) {
     return { ok: false, error: 'Could not send the message: ' + (e?.message || e) };
   }

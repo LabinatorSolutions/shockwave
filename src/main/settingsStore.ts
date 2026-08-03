@@ -22,6 +22,7 @@ import {
 // without electron. WHICH fields are credentials is declared once, in agent-core
 // — the only code bundled into both builds. See agent-core/credentials.ts.
 import { stripCredentials } from './settingsStrip.ts';
+import { projectWorkspaceRow } from './workspaceRow.ts';
 
 // The ONLY defaults the desktop holds are LOCAL_SETTINGS (api/localSettings.ts) —
 // machine-local settings, which live in a userData file and never touch the DB.
@@ -32,20 +33,38 @@ import { stripCredentials } from './settingsStrip.ts';
 // — and every other reader (Telegram, cron) — doesn't have. That mismatch was the
 // provider bug.
 
-// Broadcasts changed top-level keys + a fresh read to the renderer, for
-// main-initiated writes (OAuth refresh, window bounds). Credentials are
-// stripped — this is one of the two doors to the renderer.
-// Returns whether the broadcast actually went out. A failed read means the
-// companion is unreachable, and the ONLY safe response is to send nothing: the
-// degraded read returns an empty workspace list, so broadcasting it would clear
-// the renderer's good copy. Callers that need the push to land (the
-// became-reachable refresh in main.ts) retry on `false`.
-async function emitChanged(keys: string[]): Promise<boolean> {
-  if (!keys.length) return false;
+/**
+ * Hand the renderer a COMPLETE fresh copy of settings. One shape for every
+ * main-initiated write and for the became-reachable refresh alike — there is no
+ * "which keys changed", because that question had to be answered identically in
+ * two places and a wrong answer was silent.
+ *
+ * It used to carry a key list, and the renderer applied only what it recognized
+ * by name. That meant the same disk→state mapping existed twice: once complete
+ * (`hydrateSettings`, run at every boot) and once partial (seven keys, run on a
+ * push). A field added to the first and missed in the second worked perfectly at
+ * startup and was stale forever after — which is what happened to `voiceReply`,
+ * and to every synced setting after a reconnect.
+ *
+ * So the renderer re-seeds through the same function boot uses. Every key is
+ * covered by construction, and a field nobody wires up is broken loudly on day
+ * one instead of quietly on the next push.
+ *
+ * **The cost is a real re-render**, so a caller with nothing the renderer can use
+ * should pass `notify: false` rather than send one. `windowBounds` is the case
+ * that matters: it writes on a 400ms debounce for the whole of a window drag.
+ *
+ * Credentials are stripped — this is one of the two doors to the renderer.
+ * Returns whether the broadcast went out. A failed read means the companion is
+ * unreachable, and the only safe response is to send nothing: the degraded read
+ * has an empty workspace list, so broadcasting it would clear the renderer's good
+ * copy. Callers that need it to land (the reconnect refresh) retry on `false`.
+ */
+async function emitChanged(): Promise<boolean> {
   try {
     const settings = stripCredentials(await readSettings());
     for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send('settings:changed', { keys, settings });
+      if (!win.isDestroyed()) win.webContents.send('settings:changed', { settings });
     }
     return true;
   } catch (err: any) {
@@ -91,10 +110,13 @@ function overlayLocal(merged: any, identities: any[], opts: { authoritative?: bo
   // workspaces, and pruning is right. The two cases are indistinguishable from
   // the array alone, which is exactly why this is a flag and not a length check.
   if (opts.authoritative) pruneWorkspaceLocal(identities.map((w: any) => w.id));
-  merged.workspaces = identities.map((w: any) => {
-    const wl = getWorkspaceLocal(w.id);
-    return { id: w.id, name: w.name, path: wl.path, repo: `${w.repoOwner}/${w.repoName}`, syncEnabled: wl.syncEnabled };
-  });
+  // ONE projection, and it is the tested one. This used to be an inline copy of
+  // `projectWorkspaceRow` — which meant the pure module documented as "the single
+  // place sync_disabled is negated" was imported by nothing but its own test,
+  // while the shape the renderer actually receives was built here and covered by
+  // nothing. A field added to the tested copy simply never arrived; that is
+  // exactly how `voiceReply` reached the UI as undefined.
+  merged.workspaces = identities.map((w: any) => projectWorkspaceRow({ ...w, ...getWorkspaceLocal(w.id) }));
   return merged;
 }
 
@@ -144,50 +166,24 @@ export async function writeSettings(patch: any, opts: { notify?: boolean } = {})
   // credential delete addresses one leaf without republishing its siblings) and the
   // renderer applies changed TOP-LEVEL keys — so emitting the dotted key notifies
   // nothing and the screen keeps showing a credential that is no longer stored.
-  if (opts.notify !== false) await emitChanged([...new Set(Object.keys(patch).map((k) => k.split('.')[0]))]);
+  if (opts.notify !== false) await emitChanged();
 }
 
 export async function patchAgentSecretOAuth(name: string, patch: Record<string, any>): Promise<void> {
   await api.post(`/oauth/${encodeURIComponent(name)}`, patch);
-  await emitChanged(['agentSecrets']);
+  await emitChanged();
 }
 
 /** @returns whether the push landed — see `emitChanged`. */
 export async function notifyWorkspacesChanged(): Promise<boolean> {
-  return emitChanged(['workspaces', 'activeWorkspaceId']);
+  return emitChanged();
 }
 
-/**
- * Hand the renderer a COMPLETE fresh copy of settings — a resync, not a change.
- *
- * This is what a reconnect needs, and a key list is the wrong tool for it. The
- * renderer's copy after a degraded boot isn't stale in one place, it is empty
- * everywhere: `readSettingsSafe` returns machine-local values only, so the app
- * hydrates with no provider, no model, no keys. Naming the keys to re-push means
- * maintaining that list forever, and the failure when someone forgets one is
- * silent — a page that reads blank until the app is restarted.
- *
- * So the renderer re-seeds through the same path boot uses, and `resync` is the
- * flag that says "treat this as a full snapshot" rather than "these keys moved".
- *
- * **A resync is a PULL and must never become a push.** Everything downstream of
- * it only seeds local state; nothing writes back. The renderer's empty cache is
- * exactly the thing that must not reach the companion — a write on top of it
- * would replace real stored values with the blanks an offline boot invented.
- * Returns false when the read failed, so the caller retries rather than
- * broadcasting a degraded copy (which is the bug this whole path exists to fix).
- */
+/** The reconnect refresh. Same message as every other push now — kept as its
+ *  own name because the CALL SITE means something different: not "something
+ *  changed" but "you have been out of touch". */
 export async function notifySettingsResync(): Promise<boolean> {
-  try {
-    const settings = stripCredentials(await readSettings());
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send('settings:changed', { keys: [], resync: true, settings });
-    }
-    return true;
-  } catch (err: any) {
-    console.warn('[settings] could not resync the renderer:', err?.message ?? err);
-    return false;
-  }
+  return emitChanged();
 }
 
 // Obsolete — data lives on the server now. No-op so the boot call site is unchanged.

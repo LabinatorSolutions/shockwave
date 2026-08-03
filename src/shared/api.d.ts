@@ -265,16 +265,15 @@ export interface ShockwaveApi {
     read(): Promise<Settings>;
     /** Writes only the keys present in `obj`. Absent keys keep their stored value. */
     write(obj: Partial<Settings>): Promise<void>;
-    /** Fires when MAIN writes settings on its own (OAuth tokens, window bounds,
-     *  cron, auto-provisioned secret slots). Never fires for the renderer's own
-     *  writes. Apply only the reported `keys`. Returns an unsubscribe fn.
+    /** Fires when MAIN writes settings on its own (OAuth tokens, cron,
+     *  auto-provisioned secret slots) and when the companion becomes reachable
+     *  again. Never fires for the renderer's own writes.
      *
-     *  `resync: true` means the opposite: `settings` is a COMPLETE snapshot and
-     *  `keys` is empty. Main sends one when the companion becomes reachable, where
-     *  the renderer's copy is empty everywhere rather than stale in one place — so
-     *  the receiver re-seeds wholesale instead of applying named keys. It is a
-     *  pull: nothing on that path may write back. */
-    onChanged(cb: (payload: { keys: string[]; settings: Settings; resync?: boolean }) => void): () => void;
+     *  `settings` is always a COMPLETE snapshot — there is no key list, because
+     *  answering "which keys changed" identically in two places is what left the
+     *  renderer stale. Re-seed wholesale. It is a pull: nothing on that path may
+     *  write back. Returns an unsubscribe fn. */
+    onChanged(cb: (payload: { settings: Settings }) => void): () => void;
     /** The API connection config (server URL + whether a key is stored). The key
      *  itself never leaves main. */
     /** `certFingerprint` is the approved companion certificate, shown so the user
@@ -472,6 +471,11 @@ export interface ShockwaveApi {
     setUpHere(opts: { id: string; workspacePath: string }): Promise<WorkspaceSetupResult>;
     remove(opts: { id: string }): Promise<{ ok: boolean; error?: string }>;
     forgetLocal(opts: { id: string }): Promise<{ ok: boolean }>;
+    /** How this workspace's Telegram replies come back — the same setting the
+     *  bot's `/voice` command changes, on the companion's workspace row. Main
+     *  re-pushes the workspace list after, so the page updates from the store
+     *  rather than from local state. */
+    setVoiceReply(id: string, mode: 'text' | 'voice' | 'both'): Promise<{ ok: boolean }>;
     /** The default file set (SOUL.md, AGENTS.md, .ignore, .gitignore) and which
      *  are absent from this checkout. */
     listFiles(opts: { workspacePath: string }): Promise<{ ok: boolean; files?: Array<{ name: string; purpose: string }>; missing?: string[]; error?: string }>;

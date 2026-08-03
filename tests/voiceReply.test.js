@@ -1,4 +1,4 @@
-// The per-workspace reply mode (`agent-core/voiceReply.ts`).
+// The reply mode (`agent-core/voiceReply.ts`) — pure policy, no disk.
 //
 // Why this is tested: the three modes are NOT a scale, and every delivery path
 // asks the same two questions of them — does this send the words, does this
@@ -6,17 +6,15 @@
 // either backwards is silent: you get a voice note with no text, or text with no
 // voice, and nothing errors.
 //
-// The agent writes this key itself (`send_message(save: true)`), so the
-// normalizer also has to survive a value nothing here recognizes.
+// The value lives on the companion's `workspace.voice_reply` column and more than
+// one thing writes it (`/voice`, the settings page), so the normalizer has to
+// survive anything that column can hold.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import {
-  normalizeVoiceReply, sendsText, speaks, readVoiceReply, writeVoiceReply,
-  DEFAULT_VOICE_REPLY, VOICE_REPLY_MODES,
+  normalizeVoiceReply, isVoiceReply, sendsText, speaks,
+  DEFAULT_VOICE_REPLY, VOICE_REPLY_MODES, VOICE_REPLY_LABELS,
 } from '../agent-core/voiceReply.ts';
 
 test('there are three modes and text is the default', () => {
@@ -39,7 +37,7 @@ test('each mode maps to the two questions delivery actually asks', () => {
 });
 
 test('anything unrecognized reads as the default', () => {
-  // The agent writes this key, so a typo must not become a mode nothing renders.
+  // A plain text column with more than one writer: normalize rather than trust.
   for (const junk of ['Voice', 'audio', '', null, undefined, 0, {}, 'both ']) {
     assert.equal(normalizeVoiceReply(junk), 'text', String(junk));
   }
@@ -47,47 +45,15 @@ test('anything unrecognized reads as the default', () => {
   assert.equal(normalizeVoiceReply('both'), 'both');
 });
 
-// ── on disk ──────────────────────────────────────────────────────────────────
-
-test('reading a workspace that has no file is not an error', async () => {
-  // A missing or unreadable settings file means a workspace on the default.
-  // Failing a reply over it would be absurd.
-  assert.equal(await readVoiceReply(null), 'text');
-  assert.equal(await readVoiceReply('/nonexistent/workspace'), 'text');
+test('an unknown argument is rejected rather than silently becoming text', () => {
+  // `/voice bogus` has to say so. Normalizing it to the default would look like
+  // the command worked and quietly turn speaking off.
+  assert.equal(isVoiceReply('bogus'), false);
+  assert.equal(isVoiceReply(''), false);
+  for (const m of VOICE_REPLY_MODES) assert.equal(isVoiceReply(m), true);
 });
 
-test('writing preserves everything else in the file', async () => {
-  // The file also holds bookmarks and skill toggles. The agent may set the mode
-  // mid-turn, and it has no business rewriting the rest.
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'voicereply-'));
-  const file = path.join(dir, '.shockwave', 'workspace.json');
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify({ bookmarks: ['keep-me'], builtinSkills: { a: 'disabled' } }));
-
-  assert.equal(await writeVoiceReply(dir, 'both'), true);
-  assert.equal(await readVoiceReply(dir), 'both');
-
-  const after = JSON.parse(await fs.readFile(file, 'utf8'));
-  assert.deepEqual(after.bookmarks, ['keep-me']);
-  assert.deepEqual(after.builtinSkills, { a: 'disabled' });
-
-  await fs.rm(dir, { recursive: true, force: true });
-});
-
-test('a corrupt file is replaced rather than left unwritable', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'voicereply-'));
-  const file = path.join(dir, '.shockwave', 'workspace.json');
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, 'not json at all');
-
-  assert.equal(await writeVoiceReply(dir, 'voice'), true);
-  assert.equal(await readVoiceReply(dir), 'voice');
-
-  await fs.rm(dir, { recursive: true, force: true });
-});
-
-test('a write that cannot land reports false rather than throwing', async () => {
-  // The caller uses this to tell the user the mode applied to one message only,
-  // instead of promising a lasting change that did not stick.
-  assert.equal(await writeVoiceReply(null, 'voice'), false);
+test('every mode has a label a person can read', () => {
+  // The command echoes these back, so a missing one would render "undefined".
+  for (const m of VOICE_REPLY_MODES) assert.equal(typeof VOICE_REPLY_LABELS[m], 'string');
 });

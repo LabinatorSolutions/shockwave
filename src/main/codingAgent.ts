@@ -15,8 +15,7 @@ import { app } from 'electron';
 import { createAgentRuntime, listThinkingLevels } from '../../agent-core/agent.js';
 import type { AgentHost, RunOpts, Emit } from '../../agent-core/agent.js';
 import type { VoiceConfig } from '../../agent-core/voiceProviders.js';
-import { makeSendMessageTool, type SendOutput } from '../../agent-core/sendMessage.js';
-import { readVoiceReply, writeVoiceReply } from '../../agent-core/voiceReply.js';
+import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
 import { sweepScratchDirs } from '../../agent-core/scratchSweep.js';
 import { getChat, upsertChat, appendMessages, setChatTitle, setRunning, getTranscript, putTranscript,
   searchChatMessages, readChatWindow, recentChats } from './api/chats.js';
@@ -26,28 +25,16 @@ import { OPEN_FILE_TOOL } from './openFileExtension.js';
 // The desktop's `send_message`: same tool the companion offers, but the sending
 // happens over there — the bot token never leaves the companion. Without this, a
 // chat started in Telegram and continued here couldn't answer on Telegram.
-// The reply MODE is read and written HERE, against this machine's checkout —
-// the copy the turn is running in — and the existing GitHub sync carries a change
-// to the companion's copy. The companion does the same against its own checkout.
-// One rule, no coordination, and no way for the two sides to write different
-// files for the same request.
-//
-// Delivery and synthesis still happen over there: the bot token and ffmpeg are
-// both companion-only. So this resolves the mode locally and sends it EXPLICITLY,
-// which also means the server never has to guess a workspace it can't see.
-function makeDesktopSendTool(workspacePath: string) {
+// The reply MODE lives on the companion, on the workspace row, so this side
+// resolves nothing — it forwards the workspace id and lets the server read the
+// preference it already owns. Delivery and synthesis are over there too: the bot
+// token and ffmpeg are both companion-only.
+function makeDesktopSendTool(workspaceId: string) {
   return makeSendMessageTool(async (text, opts) => {
-    let savedMode: SendOutput | undefined;
-    let saveFailed = false;
-    if (opts.save && opts.output) {
-      if (await writeVoiceReply(workspacePath, opts.output)) savedMode = opts.output;
-      else saveFailed = true;
-    }
-    const output = opts.output ?? await readVoiceReply(workspacePath);
     try {
-      const res = await api.post('/telegram/send', { text, output });
+      const res = await api.post('/telegram/send', { text, output: opts.output, workspaceId });
       if (!res?.ok) return { ok: false, error: res?.error || 'Could not send the message.' };
-      return { ok: true, ...(savedMode ? { savedMode } : {}), ...(saveFailed ? { saveFailed } : {}) };
+      return { ok: true };
     } catch (e: any) {
       return { ok: false, error: `Could not reach the Shockwave server to send it: ${e?.message ?? e}` };
     }
@@ -105,7 +92,7 @@ export function initDesktopAgent(deps: {
   const host: AgentHost = {
     builtinDir: deps.builtinDir,
     machine: os.hostname(),
-    extraTools: ({ workspacePath }) => [OPEN_FILE_TOOL, makeDesktopSendTool(workspacePath)],
+    extraTools: ({ workspaceId }) => [OPEN_FILE_TOOL, makeDesktopSendTool(workspaceId)],
     dataDir: () => app.getPath('userData'), // one global pi scratch dir on the desktop
     scratchDir: (chatId) => chatScratchDir(chatId),
     getVoiceConfig: deps.getVoiceConfig,

@@ -47,7 +47,14 @@ export interface WorkspaceEntry {
    *  projection — it used to leak up here and get negated three more times in
    *  the one switch that renders it. */
   syncEnabled: boolean;
+  /** How the agent's Telegram replies come back for this workspace. Lives on the
+   *  companion's workspace row, not in the checkout, because `/voice` is a slash
+   *  command — answered from that database with no checkout prepared. */
+  voiceReply: VoiceReply;
 }
+
+/** `'text'` — text only. `'voice'` — a voice note only. `'both'` — voice and text. */
+export type VoiceReply = 'text' | 'voice' | 'both';
 
 export type SkillState = 'enabled' | 'disabled';
 
@@ -200,20 +207,7 @@ export interface WorkspaceData {
   // enabled (built-ins are default-on). This is the only tier — there is no
   // global default.
   builtinSkills: Record<string, SkillState>;
-  /**
-   * How the agent's Telegram replies come back: `'text'` (the default),
-   * `'voice'` (a voice note only), or `'both'`.
-   *
-   * Per workspace rather than global, and here rather than in synced settings,
-   * because it travels with the workspace: the companion reads it out of the
-   * checkout it is already working in, and the agent can change it mid-turn via
-   * `send_message(save: true)` — the run's own commit carries that back.
-   */
-  voiceReply: VoiceReply;
 }
-
-/** `'text'` — text only. `'voice'` — a voice note only. `'both'` — voice and text. */
-export type VoiceReply = 'text' | 'voice' | 'both';
 
 export interface Settings {
   workspaces: WorkspaceEntry[];

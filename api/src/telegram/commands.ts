@@ -8,6 +8,9 @@ import * as store from '../store.js';
 import type { Db } from '../db.js';
 import type { TelegramClient } from './client.js';
 import { askAboutChat } from './btw.js';
+import {
+  isVoiceReply, VOICE_REPLY_LABELS, VOICE_REPLY_MODES, type VoiceReply,
+} from '../../../agent-core/voiceReply.js';
 
 // The popup menu is a picker, not documentation — every description is verb-first,
 // never repeats its own command name, and never cross-references another one. The
@@ -21,6 +24,7 @@ export const BOT_COMMANDS = [
   { command: 'chat', description: 'Switch chat by number' },
   { command: 'workspaces', description: 'List all workspaces' },
   { command: 'workspace', description: 'Switch workspace by number' },
+  { command: 'voice', description: 'Reply with text, voice, or both' },
 ];
 
 const LIST_LIMIT = 20;
@@ -37,6 +41,7 @@ const HELP = [
   '/workspaces — list workspaces',
   '"/workspace <number>" — switch to that workspace from /workspaces (starts a fresh chat there)',
   '/btw <question> — ask about this chat itself; works while the agent is busy and does not interrupt it',
+  '"/voice <text|voice|both>" — how I reply in this workspace; on its own it shows the current setting',
   '/status — which workspace and chat, and whether the agent is working',
   '/help — this',
 ].join('\n');
@@ -114,6 +119,36 @@ export async function handleCommand(
       const target = others[idx];
       await store.setTelegramActiveWorkspace(db, target.id);
       await reply(`Switched to ${target.name}. Fresh chat started — send a message to begin.`);
+      return true;
+    }
+
+    case 'voice': {
+      // Answered from the database like every other command — no checkout, no
+      // turn, no agent. That is the whole reason the mode lives on the workspace
+      // row rather than in the workspace's own files.
+      const ws = await activeWorkspace(db);
+      if (!ws) { await reply('No workspace is set. Try /workspaces.'); return true; }
+
+      const arg = (rest[0] ?? '').toLowerCase();
+      if (!arg) {
+        await reply([
+          `I reply with ${VOICE_REPLY_LABELS[ws.voiceReply]} in ${ws.name}.`,
+          '',
+          `Change it with ${VOICE_REPLY_MODES.map((m) => `/voice ${m}`).join(', ')}.`,
+        ].join('\n'));
+        return true;
+      }
+      // Name what IS allowed rather than only what wasn't — a bare "unknown
+      // option" makes the user go and find /help for a three-item list.
+      if (!isVoiceReply(arg)) {
+        await reply(`"${arg}" isn't one of them. Try ${VOICE_REPLY_MODES.map((m) => `/voice ${m}`).join(', ')}.`);
+        return true;
+      }
+
+      // `setVoiceReply` announces on the feed itself, so the desktop learns about
+      // this without having asked — see `announce` in store.ts.
+      await store.setVoiceReply(db, ws.id, arg as VoiceReply);
+      await reply(`Replying with ${VOICE_REPLY_LABELS[arg as VoiceReply]} in ${ws.name} from now on.`);
       return true;
     }
 

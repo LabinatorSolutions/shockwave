@@ -71,8 +71,6 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // Per-workspace built-in skill toggles: folderName → 'enabled' | 'disabled'.
   // Absent ⇒ enabled (default-on). Loaded with the workspace; written to its file.
   const [builtinSkills, setBuiltinSkills] = useState<Record<string, 'enabled' | 'disabled'>>({});
-  // Per-workspace, loaded with the workspace like builtinSkills above.
-  const [voiceReply, setVoiceReply] = useState<VoiceReply>('text');
   const [treeSortOrder, setTreeSortOrder] = useState<TreeSortOrder>(TREE_SORT_ORDERS.NAME_ASC);
   const [codingAgentSettings, setCodingAgentSettings] = useState<CodingAgentSettings>(DEFAULT_CANONICAL.codingAgent);
   const [agentSecrets, setAgentSecrets] = useState<AgentSecret[]>([]);
@@ -206,14 +204,16 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     if (activeWorkspacePath) await window.api.workspaceSettings.update(activeWorkspacePath, { templates: next });
   }, [activeWorkspacePath]);
 
-  // How this workspace wants Telegram replies delivered. Per workspace, and in
-  // the workspace file rather than synced settings, because the companion reads
-  // it out of the checkout it is already working in and the agent can change it
-  // mid-turn — see agent-core/voiceReply.ts.
-  const onVoiceReplyChange = useCallback(async (next: VoiceReply) => {
-    setVoiceReply(next);
-    if (activeWorkspacePath) await window.api.workspaceSettings.update(activeWorkspacePath, { voiceReply: next });
-  }, [activeWorkspacePath]);
+  // How this workspace wants Telegram replies delivered. It lives on the
+  // COMPANION's workspace row rather than in the checkout, because `/voice` sets
+  // the same value from the bot and a slash command has no checkout prepared.
+  //
+  // No local state: main re-pushes the workspace list after the write, and the
+  // page reads the mode off the active workspace entry. A second copy here would
+  // be one the bot could silently disagree with.
+  const onVoiceReplyChange = useCallback(async (id: string, next: VoiceReply) => {
+    if (id) await window.api.workspace.setVoiceReply(id, next);
+  }, []);
 
   // Seed daily-note + templates from a loaded workspace-data object (called by
   // App's loadWorkspace). Resets to defaults when data is null.
@@ -228,7 +228,6 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     dailyNoteRef.current = dn;
     setTemplates(tpl);
     setBuiltinSkills(data?.builtinSkills && typeof data.builtinSkills === 'object' ? data.builtinSkills : {});
-    setVoiceReply(data?.voiceReply === 'voice' ? 'voice' : 'text');
   }, [dailyNoteRef]);
 
   // Per-workspace built-in on/off. Built-ins are default-on (absent key ⇒
@@ -266,84 +265,32 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     settingsRef.current = { ...settingsRef.current, agentSecrets: secrets };
   }, []);
 
-  // Main writes settings on its own — OAuth token refresh, window bounds, cron
-  // toggles, ensureBuiltinSecretSlots — and without this the local copy would
-  // silently drift from the store. The event fires ONLY for main-initiated
-  // writes, so this can never echo the renderer's own save back at it.
+  // Main writes settings on its own — OAuth token refresh, cron toggles,
+  // ensureBuiltinSecretSlots — and it re-pushes when the companion becomes
+  // reachable again. Every one of those carries a COMPLETE snapshot, and this
+  // re-seeds from it through the same function boot uses.
   //
-  // Applies only the keys main reports as changed, so an unrelated write can't
-  // stomp a field the user is editing right now. Updates state + settingsRef but
-  // never calls persistSettings — the store is already correct; this is the
-  // renderer catching up, not a change to write back.
+  // ONE mapping, deliberately. This used to apply only the keys main named, which
+  // meant the disk→state mapping existed twice — complete in `hydrateSettings`,
+  // partial here — and a field added to one and missed in the other worked at
+  // boot and was stale forever after. That is exactly what happened to
+  // `voiceReply`, and to every synced setting after a reconnect.
+  //
+  // It is a PULL. `hydrateSettings` only seeds local state and the canonical ref;
+  // nothing on this path writes, which is what stops the blanks an offline boot
+  // invented from ever reaching the companion. The old "apply only the reported
+  // keys so an unrelated write can't stomp a field you're editing" guard is not
+  // needed for that: a text field's draft lives in `useCommitField` and commits on
+  // blur, so settings state was never the edit buffer.
   useEffect(() => {
-    const off = window.api.settings.onChanged(({ keys, settings, resync }: { keys: string[]; settings: any; resync?: boolean }) => {
-      // A RESYNC is a complete snapshot, not a set of changes — main sends one
-      // when the companion becomes reachable, and the copy we are holding at that
-      // moment is empty everywhere rather than stale in one place. Re-seed
-      // through the same function boot uses, so every key is covered by
-      // construction and there is no list here to fall behind the one in main.
-      //
-      // A PULL, never a push: `hydrateSettings` only seeds local state and the
-      // canonical ref. Nothing on this path writes, which is the point — the
-      // blanks an offline boot invented must never reach the companion.
-      if (resync) {
-        hydrateRef.current?.(settings);
-        // The workspace list lives in App, not here, and boot may have had none
-        // to load. Same call the old workspaces-only push made, so a reconnect
-        // still opens a workspace the offline boot couldn't.
-        onWorkspacesPushed?.(settings.workspaces ?? [], settings.activeWorkspaceId ?? null);
-        return;
-      }
-      const changed = new Set(keys);
-      // Workspaces are MAIN-owned now — only main creates, removes, or flips
-      // sync on one — so main pushing them is the renderer's only correct
-      // source. It used to be sent and silently dropped here, which is why the
-      // list had to be hand-patched at four call sites and could go stale.
-      if (changed.has('workspaces') && Array.isArray(settings.workspaces)) {
-        onWorkspacesPushed?.(settings.workspaces, settings.activeWorkspaceId ?? null);
-        settingsRef.current = { ...settingsRef.current, workspaces: settings.workspaces };
-      }
-      if (changed.has('agentSecrets')) {
-        const secrets: AgentSecret[] = Array.isArray(settings.agentSecrets) ? settings.agentSecrets : [];
-        setAgentSecrets(secrets);
-        settingsRef.current = { ...settingsRef.current, agentSecrets: secrets };
-      }
-      if (changed.has('sync') && settings.sync) {
-        setSync(settings.sync);
-        syncRef.current = settings.sync;
-        settingsRef.current = { ...settingsRef.current, sync: settings.sync };
-      }
-      if (changed.has('transcription') && settings.transcription) {
-        setTranscription(settings.transcription);
-        settingsRef.current = { ...settingsRef.current, transcription: settings.transcription };
-      }
-      if (changed.has('speech') && settings.speech) {
-        setSpeech(settings.speech);
-        settingsRef.current = { ...settingsRef.current, speech: settings.speech };
-      }
-      // The flag map is main's answer to "which vendors have a key stored", so a
-      // push carrying it replaces ours outright — a merge would keep a dot lit for
-      // a key that had just been deleted.
-      if (changed.has('voiceKeys') || changed.has('hasVoiceKey')) {
-        const flags = settings.hasVoiceKey ?? {};
-        setHasVoiceKey(flags);
-        settingsRef.current = { ...settingsRef.current, hasVoiceKey: flags };
-      }
-      if (changed.has('codingAgent') && settings.codingAgent) {
-        setCodingAgentSettings(settings.codingAgent);
-        settingsRef.current = { ...settingsRef.current, codingAgent: settings.codingAgent };
-      }
-      if (changed.has('appearance') && settings.appearance) {
-        setThemeMode(settings.appearance.themeMode);
-        setHideLineNumbers(!!settings.appearance.hideLineNumbers);
-        if (settings.appearance.treePanel) setTreePanel(settings.appearance.treePanel);
-        settingsRef.current = { ...settingsRef.current, appearance: settings.appearance };
-      }
-      // `windowBounds` is main-owned and has no renderer state to update; it's in
-      // MAIN_OWNED_KEYS so it's never written back either.
+    const off = window.api.settings.onChanged(({ settings }: { settings: any }) => {
+      hydrateRef.current?.(settings);
+      // The workspace list lives in App, not here, and boot may have had none to
+      // load — so a reconnect can still open a workspace the offline boot couldn't.
+      onWorkspacesPushed?.(settings.workspaces ?? [], settings.activeWorkspaceId ?? null);
     });
     return off;
-  }, [syncRef, onWorkspacesPushed]);
+  }, [onWorkspacesPushed]);
 
   const onTranscriptionChange = useCallback(async (next: Transcription) => {
     setTranscription(next);
@@ -476,7 +423,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   return {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     chatSources,
-    dailyNote, dailyNoteRef, templates, builtinSkills, voiceReply, treeSortOrder,
+    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, timezone,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
