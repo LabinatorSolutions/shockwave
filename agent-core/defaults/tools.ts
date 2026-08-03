@@ -18,17 +18,23 @@
 //   'custom'  → ours, passed in-process as `customTools` (the token tools from
 //               agent-core, plus whatever the host adds via `extraTools`)
 //
-// `only` scopes a tool to where a turn is RUNNING FROM (RunOpts.source):
-// 'desktop' (a chat in the app), 'cron' (a scheduled run), 'telegram' (a DM).
-// Omit it and the tool is available everywhere — that's the default, and most
-// tools want it. `only` exists because a tool can be meaningless off its home:
-// `open_file` opens a tab in the app UI, and there is no UI on a cron run.
+// EVERY tool is offered to EVERY chat. Where a tool doesn't belong, the call is
+// refused when it happens (`DENIED` below, enforced by `toolGate.ts`) rather
+// than the tool being hidden.
 //
-// The catalog is filtered by source at session boot (`toolsForSource`), and the
-// SAME filtered list feeds the prompt text and pi's allowlist, so the two can't
-// disagree. A host's `extraTools` must be named here too — pi filters custom
-// tools against the allowlist exactly like builtins (see _refreshToolRegistry in
-// pi's agent-session.js), so a host tool missing from the catalog is silently
+// Hiding was the older design, and it cost two things. The agent could not say
+// why it was unable to do something — a Telegram run doesn't know `open_file`
+// exists, so "I can't open a tab here, but I can send you the file" was not
+// available to it. And the offered set varied by source, which is the only
+// reason the system prompt had to be regenerated on every resume: a chat started
+// on Telegram and continued on the desktop would otherwise advertise the wrong
+// list. One constant list means the prompt written when a chat is created stays
+// true for the life of that chat, which is what lets it be stored once and read
+// back verbatim.
+//
+// A host's `extraTools` must still be named here — pi filters custom tools
+// against the allowlist exactly like builtins (see _refreshToolRegistry in pi's
+// agent-session.js), so a host tool missing from the catalog is silently
 // dropped. That is what happened to `send_message`: the companion supplied it,
 // the catalog didn't name it, and the agent reported it had no way to message
 // the user. agent.ts logs a warning if a host ever supplies an unnamed tool.
@@ -38,39 +44,61 @@ export type ToolScope = 'desktop' | 'cron' | 'telegram' | 'review' | 'memory';
 
 export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review', 'memory'];
 
-// A review run gets an EXPLICIT list, not the catalog minus a few
-// exclusions. That direction matters: with an exclusion list, every tool added
-// later lands in the one run nobody is watching unless someone remembers to
-// exclude it. `daily_note` proved the point — it was added while this was being
-// designed and would have arrived silently.
-//
-// It investigates and it curates: read/grep/find/ls to look around, and
-// `manage_skill` to write. Deliberately absent are `write`, `edit` and `bash` —
-// with any of those the containment and read-before-write guards in
-// `manageSkill.ts` are decorative, since the agent could edit a SKILL.md
-// directly. hermes restricts its review fork the same way and for the same
-// reason. Also absent: `send_message` (maintenance is not news), the secret
-// tools (no credentialed work), `transcribe`, `open_file`, `daily_note`,
-// `search_chats`.
-const REVIEW_TOOLS = ['read', 'grep', 'find', 'ls', 'manage_skill'];
-
-// A memory run gets ONE tool, for the same reason the review list is explicit
-// and for one more: it has nothing to look up. Its whole input is the
-// conversation it was handed and the current memory, and the current memory is
-// already in its prompt — rendered from disk at the boot of that very run. There
-// is no file it could usefully read, so giving it `read`/`grep` would widen the
-// one run nobody is watching in exchange for nothing.
-//
-// hermes restricts its memory fork the same way (`review_toolsets` is the memory
-// toolset alone when only the memory trigger fired).
-const MEMORY_TOOLS = ['memory'];
+/**
+ * What each kind of run may NOT do, and the sentence the agent is given when it
+ * tries. A source absent from this table denies nothing.
+ *
+ * Written as a denial per source rather than a scope per tool because that is
+ * the shape of the actual policy: "a review run reads and curates, nothing else"
+ * is one line here and eleven `only` entries spread across the catalog. It also
+ * means the question a reader asks — what can't a review run do? — is answered
+ * by reading one list.
+ *
+ * The cost of this direction, stated plainly: a tool added later is allowed
+ * everywhere until someone names it here. The old explicit allowlists existed to
+ * prevent exactly that, and `daily_note` proved it can happen. Adding a tool now
+ * means deciding, in this file, where it does not belong.
+ *
+ * Review denies `write`, `edit` and `bash` because with any of them the
+ * containment and read-before-write guards in `manageSkill.ts` are decorative —
+ * the agent could edit a SKILL.md directly. It denies the rest because a
+ * maintenance pass has no user to message, no credentialed work to do, and no
+ * app window. Memory denies everything but `memory`: its whole input is the
+ * conversation it was handed plus the current memory, and the current memory is
+ * already in its prompt.
+ */
+export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string }>> = {
+  review: {
+    tools: [
+      'bash', 'edit', 'write',
+      'list_agent_secrets', 'get_agent_secret', 'open_file', 'send_message',
+      'transcribe', 'daily_note', 'search_chats', 'memory',
+    ],
+    reason: 'this is a review run — it reads the conversation above and updates your skills, and holds `read`, `grep`, `find`, `ls` and `manage_skill` to do it. Nothing else is available. Work with what you have or say there is nothing to save.',
+  },
+  memory: {
+    tools: [
+      'read', 'bash', 'edit', 'write', 'grep', 'find', 'ls',
+      'list_agent_secrets', 'get_agent_secret', 'open_file', 'send_message',
+      'transcribe', 'daily_note', 'search_chats', 'manage_skill',
+    ],
+    reason: 'this is a memory run — it looks over the conversation above for facts worth keeping and holds only the `memory` tool. Everything you need is already in front of you: the conversation, and the current memory in your prompt.',
+  },
+  // Opens a tab in the app UI, and only a desktop chat has one.
+  telegram: {
+    tools: ['open_file'],
+    reason: 'there is no app window on a Telegram run. Use `send_message` to deliver the file instead, or describe what is in it.',
+  },
+  cron: {
+    tools: ['open_file'],
+    reason: 'there is no app window on a scheduled run — nobody is watching one. Use `send_message` if the user needs to see this now.',
+  },
+};
 
 export interface ToolDescriptor {
   name: string;
   desc: string;
   origin: 'builtin' | 'custom';
-  /** Sources this tool is offered to. Absent = all of them. */
-  only?: ToolScope[];
 }
 
 export const TOOL_CATALOG: ToolDescriptor[] = [
@@ -83,8 +111,9 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   { name: 'ls', origin: 'builtin', desc: 'List directory contents.' },
   { name: 'list_agent_secrets', origin: 'custom', desc: 'List available API tokens by name and purpose.' },
   { name: 'get_agent_secret', origin: 'custom', desc: 'Read one API token by name.' },
-  // Opens a tab in the app UI — only a desktop chat has one.
-  { name: 'open_file', origin: 'custom', only: ['desktop'], desc: 'Open a file in the app UI (a new tab) so the user can see it. Use when the user asks you to open, show, or display a file. The path is workspace-relative; only files the app can display (.md, images, video, .excalidraw) can be opened.' },
+  // Opens a tab in the app UI — only a desktop chat has one, so `DENIED` refuses
+  // it elsewhere and tells the agent what to reach for instead.
+  { name: 'open_file', origin: 'custom', desc: 'Open a file in the app UI (a new tab) so the user can see it. Use when the user asks you to open, show, or display a file. The path is workspace-relative; only files the app can display (.md, images, video, .excalidraw) can be opened.' },
   // Every source: a desktop chat can DM the user too (it routes through the
   // companion, which holds the bot token).
   { name: 'send_message', origin: 'custom', desc: "Send the user a message on Telegram. Use to reach them proactively — a finished job, or something that needs their attention. `output` picks how that one message is delivered — `text`, `voice` (audio only), or `both`." },
@@ -107,20 +136,24 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   { name: 'manage_skill', origin: 'custom', desc: 'Create or update one of your own skills — validated before it is written, so use it rather than editing a SKILL.md by hand. Actions: create, patch (preferred for fixes), edit, write_file, remove_file. Skills the user provided and the ones built into the app are read-only to you.' },
 ];
 
-/** The catalog as offered to a turn running from `source`. */
-export function toolsForSource(source: string | undefined): ToolDescriptor[] {
-  const s = (source || 'desktop') as ToolScope;
-  // The two background runs take explicit lists rather than the
-  // catalog-minus-`only` filter, so a newly added tool is excluded by default.
-  // See REVIEW_TOOLS / MEMORY_TOOLS.
-  if (s === 'review') return TOOL_CATALOG.filter((t) => REVIEW_TOOLS.includes(t.name));
-  if (s === 'memory') return TOOL_CATALOG.filter((t) => MEMORY_TOOLS.includes(t.name));
-  return TOOL_CATALOG.filter((t) => !t.only || t.only.includes(s));
+/** The allowlist handed to pi as `tools:` — covers builtin AND custom names.
+ *  Every name, every run: what a run may not USE is decided at call time. */
+export function activeToolNames(): string[] {
+  return TOOL_CATALOG.map((t) => t.name);
 }
 
-/** The allowlist handed to pi as `tools:` — covers builtin AND custom names. */
-export function activeToolNames(source: string | undefined): string[] {
-  return toolsForSource(source).map((t) => t.name);
+/**
+ * Why `tool` is refused on a run from `source`, or null when it is allowed.
+ *
+ * The message names the tool and then explains the RUN, because that is the only
+ * thing the agent doesn't already know — it made the call, so it knows which
+ * tool it reached for. One sentence per source rather than one per tool: the
+ * reason a review run can't run `bash` is the same reason it can't run `edit`.
+ */
+export function deniedReason(tool: string, source: string | undefined): string | null {
+  const entry = DENIED[(source || 'desktop') as ToolScope];
+  if (!entry || !entry.tools.includes(tool)) return null;
+  return `\`${tool}\` is not available here: ${entry.reason}`;
 }
 
 // Render the catalog as the markdown bullet list used in the "Available tools"

@@ -55,14 +55,15 @@ test('the memory instruction never mentions skills, and vice versa', () => {
   assert.ok(!SKILL_REVIEW_PROMPT.includes('USER.md'));
 });
 
-test('buildMemoryPrompt wraps the conversation and appends the instruction', () => {
-  const out = buildMemoryPrompt([
-    { role: 'user', content: 'I hate long answers' },
-    { role: 'assistant', content: 'Noted.' },
-  ]);
-  assert.ok(out.startsWith('Here is the conversation to review:'));
-  assert.ok(out.includes('<conversation>\nUSER: I hate long answers'));
-  assert.ok(out.includes('ASSISTANT: Noted.'));
+test('buildMemoryPrompt carries the run context, not the conversation', () => {
+  // A memory run resumes the source chat's session, so the conversation is above
+  // this message as real messages rather than pasted into it. What has to be
+  // said in words is only what the inherited, frozen system prompt gets wrong:
+  // the working directory, and that nobody is there.
+  const out = buildMemoryPrompt({ workspacePath: '/tmp/memory-checkout' });
+  assert.ok(!out.includes('<conversation>'));
+  assert.ok(out.includes('/tmp/memory-checkout'));
+  assert.ok(out.includes('nobody is present'));
   // The instruction reads LAST, so it is what the model acts on.
   assert.ok(out.endsWith(MEMORY_REVIEW_PROMPT));
 });

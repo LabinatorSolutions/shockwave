@@ -78,16 +78,16 @@ If a tool failed because of setup state, capture the FIX (install command, confi
 
 'Nothing to save.' is a real option but should NOT be the default. If the session ran smoothly with no corrections and produced no new technique, just say 'Nothing to save.' and stop. Otherwise, act.`;
 
-// Rendering a stored conversation moved to `conversation.ts` when the memory run
-// arrived and needed the same thing. Re-exported here because this module's
-// callers (and its test) have always named it from this file, and because the
-// two are still one operation from a reader's point of view: take a stored
-// conversation, hand it to a model with an instruction.
-export { renderConversation, type RenderableMessage } from './conversation.ts';
+import { backgroundInstruction, type BackgroundContext } from './conversation.ts';
 
-import { promptOverConversation, type RenderableMessage as Msg } from './conversation.ts';
-
-/** The full prompt for a review run: the conversation, then the instruction. */
-export function buildReviewPrompt(messages: Msg[]): string {
-  return promptOverConversation(messages, SKILL_REVIEW_PROMPT);
+/**
+ * The message a review run receives.
+ *
+ * The conversation is NOT in here. The run resumes the actual pi session, so the
+ * conversation is already above this message as real messages — which is why the
+ * instruction's opening line, "Review the conversation above", is literally true
+ * rather than a description of some text we pasted in.
+ */
+export function buildReviewPrompt(ctx: BackgroundContext): string {
+  return backgroundInstruction(ctx, SKILL_REVIEW_PROMPT);
 }

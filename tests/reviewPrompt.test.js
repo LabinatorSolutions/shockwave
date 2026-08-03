@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  SKILL_REVIEW_PROMPT, renderConversation, buildReviewPrompt,
+  SKILL_REVIEW_PROMPT, buildReviewPrompt,
 } from '../agent-core/defaults/reviewPrompt.ts';
 
 // ── Load-bearing clauses, verbatim ───────────────────────────────────────────
@@ -129,37 +129,40 @@ test('the only tool it is told to call is one it actually has', () => {
   assert.ok(SKILL_REVIEW_PROMPT.includes('manage_skill action=write_file'));
 });
 
-// ── Rendering the conversation ───────────────────────────────────────────────
+// ── The message the run actually receives ────────────────────────────────────
+//
+// The conversation is NOT in this message any more. A review run clones the
+// source chat and resumes its pi session, so the conversation is above this as
+// real messages — every tool call with its arguments, the reasoning, the images.
+//
+// The version this replaced flattened the conversation into text and pasted it
+// in here, and that rendering dropped the tool ARGUMENTS: it emitted
+// `ASSISTANT [called bash]` followed by what the command printed, so the run read
+// an output with no idea what produced it. Which is most of what a skill is made
+// of ("the command failed like this, and here is what fixed it").
 
-test('renderConversation labels each role and keeps tool output', () => {
-  const out = renderConversation([
-    { role: 'user', content: 'stop being so verbose' },
-    { role: 'assistant', content: 'Understood.', toolCalls: JSON.stringify([{ name: 'read' }, { name: 'grep' }]) },
-    { role: 'tool', toolName: 'read', content: 'file contents here' },
-  ]);
-  assert.match(out, /^USER: stop being so verbose$/m);
-  assert.match(out, /^ASSISTANT \[called read, grep\]$/m);
-  assert.match(out, /^ASSISTANT: Understood\.$/m);
-  assert.match(out, /^TOOL read: file contents here$/m);
+test('the conversation is not pasted into the message', () => {
+  const p = buildReviewPrompt({ workspacePath: '/tmp/run-checkout' });
+  assert.ok(!p.includes('<conversation>'), 'the conversation is resumed, not quoted');
+  assert.ok(!p.includes('Here is the conversation to review:'));
 });
 
-test('unparseable tool_calls does not lose the assistant text', () => {
-  const out = renderConversation([{ role: 'assistant', content: 'Still here.', toolCalls: '{not json' }]);
-  assert.match(out, /ASSISTANT: Still here\./);
+test('it names THIS run\'s working directory', () => {
+  // The cloned system prompt names the SOURCE chat's directory, which does not
+  // exist in this checkout. The prompt is frozen and cannot be corrected, so the
+  // right path has to arrive in the one part that was never frozen — this one.
+  const p = buildReviewPrompt({ workspacePath: '/tmp/run-checkout' });
+  assert.ok(p.includes('/tmp/run-checkout'));
+  assert.ok(p.includes('use that path, not any directory named earlier'));
 });
 
-test('empty and whitespace-only messages are dropped', () => {
-  const out = renderConversation([
-    { role: 'user', content: '   ' },
-    { role: 'assistant', content: null },
-    { role: 'user', content: 'real' },
-  ]);
-  assert.equal(out, 'USER: real');
+test('it says nobody is present', () => {
+  // Same reason: the inherited prompt was assembled for a chat with a user in it.
+  const p = buildReviewPrompt({ workspacePath: '/tmp/x' });
+  assert.ok(p.includes('nobody is present'));
 });
 
-test('buildReviewPrompt wraps the conversation and appends the instruction', () => {
-  const p = buildReviewPrompt([{ role: 'user', content: 'hello' }]);
-  assert.match(p, /^Here is the conversation to review:/);
-  assert.match(p, /<conversation>\nUSER: hello\n<\/conversation>/);
-  assert.ok(p.endsWith(SKILL_REVIEW_PROMPT), 'the instruction comes last, after what it refers to');
+test('the instruction comes last, after the context it applies to', () => {
+  const p = buildReviewPrompt({ workspacePath: '/tmp/x' });
+  assert.ok(p.endsWith(SKILL_REVIEW_PROMPT), 'the instruction reads last, so it is what the model acts on');
 });

@@ -17,14 +17,6 @@ import { TOOL_CATALOG, formatToolList } from './tools.ts';
 import type { ToolDescriptor } from './tools.ts';
 import { SENDING_FILES, SPEAKING, isCompanionSource } from './companion.ts';
 
-// First line of the helper, and the seam the stored prompt is split on so the
-// helper can be rebuilt on a later run while the workspace's SOUL stays frozen
-// (see `rebuildSystemPrompt` in index.ts). A chat started from Telegram and
-// continued on the desktop must list the tools of whichever side is running it,
-// not the ones its creator had. Keep this string stable — an old stored prompt
-// without it is left alone.
-export const HELPER_MARK = '<!-- shockwave-helper -->';
-
 // Two directories, each described on its own terms. The agent needs somewhere to
 // work that isn't the user's files: everything in the workspace is committed and
 // synced, so without a scratch pad a temporary file it made to send somewhere ends
@@ -320,7 +312,6 @@ export function buildShockwaveHelper(
     { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; timezone?: string; memory?: string } = {},
 ): string {
   return [
-    HELPER_MARK,
     BOUNDARIES(scratchDir),
     ...(unattended ? [UNATTENDED] : []),
     TOOLS(tools),
@@ -357,11 +348,11 @@ export function buildShockwaveHelper(
     SCHEDULED_RUNS(timezone),
     // The memory CONTENT goes last, closest to the conversation — hermes puts it
     // in the volatile tier at the end of its prompt for the same reason. It is
-    // rendered from disk at every session boot and lives after HELPER_MARK, so
-    // `rebuildSystemPrompt` refreshes it on resume: a fact saved in one chat is
-    // known by the next, while the current chat keeps the snapshot it started
-    // with. That is hermes' frozen-snapshot behaviour, arrived at by putting the
-    // block on the right side of a seam we already had.
+    // rendered from disk once, when the chat is created, and frozen with the
+    // rest of the prompt: a chat keeps the memory it started with, and the next
+    // chat gets whatever is current. That is hermes' frozen-snapshot behaviour,
+    // and here it falls out of the prompt being written once rather than needing
+    // a seam to regenerate past.
     ...(memory ? [memory] : []),
   ].join('\n\n');
 }

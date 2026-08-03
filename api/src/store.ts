@@ -471,6 +471,64 @@ export async function upsertChat(db: Db, row: {
     .onConflictDoUpdate({ target: chatTable.chatId, set: { updatedAt: row.now } });
 }
 
+/**
+ * Copy a chat into a new one for a background run to continue.
+ *
+ * This is what makes a review or memory run a RESUME rather than a fresh chat
+ * handed a description of one. The agent picks up the actual conversation —
+ * every tool call with its arguments, the reasoning, the images — because it is
+ * literally the same pi session, reopened under a new id. The alternative we ran
+ * before flattened the conversation to text and dropped the tool arguments, so
+ * the run read a command's output with no idea what command produced it.
+ *
+ * FOUR fields are copied and the rest are deliberately not:
+ *
+ *   transcript    the conversation itself — the whole point
+ *   systemPrompt  so the run reads under the same instructions the work was done
+ *                 under. Also the reason a stored prompt has to be usable
+ *                 verbatim: there is nothing here to rebuild it from.
+ *   workspaceId   same workspace, by definition
+ *   model         same model the work was done with
+ *
+ * `source` is the one that must NOT be copied and is the reason this is a
+ * function rather than a spread. Both sweep queries exclude chats whose source
+ * is 'review' or 'memory'; a run that inherited 'desktop' would cross its own
+ * threshold, come due, and review itself — forever. The watermarks are likewise
+ * fresh: they belong to the chat being examined, not to the examination.
+ */
+export async function cloneChatForBackground(db: Db, opts: {
+  sourceChatId: string; newChatId: string; source: 'review' | 'memory'; title: string;
+}): Promise<{ workspaceId: string; workspacePathHint: null }> {
+  const [src] = await db.select({
+    workspaceId: chatTable.workspaceId,
+    systemPrompt: chatTable.systemPrompt,
+    model: chatTable.model,
+    transcript: chatTable.transcript,
+  }).from(chatTable).where(eq(chatTable.chatId, opts.sourceChatId));
+
+  if (!src) throw new Error(`Chat ${opts.sourceChatId} not found.`);
+  // Both are required to continue the conversation, and a run that silently
+  // started from empty would look like a review that found nothing to say.
+  if (!src.transcript) throw new Error(`Chat ${opts.sourceChatId} has no stored conversation to review.`);
+  if (!src.systemPrompt) throw new Error(`Chat ${opts.sourceChatId} has no stored system prompt.`);
+
+  const ts = now();
+  await db.insert(chatTable).values({
+    chatId: opts.newChatId,
+    workspaceId: src.workspaceId,
+    systemPrompt: src.systemPrompt,
+    model: src.model,
+    transcript: src.transcript,
+    transcriptUpdatedAt: ts,
+    title: opts.title,
+    source: opts.source,
+    sourceId: opts.sourceChatId,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  return { workspaceId: src.workspaceId, workspacePathHint: null };
+}
+
 export async function setChatTitle(db: Db, chatId: string, title: string) {
   await db.update(chatTable).set({ title }).where(eq(chatTable.chatId, chatId));
 }

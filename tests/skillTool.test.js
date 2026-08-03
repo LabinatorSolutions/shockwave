@@ -1,15 +1,22 @@
-// The review run's tool set (agent-core/defaults/tools.ts) and the two tools it
-// gets built (agent-core/skillTool.ts).
+// What each run may USE (agent-core/defaults/tools.ts) and the two tools a review
+// run gets built (agent-core/skillTool.ts).
 //
-// Why this is tested:
+// Every run is now OFFERED the whole catalog and refused per call, so the thing
+// worth pinning moved: it is no longer "which tools are in the list" but "which
+// calls get through". The properties are the same ones as before.
 //
-//   * The review list is EXPLICIT, not the catalog minus exclusions. That
-//     direction is the whole safety property — a tool added next month must not
-//     arrive in the one run nobody watches. The test names the five, so widening
-//     the set has to be a deliberate edit here as well.
-//   * `write`, `edit` and `bash` being absent is what makes the guards in
+//   * A review run must effectively hold five tools and no more. The table is a
+//     DENY list now, which means a tool added next month reaches the one run
+//     nobody watches unless someone names it — the exact hazard `daily_note`
+//     demonstrated. So the test asserts the ALLOWED set by subtraction: add a
+//     tool to the catalog without deciding about it here, and this fails.
+//   * `write`, `edit` and `bash` being refused is what makes the guards in
 //     manageSkill real rather than decorative: with any of them the agent could
 //     edit a SKILL.md directly and skip every check.
+//   * Every denial must carry a REASON. Without one pi sends its own generic
+//     "Tool execution was blocked", which tells the agent nothing about what it
+//     can do instead — and being able to say that is the whole reason for
+//     refusing a call rather than hiding the tool.
 //   * The `read` override is what records a read for the read-before-write gate.
 //     pi has no skill-loading tool of ours to hang that on — skills are loaded
 //     with the plain `read` builtin — so the override IS the mechanism. If it
@@ -21,7 +28,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-import { toolsForSource, activeToolNames, TOOL_CATALOG } from '../agent-core/defaults/tools.ts';
+import { DENIED, activeToolNames, deniedReason, TOOL_CATALOG, TOOL_SCOPES } from '../agent-core/defaults/tools.ts';
+
+/** What a run from `source` can actually get through the gate. */
+const usable = (source) =>
+  activeToolNames().filter((n) => !deniedReason(n, source));
 import { makeSkillTools } from '../agent-core/skillTool.ts';
 
 const SKILL = (name, body) =>
@@ -37,47 +48,77 @@ async function makeWorkspace() {
   return { cwd, agentDir, roots: { agentDir, protectedDirs: [uploaded] } };
 }
 
-// ── The review tool set ──────────────────────────────────────────────────────
+// ── What each run may use ────────────────────────────────────────────────────
 
-test('a review run gets exactly five tools', () => {
-  assert.deepEqual(
-    activeToolNames('review').sort(),
-    ['find', 'grep', 'ls', 'manage_skill', 'read'],
-  );
+test('a review run can use exactly five tools', () => {
+  assert.deepEqual(usable('review').sort(), ['find', 'grep', 'ls', 'manage_skill', 'read']);
 });
 
-test('the tools that would bypass the guards are absent from a review run', () => {
-  const names = activeToolNames('review');
+test('a memory run can use exactly one tool', () => {
+  assert.deepEqual(usable('memory'), ['memory']);
+});
+
+test('the tools that would bypass the guards are refused on a review run', () => {
   for (const banned of ['write', 'edit', 'bash', 'send_message', 'get_agent_secret', 'daily_note', 'search_chats']) {
-    assert.ok(!names.includes(banned), `${banned} must not be offered to a review run`);
+    assert.ok(deniedReason(banned, 'review'), `${banned} must be refused on a review run`);
   }
 });
 
-test('the review list is explicit, so a NEW catalog tool is excluded by default', () => {
-  // Simulates the `daily_note` case: a tool added with no `only` reaches every
-  // other source. If this ever fails, someone switched the review scope to an
-  // exclusion list and the default flipped from deny to allow.
-  const everywhere = TOOL_CATALOG.filter((t) => !t.only).map((t) => t.name);
-  const review = activeToolNames('review');
-  const reachedReviewWithoutBeingListed = everywhere.filter(
-    (n) => review.includes(n) && !['read', 'grep', 'find', 'ls', 'manage_skill'].includes(n),
-  );
-  assert.deepEqual(reachedReviewWithoutBeingListed, []);
+test('a NEW catalog tool cannot reach a background run unnoticed', () => {
+  // The table is a deny list, so an unlisted tool is allowed everywhere. This is
+  // the tripwire for that: the two background runs have a fixed intended set, so
+  // adding anything to the catalog without deciding about it here fails loudly
+  // rather than silently widening the runs nobody is watching.
+  assert.deepEqual(usable('review').sort(), ['find', 'grep', 'ls', 'manage_skill', 'read'],
+    'a catalog tool was added without deciding whether a review run may use it');
+  assert.deepEqual(usable('memory'), ['memory'],
+    'a catalog tool was added without deciding whether a memory run may use it');
 });
 
-test('manage_skill is offered to every source, as in hermes', () => {
+test('every refusal names the tool and explains the run', () => {
+  // pi falls back to a generic "Tool execution was blocked" when `reason` is
+  // empty, which tells the agent nothing it can act on.
+  for (const [source, entry] of Object.entries(DENIED)) {
+    assert.ok(entry.reason && entry.reason.length > 20, `${source} needs a real reason`);
+    for (const tool of entry.tools) {
+      const msg = deniedReason(tool, source);
+      assert.ok(msg.includes(tool), `${source}/${tool}: the message should name the tool`);
+      assert.ok(msg.includes(entry.reason), `${source}/${tool}: the message should explain the run`);
+    }
+  }
+});
+
+test('every tool named in the deny table actually exists', () => {
+  const names = new Set(TOOL_CATALOG.map((t) => t.name));
+  for (const [source, entry] of Object.entries(DENIED)) {
+    for (const tool of entry.tools) {
+      assert.ok(names.has(tool), `${source} denies "${tool}", which is not in the catalog`);
+    }
+  }
+});
+
+test('manage_skill can be used from every source but the memory run', () => {
   for (const source of ['desktop', 'cron', 'telegram', 'review']) {
-    assert.ok(activeToolNames(source).includes('manage_skill'), `missing on ${source}`);
+    assert.ok(usable(source).includes('manage_skill'), `missing on ${source}`);
   }
 });
 
-test('the other sources are unchanged by the review scope', () => {
-  for (const source of ['desktop', 'cron', 'telegram']) {
-    const names = activeToolNames(source);
-    assert.ok(names.includes('bash') && names.includes('write'), `${source} still has its normal tools`);
+test('an ordinary run is unrestricted apart from the app-window tool', () => {
+  assert.deepEqual(usable('desktop'), activeToolNames(), 'a desktop chat is denied nothing');
+  for (const source of ['cron', 'telegram']) {
+    const names = usable(source);
+    assert.ok(names.includes('bash') && names.includes('write'), `${source} keeps its normal tools`);
+    assert.ok(!names.includes('open_file'), `${source} has no app window`);
   }
-  assert.ok(toolsForSource('desktop').some((t) => t.name === 'open_file'), 'desktop keeps open_file');
-  assert.ok(!toolsForSource('cron').some((t) => t.name === 'open_file'), 'cron still has no UI');
+});
+
+test('every tool is OFFERED to every run — refusal happens at call time', () => {
+  // This is what lets the system prompt be written once and read back verbatim:
+  // the offered list cannot vary by source, so a chat started on one side stays
+  // true when continued on another.
+  for (const source of TOOL_SCOPES) {
+    assert.deepEqual(activeToolNames(), TOOL_CATALOG.map((t) => t.name), `offered set varied on ${source}`);
+  }
 });
 
 // ── What the factory builds ──────────────────────────────────────────────────

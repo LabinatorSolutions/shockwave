@@ -349,7 +349,15 @@ The agent gets better at a workspace by writing down what it learned. It could a
 
 They come due at different times because they measure different things, and that is the reason they are separate rather than one pass with a combined prompt. A chat that ran forty tool calls and two sentences reveals almost nothing about the user; one that ran none and twenty sentences may reveal a great deal. Merging them would also mean pointing the skill instruction — *"be ACTIVE, most sessions produce at least one skill update"* — at a chat that only talked, which is how an agent writes a skill about nothing. The memory instruction deliberately carries no such bias; `tests/memoryPrompt.test.js` pins the asymmetry.
 
-**Each is cron with a different trigger.** Find a due chat, open a **new** chat, hand the agent that conversation. Fresh chat, `unattended: true`, its own checkout, landed with `checkInWithFixer` — agent paths three and four, exactly as the boxed rule above requires.
+**Each is cron with a different trigger.** Find a due chat, **clone its row into a new chat**, and resume it. Its own checkout, landed with `checkInWithFixer` — agent paths three and four, exactly as the boxed rule above requires.
+
+**It is a RESUME, not a fresh chat handed a description of one.** `cloneChatForBackground` (`store.ts`) copies four fields — the conversation, the stored system prompt, the workspace and the model — and `agentSend` then boots it exactly like any other continued chat: row found, conversation pulled from the database, session reopened. So the agent picks up the real thing, every tool call with its arguments, the reasoning, the images.
+
+It used to flatten the conversation into text and paste it into the run's first message, and that rendering **dropped the tool arguments** — it emitted `ASSISTANT [called bash]` followed by what the command printed, so the run read an output with no idea what produced it. Which is most of what a skill is made of.
+
+**`source` is the field that must NOT be copied**, and the reason the clone is a function rather than a spread: both sweep queries exclude chats whose source is `review` or `memory`, so a run that inherited `desktop` would cross its own threshold, come due, and review itself forever. The watermarks are fresh for the same reason — they belong to the chat being examined, not to the examination.
+
+**What the run is told in words** is only what the inherited, frozen prompt gets wrong: it names the source chat's working directory, and it was assembled for a chat with a user in it. So the first user message says the checkout path to use instead, and that nobody is present. That is `backgroundInstruction` in `agent-core/defaults/conversation.ts` — the whole of what that file does now.
 
 ### One tick, because `protect: true` does not bound siblings
 

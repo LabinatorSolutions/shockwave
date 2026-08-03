@@ -23,7 +23,7 @@
 // skills instruction at a chat that only talked is how an agent invents a skill
 // about nothing.
 
-import { promptOverConversation, type RenderableMessage } from './conversation.ts';
+import { backgroundInstruction, type BackgroundContext } from './conversation.ts';
 
 export const MEMORY_REVIEW_PROMPT = `Review the conversation above and consider saving to memory if appropriate.
 
@@ -34,8 +34,10 @@ Focus on:
 If something stands out, save it using the memory tool. If nothing is worth saving, just say 'Nothing to save.' and stop.`;
 
 /** The full prompt for a memory run: the conversation, then the instruction. */
-export function buildMemoryPrompt(messages: RenderableMessage[]): string {
-  return promptOverConversation(messages, MEMORY_REVIEW_PROMPT);
+/** The message a memory run receives. The conversation is not in it — the run
+ *  resumes the real session, so it is already above this. */
+export function buildMemoryPrompt(ctx: BackgroundContext): string {
+  return backgroundInstruction(ctx, MEMORY_REVIEW_PROMPT);
 }
 
-export type { RenderableMessage };
+export type { BackgroundContext };

@@ -1,63 +1,47 @@
-// Rendering a stored conversation for a background run to read.
+// The message a background run receives on top of the conversation it resumes.
 //
-// Two runs need this — the review (skills) and the memory pass — and they are
-// separate processes with separate triggers, separate prompts and separate
-// chats. The one thing they share is HOW a stored conversation is handed to a
-// model, so that lives here rather than in either one of them. Same split as
-// `transcriptFormat.ts` beside `transcribe.ts`: the pure shaping is its own
-// module and can be tested without any of the machinery around it.
+// Two runs need this — review (skills) and memory — and they are separate
+// processes with separate triggers, prompts and chats. What they share is the
+// SHAPE of that message, so it lives here rather than in either one.
+//
+// ── Why there is no conversation in here any more ───────────────────────────
+//
+// This module used to render a stored conversation into text and paste it inside
+// the user message, because a background run started as a fresh chat with no
+// history of its own. That version dropped the tool ARGUMENTS — it emitted
+// `ASSISTANT [called bash]` and then the output of that command, so the run read
+// what a command printed without ever seeing the command. It dropped the
+// reasoning and the images too.
+//
+// A background run now clones the source chat's row, conversation and all, and
+// resumes it (`cloneChatForBackground` in the companion's store). So the
+// conversation is present as real messages, complete, and this file is down to
+// the one thing that genuinely has to be said in words.
+//
+// ── What the run cannot know from a frozen prompt ───────────────────────────
+//
+// The cloned system prompt was written for the SOURCE chat. It names that chat's
+// working directory, and it was assembled for a run with a user present. Both are
+// wrong here, and neither can be fixed by editing the prompt — that would
+// reintroduce the rebuilding this design removed. So they are stated here, in the
+// one part of the request that was never frozen.
 
-/** One stored message, as `store.getMessages` returns it. */
-export interface RenderableMessage {
-  role: string;
-  content?: string | null;
-  toolName?: string | null;
-  toolCalls?: string | null;
+export interface BackgroundContext {
+  /** This run's checkout. The prompt above names the SOURCE chat's directory,
+   *  which does not exist here. */
+  workspacePath: string;
 }
 
 /**
- * Render a stored conversation as plain text.
+ * The context note, then the instruction.
  *
- * The transcript goes in as TEXT inside one user message rather than being
- * replayed as structured messages. knack does the same, and the reason is worth
- * keeping: replayed tool-call parts have to be valid against the tools the
- * current run holds, and a background run holds a different, smaller set. As
- * text there is nothing to validate and nothing to reconcile.
- *
- * Tool output is included. It is bounded before it ever reaches us — pi
- * truncates tool results at 2000 lines or 50KB, whichever comes first — and both
- * hermes and knack replay results in full, because "the command failed like
- * this and here is what fixed it" is most of what a skill is made of.
- *
- * Reasoning is skipped: large, and not what a skill or a memory is written from.
+ * Order is deliberate and matches hermes: the instruction reads last, so it is
+ * what the model acts on. The note before it is orientation, not a task.
  */
-export function renderConversation(messages: RenderableMessage[]): string {
-  const lines: string[] = [];
-  for (const m of messages) {
-    const text = (m.content ?? '').trim();
-    if (m.role === 'user') {
-      if (text) lines.push(`USER: ${text}`);
-    } else if (m.role === 'assistant') {
-      // The names of the tools it decided to call, in order. The arguments live
-      // on the row as JSON; the call is what shows the approach.
-      let calls: string[] = [];
-      try {
-        const parsed = m.toolCalls ? JSON.parse(m.toolCalls) : null;
-        if (Array.isArray(parsed)) {
-          calls = parsed.map((c: any) => c?.name || c?.function?.name || 'tool').filter(Boolean);
-        }
-      } catch { /* unparseable tool_calls must not lose the message's text */ }
-      if (calls.length) lines.push(`ASSISTANT [called ${calls.join(', ')}]`);
-      if (text) lines.push(`ASSISTANT: ${text}`);
-    } else if (m.role === 'tool') {
-      lines.push(`TOOL ${m.toolName ?? 'result'}: ${text}`);
-    }
-  }
-  return lines.join('\n');
-}
+export function backgroundInstruction(ctx: BackgroundContext, instruction: string): string {
+  return `[This is a maintenance turn on a conversation you have already had. Everything above is that conversation, exactly as it happened.
 
-/** The conversation, then the instruction. The order is deliberate: the
- *  instruction reads last so it is what the model acts on. */
-export function promptOverConversation(messages: RenderableMessage[], instruction: string): string {
-  return `Here is the conversation to review:\n\n<conversation>\n${renderConversation(messages)}\n</conversation>\n\n${instruction}`;
+Two things have changed since then, and the instructions above this conversation still describe how it was: you are now working in a fresh checkout at ${ctx.workspacePath} — use that path, not any directory named earlier — and nobody is present. There is no one to ask, no one to confirm with, and nothing you say will be read by a person. Decide and act, or say there is nothing to do.]
+
+${instruction}`;
 }

@@ -33,7 +33,7 @@ import { prepareCheckout, type GitAuth } from './git.js';
 import { checkInWithFixer } from './gitFixer.js';
 import { buildReviewPrompt } from '../../agent-core/defaults/reviewPrompt.js';
 import { buildMemoryPrompt } from '../../agent-core/defaults/memoryPrompt.js';
-import type { RenderableMessage } from '../../agent-core/defaults/conversation.js';
+import type { BackgroundContext } from '../../agent-core/defaults/conversation.js';
 import { logger } from './log.js';
 
 /** What makes one background process itself. Everything else is shared. */
@@ -44,8 +44,8 @@ export interface BackgroundKind {
   source: 'review' | 'memory';
   /** The chat's title, and the commit subject. */
   title: string;
-  /** The stored conversation → the instruction the run receives. */
-  buildPrompt(messages: RenderableMessage[]): string;
+  /** The instruction this run receives, on top of the conversation it resumed. */
+  buildPrompt(ctx: BackgroundContext): string;
 }
 
 export const REVIEW: BackgroundKind = {
@@ -83,13 +83,20 @@ export async function runBackground(
   if (!pat) throw new Error('No sync PAT configured — cannot clone the workspace.');
   const auth: GitAuth = { pat, owner: w.repoOwner, repo: w.repoName };
 
-  // The conversation being examined. Read BEFORE the checkout so a chat that
-  // turns out to be empty costs nothing.
-  const messages = await store.getMessages(db, sourceChatId);
-  if (!messages.length) throw new Error(`Chat ${sourceChatId} has no messages to read.`);
-  const prompt = kind.buildPrompt(messages as any);
+  // Clone the conversation into this run's own chat BEFORE the checkout, so a
+  // chat that turns out to be unreadable costs nothing. The run then boots like
+  // any other resume: `agentSend` finds a row, pulls the conversation from the
+  // database and reopens it. Nothing about the background path is special-cased
+  // inside agent-core, which is the point — a review run IS a continuation of
+  // the conversation it is reviewing, in a chat of its own.
+  await store.cloneChatForBackground(db, {
+    sourceChatId, newChatId: runChatId, source: kind.source, title: kind.title,
+  });
 
   const dir = await prepareCheckout(runChatId, w.repoOwner, w.repoName, w.defaultBranch, pat);
+  // Built AFTER the checkout because it names this run's directory — the cloned
+  // system prompt names the source chat's, which does not exist here.
+  const prompt = kind.buildPrompt({ workspacePath: dir });
 
   const settings = await store.readSettings(db, key);
   process.env.TZ = settings.timezone || 'UTC';   // optional setting → fallback at point of use
@@ -104,7 +111,7 @@ export async function runBackground(
   } catch { /* no workspace file → defaults */ }
 
   const maxRunMs = (Number(ca.maxRunMinutes) || 30) * 60_000;
-  log.info({ ws: workspaceId, source: sourceChatId, chatId: runChatId, messages: messages.length }, 'run started');
+  log.info({ ws: workspaceId, source: sourceChatId, chatId: runChatId }, 'run started');
 
   const watchdog = setTimeout(() => {
     log.warn({ chatId: runChatId, maxRunMs }, 'watchdog fired — aborting turn');

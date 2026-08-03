@@ -16,17 +16,19 @@
 // once per session (the assembled string is part of the session cache key), so it
 // never changes mid-conversation.
 
-import { buildShockwaveHelper, HELPER_MARK } from './helper.js';
+import { buildShockwaveHelper } from './helper.js';
 import { readSoul } from './soul.js';
-import { toolsForSource } from './tools.js';
+import { TOOL_CATALOG } from './tools.js';
 
 export { readSoul, SOUL_FILENAME, AGENTS_FILENAME, AGENTS_STUB, DEFAULT_SOUL } from './soul.js';
-export { buildShockwaveHelper, HELPER_MARK } from './helper.js';
-export { TOOL_CATALOG, formatToolList, toolsForSource, activeToolNames } from './tools.js';
+export { buildShockwaveHelper } from './helper.js';
+export { TOOL_CATALOG, DENIED, formatToolList, activeToolNames, deniedReason } from './tools.js';
 
 export interface PromptOpts {
   unattended?: boolean;
-  /** Where the turn runs from (RunOpts.source) — scopes the tool list. */
+  /** Where the turn runs from (RunOpts.source). Gates the companion-only
+   *  sections. It no longer scopes the tool list — every run is offered the
+   *  whole catalog and refused per call (see `tools.ts`). */
   source?: string;
   /** The agent's own directory for this chat, named in the Boundaries section. */
   scratchDir?: string;
@@ -61,30 +63,27 @@ export async function assembleSystemPrompt(
   return `${soul}\n\n${helperFor(opts)}`;
 }
 
-// Refresh a STORED prompt: keep the SOUL it was created with, rebuild the helper
-// for this run. The tool list is the reason — a chat created from Telegram and
-// resumed on the desktop would otherwise advertise the creator's tools, and the
-// allowlist pi actually enforces is computed fresh every boot. SOUL stays frozen
-// so a mid-conversation SOUL.md edit doesn't rewrite the agent's identity.
-// A prompt stored before the marker existed has no seam to cut on — returned as
-// is, which is what it has always done.
-export function rebuildSystemPrompt(stored: string, opts: PromptOpts = {}): string {
-  const at = stored.indexOf(HELPER_MARK);
-  if (at < 0) return stored;
-  return `${stored.slice(0, at).trimEnd()}\n\n${helperFor(opts)}`;
-}
+// A stored prompt is used VERBATIM — there is no rebuild, and this is the only
+// place a prompt is ever built.
+//
+// There used to be a `rebuildSystemPrompt` here that kept the SOUL and
+// regenerated the helper on every resume. It existed for one reason: the tool
+// list varied by source, so a chat created from Telegram and continued on the
+// desktop would advertise the creator's tools while pi enforced a freshly
+// computed allowlist. Every run is now offered the whole catalog and refused per
+// call, so there is nothing left to correct — and a chat's instructions no
+// longer change under it between one message and the next.
+//
+// What a particular RUN needs to know that a frozen prompt cannot say — a
+// different working directory, that no user is present — belongs in that run's
+// first user message, which was never frozen.
 
-// Everything the helper gates on must be forwarded, not just used here. `source`
-// picks the tool list AND gates the companion-only sections; `scratchDir` names a
-// real directory in the Boundaries rules; `memory` is the block itself. Deriving
-// one from the other is not the same as passing it on — drop a forward and that
-// section is present at session boot and silently gone after the first rebuild.
-// For `memory` that failure is worse than for the others: the agent would answer
-// the first message of a resumed chat knowing the user, and every message after
-// it not knowing them, with nothing in the logs to say why.
+// `scratchDir` names a real directory in the Boundaries rules, `source` gates the
+// companion-only sections, `memory` is the block itself. All are frozen with the
+// prompt at chat creation, which is the point.
 function helperFor(opts: PromptOpts): string {
   return buildShockwaveHelper({
-    tools: toolsForSource(opts.source),
+    tools: TOOL_CATALOG,
     unattended: opts.unattended,
     source: opts.source,
     scratchDir: opts.scratchDir,

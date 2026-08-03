@@ -17,8 +17,9 @@ import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, Default
 import { getModel, getModels, completeSimple } from '@earendil-works/pi-ai/compat';
 import { getCatalogModel } from './modelCatalog.js';
 import { agentDirFor, agentSkillsDir, ensureDirs, listBuiltinSkills, listWorkspaceSkills, workspaceSkillsDir, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
-import { assembleSystemPrompt, rebuildSystemPrompt } from './defaults/index.js';
+import { assembleSystemPrompt } from './defaults/index.js';
 import { activeToolNames } from './defaults/tools.js';
+import { makeToolGate } from './toolGate.js';
 import { makeAgentTokenTools } from './agentTokens.js';
 import { makeTranscribeTool, type VoiceConfig } from './transcribe.js';
 import { makeDailyNoteTool } from './dailyNoteTool.js';
@@ -196,18 +197,6 @@ function entryToRow(entry: any): ChatRow | null {
   return { ...base, role: 'user', content: textOf(m.content) || null, reasoning: null, toolCalls: null, toolCallId: null, toolName: null, images: imagesOf(m.content) };
 }
 
-// Locate pi's session file for a chat. pi writes `<timestamp>_<id>.jsonl` when it
-// creates one, and we write `<id>.jsonl` when rebuilding from a transcript — so
-// accept both rather than assuming either.
-function findSessionFile(sessionsDir: string, chatId: string): string | null {
-  const exact = join(sessionsDir, `${chatId}.jsonl`);
-  if (fs.existsSync(exact)) return exact;
-  try {
-    const hit = fs.readdirSync(sessionsDir).find((f) => f.endsWith(`_${chatId}.jsonl`));
-    return hit ? join(sessionsDir, hit) : null;
-  } catch { return null; } // dir doesn't exist yet
-}
-
 // models.dev names its top reasoning tier 'max'; pi calls the same tier 'xhigh'.
 function toPiThinkingLevel(level: string): string {
   return level === 'max' ? 'xhigh' : level;
@@ -339,25 +328,24 @@ export function createAgentRuntime(host: AgentHost) {
     const agentDir = agentDirFor(dataDir);
     const sessionsDir = join(agentDir, 'sessions');
     const row = await host.getChat(chatId);
-    // pi names its file `<timestamp>_<chatId>.jsonl`, so the path can't be
-    // reconstructed from the id — it has to be looked up. Building it by hand
-    // meant the local file was NEVER found and every resume fell through to the
-    // transcript download (and, if that was empty, to a brand-new empty session).
-    let jsonlPath = findSessionFile(sessionsDir, chatId);
+    // THE STORED CONVERSATION IS THE ONLY SOURCE. A local session file is this
+    // machine's working copy and nothing more: it goes stale the moment any
+    // other client (the desktop, Telegram, cron, a second machine) takes a turn
+    // in this chat, because that client uploads its transcript and ours knows
+    // nothing about it. Anything present only on our disk is, by definition,
+    // something no other client has seen.
+    //
+    // There used to be a lookup of the local file here, kept as a fallback when
+    // the download came back empty. Its only live effect was that case — and
+    // that case is exactly the one the error below is written for, so the
+    // fallback did nothing but route around it and boot a stale conversation in
+    // silence. A chat we cannot fetch is a chat we cannot continue.
+    //
+    // Don't reintroduce "keep the local file if it looks newer" either. Line
+    // counts only imply ahead-ness on a shared lineage; once both sides have
+    // diverged, that test picks the stale local copy.
+    let jsonlPath: string | null = null;
     if (row) {
-      // THE SERVER IS THE SOURCE OF TRUTH — always take its copy, unconditionally.
-      // A local file is only this machine's working copy, and it goes stale the
-      // moment any other client (the desktop, Telegram, cron, a second machine)
-      // takes a turn in this chat: that client uploads its transcript and ours
-      // knows nothing about it. Anything present only on our disk is, by
-      // definition, something no other client has seen.
-      //
-      // Don't "keep the local file if it looks newer". Line counts only mean
-      // ahead-ness on a shared lineage; once both sides have diverged, that test
-      // picks the stale local copy — the exact bug this prevents. The one thing
-      // lost is pi's context from a turn whose transcript upload failed, and that
-      // self-heals (the whole file is re-uploaded every turn), the messages are
-      // already stored row-by-row, and the failure is reported, not swallowed.
       const content = await host.getTranscript(chatId);
       if (content) {
         jsonlPath = join(sessionsDir, `${chatId}.jsonl`);
@@ -365,10 +353,10 @@ export function createAgentRuntime(host: AgentHost) {
         fs.writeFileSync(jsonlPath, content);
       }
     }
-    // One filtered list for this run's source, used three times: the names pi is
-    // allowed to run, what the prompt says the agent has, and which of the
-    // per-session tools below are worth building at all.
-    const allowed = activeToolNames(source);
+    // Every tool, every run. What this run may not USE is refused at call time
+    // by `makeToolGate` below, which is what lets the stored prompt stay true for
+    // the life of the chat.
+    const allowed = activeToolNames();
 
     // Built before the prompt because the prompt CONTAINS what it reads. One
     // store, so the usage line the agent is shown and the budget the tool
@@ -384,11 +372,21 @@ export function createAgentRuntime(host: AgentHost) {
     let promptOverride: string;
     if (row && jsonlPath) {
       sessionManager = SessionManager.open(jsonlPath);
-      // Keep the SOUL this chat was created with; rebuild the helper for THIS
-      // run, so its tool list matches the side actually executing the turn.
-      promptOverride = row.systemPrompt
-        ? rebuildSystemPrompt(row.systemPrompt, promptOpts)
-        : await assembleSystemPrompt(workspacePath, promptOpts);
+      // THE STORED PROMPT, VERBATIM. It was assembled when this chat was created
+      // and written to the row on insert (the upsert's conflict branch touches
+      // only `updated_at`), so the row has held the original ever since.
+      //
+      // It used to be partially regenerated here — SOUL kept, helper rebuilt —
+      // because the tool list varied by source and a chat started on Telegram
+      // would otherwise advertise the wrong one on the desktop. The list is
+      // constant now, so there is nothing left to correct, and what runs is what
+      // is stored. A chat's instructions no longer change under it mid-life.
+      //
+      // Anything a particular RUN needs to know that the frozen prompt cannot
+      // say — a different working directory, no user present — goes in that
+      // run's first user message, which is the part that was never frozen.
+      if (!row.systemPrompt) throw new Error('This chat has no stored system prompt, so it cannot be continued. Start a new chat.');
+      promptOverride = row.systemPrompt;
     } else {
       // A brand-new chat. If the row exists we'd be silently restarting a real
       // conversation from empty — refuse instead, so a lost transcript surfaces
@@ -398,41 +396,41 @@ export function createAgentRuntime(host: AgentHost) {
       promptOverride = await assembleSystemPrompt(workspacePath, promptOpts);
     }
 
-    const resourceLoader = new DefaultResourceLoader({ cwd: workspacePath, agentDir, systemPromptOverride: () => promptOverride });
+    // The gate is bound to THIS run's source and refuses the tools that source
+    // may not use. Inline factory, no file on disk — see `toolGate.ts`.
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: workspacePath, agentDir,
+      systemPromptOverride: () => promptOverride,
+      extensionFactories: [makeToolGate(source)],
+    });
     await resourceLoader.reload();
 
-    // pi filters CUSTOM tools against the allowlist too, so a host tool the
-    // catalog doesn't name is dropped without a word — warn instead of leaving
-    // the agent to discover it mid-turn. (`allowed` is computed above, before
-    // the prompt, because the memory block has to be read first.)
+    // Every per-session tool is built for every run — they are registered on
+    // every session now, and the gate decides which may be USED. These used to
+    // be conditional on the run's tool list, which no longer varies.
     //
     // Built per session because it writes into THIS chat's scratch pad.
-    const transcribeTools = allowed.includes('transcribe')
-      ? [makeTranscribeTool(host.getVoiceConfig, scratchDir)]
-      : [];
+    const transcribeTools = [makeTranscribeTool(host.getVoiceConfig, scratchDir)];
     // Built per session because it resolves paths inside THIS workspace. Its
     // config is read off disk per call, so a settings change mid-chat is picked
     // up without a reboot.
-    const dailyNoteTools = allowed.includes('daily_note')
-      ? [makeDailyNoteTool(workspacePath, timezone)]
-      : [];
+    const dailyNoteTools = [makeDailyNoteTool(workspacePath, timezone)];
     // Built per session because the skill roots are THIS workspace's, and
     // because a review run's read-before-write state must not be shared with
     // any other run. On a review run this also returns a `read` that wraps pi's
     // own — see skillTool.ts for why the override is where the mark lives.
-    const skillTools = allowed.includes('manage_skill')
-      ? makeSkillTools({
-        cwd: workspacePath,
-        roots: {
-          agentDir: agentSkillsDir(workspacePath),
-          protectedDirs: [workspaceSkillsDir(workspacePath), host.builtinDir].filter(Boolean),
-        },
-        trackReads: source === 'review',
-      })
-      : [];
-    // The handle is built above (the prompt needs its render); this only decides
-    // whether the run may WRITE. A memory run holds this and nothing else.
-    const memoryTools = allowed.includes('memory') ? memoryHandle.tools : [];
+    // `trackReads` keys off the source directly, never off the tool list, so the
+    // override stays review-only.
+    const skillTools = makeSkillTools({
+      cwd: workspacePath,
+      roots: {
+        agentDir: agentSkillsDir(workspacePath),
+        protectedDirs: [workspaceSkillsDir(workspacePath), host.builtinDir].filter(Boolean),
+      },
+      trackReads: source === 'review',
+    });
+    // The handle is built above because the prompt needs its render.
+    const memoryTools = memoryHandle.tools;
     const hostTools = typeof host.extraTools === 'function'
       ? host.extraTools({ chatId, workspaceId, workspacePath, source })
       : host.extraTools;
