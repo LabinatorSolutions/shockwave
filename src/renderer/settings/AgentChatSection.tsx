@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Combobox from '../Combobox.jsx';
-import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
 import { useCommitField, useCredentialField } from './useCommitField';
 import { removeCredential } from './credentialField';
 import CredentialRow from './CredentialRow';
@@ -238,12 +237,16 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
       {thinkingLevels.length > 1 && (
         <Field>
           <FieldLabel htmlFor={`${idPrefix}-thinking`}>Reasoning</FieldLabel>
+          {/* Unset shows the placeholder, NOT a selected 'Off' — the two look the
+              same in a dropdown and are different facts: one is a choice, the
+              other is a hole the agent fills with 'off' at boot. Naming that
+              fallback is how the page stays honest without inventing a value. */}
           <Select
-            value={thinkingLevel ?? 'off'}
+            value={thinkingLevel ?? ''}
             onValueChange={(next) => onChange({ thinkingLevel: next })}
           >
             <SelectTrigger id={`${idPrefix}-thinking`} className="w-full">
-              <SelectValue />
+              <SelectValue placeholder="Not set — runs with thinking off" />
             </SelectTrigger>
             <SelectContent>
               {thinkingLevels.map((l) => (
@@ -306,13 +309,19 @@ function ProviderModelKey({ idPrefix, provider, model, hasKey, baseUrl, contextW
 }
 
 export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
-  const caProvider = codingAgent?.provider ?? DEFAULT_PROVIDER_SLUG;
+  // Every `ca*` below is DISPLAY ONLY, and none of them may invent content. A
+  // controlled Select needs a string, so unset reads as '' — which Radix renders
+  // as the placeholder — but nothing here substitutes a plausible-looking value
+  // for one the DB doesn't hold. `?? DEFAULT_PROVIDER_SLUG` used to sit on the
+  // line below and is exactly the fake `anthropic` the no-defaults rule exists
+  // to prevent (root CLAUDE.md).
+  const caProvider = codingAgent?.provider ?? '';
   const caModel = codingAgent?.model ?? '';
   // Main strips provider keys, so the screen only learns WHICH providers have one.
   const caHasKey = !!(codingAgent?.hasProviderKey ?? {})[caProvider];
   const caBaseUrl = codingAgent?.baseUrl ?? '';
   const caContextWindow = codingAgent?.contextWindow;
-  const caThinkingLevel = codingAgent?.thinkingLevel ?? 'medium';
+  const caThinkingLevel = codingAgent?.thinkingLevel;
   const caMaxRunMinutes = codingAgent?.maxRunMinutes;
   const caMaxFixAttempts = codingAgent?.maxFixAttempts;
   const caScratchTtlDays = codingAgent?.scratchTtlDays;
@@ -322,23 +331,15 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caBackgroundQuietMinutes = codingAgent?.backgroundQuietMinutes;
   const caMemoryCharLimit = codingAgent?.memoryCharLimit;
   const caUserCharLimit = codingAgent?.userCharLimit;
-  const updateCa = (patch) => onCodingAgentChange?.({
-    provider: caProvider,
-    model: caModel,
-    baseUrl: caBaseUrl,
-    contextWindow: caContextWindow,
-    thinkingLevel: caThinkingLevel,
-    maxRunMinutes: caMaxRunMinutes,
-    maxFixAttempts: caMaxFixAttempts,
-    scratchTtlDays: caScratchTtlDays,
-    checkoutPoolSize: caCheckoutPoolSize,
-    reviewInterval: caReviewInterval,
-    memoryInterval: caMemoryInterval,
-    backgroundQuietMinutes: caBackgroundQuietMinutes,
-    memoryCharLimit: caMemoryCharLimit,
-    userCharLimit: caUserCharLimit,
-    ...patch,
-  });
+  // Spread the PROP, never the `ca*` display locals. The setter replaces the
+  // slice, so siblings have to travel — but they must travel exactly as the
+  // server sent them, unset keys included. Rebuilding the object out of the
+  // defaulted locals is what turned every display fallback into a write:
+  // `buildPatch` compares leaf by leaf, `'' !== undefined`, so changing the
+  // reasoning level also wrote an invented empty `codingAgent.baseUrl` row that
+  // nobody had typed. Spreading the prop leaves unset leaves equal to prev, so
+  // the diff emits only the key that actually changed.
+  const updateCa = (patch) => onCodingAgentChange?.({ ...codingAgent, ...patch });
 
   // Blank clears the value rather than storing 0 — unset is a real state here,
   // and the consumers fall back at the point of use.

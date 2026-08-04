@@ -20,7 +20,10 @@ const DEFAULT_CANONICAL: Settings = {
   workspaces: [],
   activeWorkspaceId: null,
   appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
-  codingAgent: { provider: '', model: '', hasProviderKey: {}, baseUrl: '', thinkingLevel: 'medium' },
+  // thinkingLevel is OMITTED, not defaulted: 'medium' here was a value no DB row
+  // ever held, and the agent boots unset as 'off' — so the page showed a level
+  // that never ran. Unset stays unset; the field renders its placeholder.
+  codingAgent: { provider: '', model: '', hasProviderKey: {}, baseUrl: '' },
   agentSecrets: [],
   transcription: { provider: 'assemblyai' },
   speech: {},

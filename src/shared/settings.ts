@@ -85,9 +85,12 @@ export interface CodingAgentSettings {
   // unused there. Empty/undefined → 128000 default.
   contextWindow?: number;
   // Extended-thinking level applied at session boot. Clamped per-model by pi.
-  // Note: an unset/omitted level makes pi fall back to 'medium' for reasoning-
-  // capable models — this field makes the choice explicit and user-controllable.
-  thinkingLevel: ThinkingLevel;
+  // OPTIONAL, and unset is a real state: `agent-core/agent.ts` boots with
+  // `thinkingLevel || 'off'`, so an unset level runs with thinking OFF. Nothing
+  // may substitute another value on the way to the screen — a settings page that
+  // renders unset as 'medium' shows a level the agent will not run. See the
+  // no-defaults-on-read rule in the root CLAUDE.md.
+  thinkingLevel?: ThinkingLevel;
   // How long an unattended run may take before the watchdog aborts it. Applies to
   // Telegram and cron turns, which have no one watching; a desktop chat has the
   // user and the Stop button instead. Unset ⇒ 30 (read `?? 30` at the point of

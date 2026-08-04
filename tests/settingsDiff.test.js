@@ -40,6 +40,30 @@ test('provider keys are addressed individually', () => {
   assert.deepEqual(buildPatch(next, prev), { 'codingAgent.model': 'b' });
 });
 
+test('an unset leaf stays unset — a display default must not become a write', () => {
+  // The regression this pins, measured: the settings page rebuilt the whole
+  // codingAgent object out of its `?? fallback` display locals, so picking a
+  // reasoning level ALSO wrote `codingAgent.baseUrl: ''` — a row nobody typed,
+  // for a field the DB had no value for. `'' !== undefined` at the leaf, so the
+  // fabrication is indistinguishable from an edit by the time it gets here.
+  //
+  // The store is the source of truth (root CLAUDE.md: nothing faked on read), so
+  // a section must spread what the server sent, not what it chose to render.
+  const prev = { codingAgent: { provider: 'anthropic', model: 'claude-opus-5' } };
+
+  // What a section does when it spreads the PROP: unset leaves compare equal.
+  assert.deepEqual(
+    buildPatch({ codingAgent: { ...prev.codingAgent, thinkingLevel: 'high' } }, prev),
+    { 'codingAgent.thinkingLevel': 'high' },
+  );
+
+  // What it did when it rebuilt from defaulted locals: two extra rows invented.
+  assert.deepEqual(
+    buildPatch({ codingAgent: { ...prev.codingAgent, baseUrl: '', thinkingLevel: 'high' } }, prev),
+    { 'codingAgent.baseUrl': '', 'codingAgent.thinkingLevel': 'high' },
+  );
+});
+
 test('collections pass through whole, even when unchanged', () => {
   // They reconcile by membership in the store — a "nothing changed" diff would
   // be wrong, and an empty array must still be able to clear the table.
