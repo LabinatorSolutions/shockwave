@@ -315,14 +315,11 @@ function SpinnerIcon({ size = 12 }: { size?: number }) {
 
 // Collapsible extended-thinking block. While streaming it shows the same
 // spinner + shimmering label as the "Working" indicator ("Thinking"); once
-// thinking_end fires it freezes to a static "Thought" summary, collapsed by
-// default. Body is the raw reasoning text.
+// thinking_end fires it freezes to a static "Thought" summary. Closed by
+// default in both states — the body only shows when the user expands it.
 function ThinkingEntry({ entry }) {
   const streaming = !entry.done;
-  // Auto-expand while streaming so the reasoning is visible live; collapse once
-  // done (unless the user has toggled it open).
-  const [open, setOpen] = useState(true);
-  const collapsedDone = entry.done && !open;
+  const [open, setOpen] = useState(false);
   return (
     // Demoted aside (spec §6): small caption + chevron, body behind a 2px rule.
     <div className="flex flex-col gap-[5px]">
@@ -331,14 +328,14 @@ function ThinkingEntry({ entry }) {
         className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-2 hover:text-muted-foreground"
         onClick={() => setOpen((v) => !v)}
       >
-        {collapsedDone
-          ? <ChevronRight className="size-3" strokeWidth={2.2} />
-          : <ChevronDown className="size-3" strokeWidth={2.2} />}
+        {open
+          ? <ChevronDown className="size-3" strokeWidth={2.2} />
+          : <ChevronRight className="size-3" strokeWidth={2.2} />}
         {streaming
           ? (<><SpinnerIcon /><span className="thinking-shimmer">Thinking</span></>)
           : (<span>Thought</span>)}
       </button>
-      {(!entry.done || open) && entry.text && (
+      {open && entry.text && (
         <div className="whitespace-pre-wrap border-l-2 border-border pl-[11px] text-[13px] leading-[1.55] text-muted-foreground">{entry.text}</div>
       )}
     </div>
