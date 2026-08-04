@@ -229,7 +229,12 @@ async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
   const stored = await store.getTelegramSent(db, tgChatId, messageId);
   if (stored == null) return;
 
-  const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'));
+  const client = new TelegramClient(
+    await store.getTelegramSecret(db, key, 'botToken'),
+    // Whatever this says is recorded against the chat the bubble it read belongs
+    // to, so replying to the "couldn't do it" lands in the same conversation.
+    (id, text) => { store.recordTelegramSent(db, tgChatId, id, text, stored.originChatId).catch(() => {}); },
+  );
   // Same indicator loop as a turn, started on "recording" — synthesis is the
   // only work here, so there is no typing phase to show first.
   const typing = startTyping(client, tgChatId, 'record_voice');
@@ -339,8 +344,20 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
   const dm = acc.dmChatId as number;
   const msg = msgs[0];
   let typing: { set(a: string): void; stop(): void } = { set() {}, stop() {} };
+  // Which chat this turn belongs to, as far as it is known so far. Declared out
+  // here because `remember` closes over it and reads it at send time — a bubble
+  // written before the chat is minted records no chat, one written after records
+  // it — and because the catch below sends too.
+  let chatId: string | null = null;
+  // Every bubble this turn writes is remembered: what it said, so a reaction can
+  // have it read aloud, and which chat said it, so a reply to it resumes the
+  // conversation. One hook on the client covers the ack, the commands, the
+  // progress lines, the reply and the error — see TelegramClient.
+  const remember = (messageId: number, text: string) => {
+    store.recordTelegramSent(db, dm, messageId, text, chatId).catch(() => {});
+  };
   try {
-    const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'));
+    const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'), remember);
     // Say we're here BEFORE doing any of the work. The first sign of life used
     // to come from makeTelegramSink, which is built after the workspace checkout
     // — so on a plain text message the user watched an empty chat through a
@@ -355,7 +372,7 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
     // Attachments land in the chat's own staging dir, so saving one needs the chat
     // to exist. Minting it lazily keeps `/help` and friends from creating a chat
     // just by being typed — they never carry a file.
-    let chatId: string | null = replySwitch ?? acc.activeChatId ?? null;
+    chatId = replySwitch ?? acc.activeChatId ?? null;
     const getChatId = async () => {
       if (!chatId) { chatId = crypto.randomUUID(); await store.setTelegramActiveChat(db, chatId); }
       return chatId;
@@ -400,7 +417,7 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
     await runTurnInner(db, key, runtime, acc, client, dm, input, msg, ready.value, typing);
   } catch (err: any) {
     const token = await store.getTelegramSecret(db, key, 'botToken').catch(() => '');
-    if (token) await new TelegramClient(token).sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
+    if (token) await new TelegramClient(token, remember).sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
     throw err;
   } finally {
     typing.stop();
@@ -733,10 +750,6 @@ async function runTurnInner(
     // typing loop rather than be sent once: Telegram expires an action after ~5s,
     // so the loop's next `typing` tick would paint over a one-off.
     onSpeakStart: () => typing.set('record_voice'),
-    // Remember what each final bubble said AND which chat said it, so a reaction
-    // on it can be answered with a voice note (speakReactedMessage) and a reply
-    // to it resumes this conversation (switchChatForReply).
-    record: (messageId, text) => { store.recordTelegramSent(db, dm, messageId, text, chatId).catch(() => {}); },
   });
   let finalMessages: any[] | undefined;
   const emit = (e: any) => {

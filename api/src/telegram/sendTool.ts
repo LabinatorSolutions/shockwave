@@ -47,24 +47,22 @@ export async function sendTelegramMessage(
     }
     const token = await store.getTelegramSecret(db, key, 'botToken');
     if (!token) return { ok: false, error: 'Telegram bot token is missing.' };
-    const client = new TelegramClient(token);
+    // Every bubble this sends is remembered by its message number and its chat, so
+    // a reaction on it can be answered with audio and a reply to it can resume the
+    // conversation that sent it. One hook on the client rather than a save beside
+    // each send — see TelegramClient. Best-effort: losing the record costs a
+    // reaction and a shortcut, not the message.
+    const client = new TelegramClient(token, (messageId, sent) => {
+      store.recordTelegramSent(db, acc.dmChatId!, messageId, sent, opts.chatId ?? null).catch(() => {});
+    });
 
     // Explicit beats stored; stored beats the default. Nothing here WRITES the
     // preference — that is `/voice`, a slash command, so a message-sending path
     // is never also a settings write.
     const mode = opts.output ?? await store.getVoiceReply(db, opts.workspaceId);
 
-    // Each sent bubble is remembered by its message number and its chat, so a
-    // reaction on it can be answered with audio and a reply to it can resume the
-    // conversation that sent it. Best-effort — losing the record costs a
-    // reaction and a shortcut, not the message.
     const sendChunks = async () => {
-      for (const c of splitMessage(String(text ?? ''))) {
-        const m = await client.sendMessage(acc.dmChatId!, c);
-        if (m?.message_id != null) {
-          await store.recordTelegramSent(db, acc.dmChatId!, m.message_id, c, opts.chatId ?? null).catch(() => {});
-        }
-      }
+      for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId!, c);
     };
 
     // Text first when the mode sends it at all. Voice-only is the one mode that

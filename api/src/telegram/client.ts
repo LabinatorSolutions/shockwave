@@ -48,7 +48,23 @@ async function readEnvelope(res: Response): Promise<TgResponse> {
 }
 
 export class TelegramClient {
-  constructor(private token: string) {}
+  /**
+   * `onSent` is called for every text bubble this client writes — sent or edited
+   * — with the message number and what it now says. That is what makes ANY of the
+   * bot's messages readable back as a voice note later (`speakReactedMessage`):
+   * the record exists because the message went out, not because the code that
+   * sent it remembered to save it. Commands, acks, errors and the agent's reply
+   * all pass through here, so there is one rule and nothing to add for a new kind
+   * of message.
+   *
+   * Injected rather than imported so this file keeps no database access, the same
+   * seam `stream.ts` uses for `speak`. The callback carries which of OUR chats the
+   * bubble belongs to, which this class has no way to know.
+   *
+   * NOT fired for `sendFile`: a voice bubble's text is the script that was spoken,
+   * which lives with the caller (`speakInto` records it itself).
+   */
+  constructor(private token: string, private onSent?: (messageId: number, text: string) => void) {}
 
   async call(method: string, body: Record<string, any> = {}): Promise<any> {
     const url = `https://api.telegram.org/bot${this.token}/${method}`;
@@ -97,13 +113,23 @@ export class TelegramClient {
   // How boot tells whether the subscription list is stale without re-registering
   // (and re-uploading a certificate) on every start.
   getWebhookInfo() { return this.call('getWebhookInfo'); }
-  sendMessage(chatId: number, text: string, opts: { replyToMessageId?: number } = {}) {
-    return this.call('sendMessage', {
+  async sendMessage(chatId: number, text: string, opts: { replyToMessageId?: number } = {}) {
+    const m = await this.call('sendMessage', {
       chat_id: chatId, text,
       ...(opts.replyToMessageId ? { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } } : {}),
     });
+    if (m?.message_id != null) this.onSent?.(m.message_id, text);
+    return m;
   }
-  editMessageText(chatId: number, messageId: number, text: string) { return this.call('editMessageText', { chat_id: chatId, message_id: messageId, text }); }
+  // An edit records too, so the streamed bubble ends up stored as what it finally
+  // says rather than as the "…" it started out as. An unchanged body throws
+  // ("message is not modified") and never reaches this line — which is right,
+  // since the text already on record is the text on screen.
+  async editMessageText(chatId: number, messageId: number, text: string) {
+    const r = await this.call('editMessageText', { chat_id: chatId, message_id: messageId, text });
+    this.onSent?.(messageId, text);
+    return r;
+  }
   deleteMessage(chatId: number, messageId: number) { return this.call('deleteMessage', { chat_id: chatId, message_id: messageId }); }
   sendChatAction(chatId: number, action = 'typing') { return this.call('sendChatAction', { chat_id: chatId, action }); }
 
