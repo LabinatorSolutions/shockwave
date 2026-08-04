@@ -6,9 +6,11 @@
 //   Decoration.replace — atomically replaces the matched source with a widget.
 //   atomicRanges       — cursor navigation skips over the widget as one unit.
 //
-// The widget shows an <img> served by the `app://media/<rel-to-vault>` protocol
-// (registered in electron/main.js). URLs that resolve outside the vault, or
-// can't be parsed, fall through to no decoration (source stays visible).
+// The widget shows an <img> served by main's `app://` protocol — workspace
+// files as `app://media/<rel-to-vault>`, remote ones as `app://remote/?url=…`
+// (the CSP has no `https:` in img-src, so main does that fetching). URLs that
+// resolve outside the vault, or can't be parsed, fall through to no decoration
+// (source stays visible).
 //
 // Decorations rebuild only on docChanged || viewportChanged (per the official
 // example) — NOT on selectionSet. That's deliberate; selection-driven rebuilds
@@ -109,7 +111,11 @@ function findWrappingLinkUrl(state, pos) {
 export function resolveImageUrl(raw, activeDir, vault) {
   if (!raw) return null;
   const trimmed = raw.trim();
-  if (/^(https?:|data:|app:|file:)/i.test(trimmed)) return trimmed;
+  // Remote images are fetched by MAIN, not the page: `img-src` in index.html
+  // has no `https:`, so a file full of third-party URLs can't turn a preview
+  // into a beacon. See the `remote` host in main.ts's `app://` handler.
+  if (/^https?:/i.test(trimmed)) return 'app://remote/?url=' + encodeURIComponent(trimmed);
+  if (/^(data:|app:|file:)/i.test(trimmed)) return trimmed;
   let decoded;
   try { decoded = decodeURI(trimmed); } catch { decoded = trimmed; }
   let abs;

@@ -2841,6 +2841,37 @@ app.whenReady().then(async () => {
           return new Response('unavailable', { status: 503 });
         }
       }
+      // Remote images referenced from a file (`![](https://…)`). `img-src` in
+      // index.html has no `https:` on purpose — a workspace file is content the
+      // agent writes and sync pulls in, so letting the page load images from
+      // arbitrary hosts would hand every one of them the user's IP the moment a
+      // file is previewed. The renderer rewrites such URLs to
+      // `app://remote/?url=<encoded>` and main does the fetching instead: the
+      // origin sees this process, not the page, and only an image body comes
+      // back. Cached for a day — remote assets aren't immutable the way
+      // `app://attachment` ids are.
+      if (url.host === 'remote') {
+        const target = url.searchParams.get('url');
+        if (!target) return new Response('not found', { status: 404 });
+        let parsed;
+        try { parsed = new URL(target); } catch { return new Response('bad url', { status: 400 }); }
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+          return new Response('forbidden', { status: 403 });
+        }
+        try {
+          const upstream = await net.fetch(parsed.toString());
+          const type = upstream.headers.get('Content-Type') ?? '';
+          if (!upstream.ok || !type.startsWith('image/')) {
+            return new Response('not an image', { status: 415 });
+          }
+          return new Response(upstream.body, {
+            status: 200,
+            headers: { 'Content-Type': type, 'Cache-Control': 'public, max-age=86400' },
+          });
+        } catch {
+          return new Response('unavailable', { status: 502 });
+        }
+      }
       if (url.host !== 'media') return new Response('not found', { status: 404 });
       if (!watcherRootDir) return new Response('no vault', { status: 404 });
       const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '');
