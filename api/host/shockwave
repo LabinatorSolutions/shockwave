@@ -20,6 +20,7 @@
 set -eu
 
 DIR="${COMPANION_DIR:-/opt/shockwave-companion}"
+ENV_FILE="$DIR/.env"
 CERT=/etc/traefik/dynamic/companion.crt
 KEY=/etc/traefik/dynamic/companion.key
 
@@ -30,10 +31,140 @@ fingerprint() {
   compose exec -T api openssl x509 -in "$CERT" -noout -fingerprint -sha256
 }
 
+# ── check ───────────────────────────────────────────────────────────────────
+# Tests the three things the installer prints and you type into the desktop:
+# the address, the certificate, and the API key. Nothing else does — the
+# installer's own wait loop probes 127.0.0.1:8080, which is the api container
+# talking to itself and proves none of the above. So a domain whose Let's
+# Encrypt certificate never issued (ACME runs AFTER `up -d` returns), a Traefik
+# router that didn't come up, or a mistyped key all get you "✓ Install
+# complete" and then "Couldn't connect" in the app, with nothing to tell you
+# which.
+
+pass() { printf '\033[0;32m  ✓\033[0m %s\n' "$1"; }
+bad()  { printf '\033[0;31m  ✗\033[0m %s\n' "$1"; FAILED=1; }
+note() { printf '    %s\n' "$1"; }
+
+env_get() { grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+
+# ADDR = the address the desktop connects to; DOMAIN empty means self-signed.
+# An IP in COMPANION_DOMAIN can only mean self-signed (ACME cannot issue for
+# one), so it is read as the host — the same call `normalizeTlsEnv` (server.ts)
+# and gen-router.sh make. Three places, and they must agree. The first pattern
+# is load-bearing: it rejects anything holding a character an IP cannot have,
+# so a hostname that merely starts like one (10.0.0.1.nip.io) keeps its real
+# certificate.
+load_env() {
+  DOMAIN=$(env_get COMPANION_DOMAIN)
+  HOST=$(env_get COMPANION_HOST)
+  case "$DOMAIN" in
+    *[!0-9.]*) ;;
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) HOST="$DOMAIN"; DOMAIN='' ;;
+  esac
+  ADDR="${DOMAIN:-$HOST}"
+  APIKEY=$(env_get API_KEY)
+}
+
+# curl against the real address. `pin` forces the connection to loopback while
+# still presenting that address for SNI and certificate matching — so the
+# certificate and the key are verified exactly as the desktop will verify them,
+# without depending on the box being able to route back to its own public IP.
+# Many clouds (AWS, GCP) NAT the public address and never hairpin it, so a
+# direct probe there fails on a perfectly healthy server. `direct` is the real
+# round trip, used only for the advisory reachability line.
+probe() {
+  mode="$1"; shift
+  [ "$mode" = pin ] && set -- --resolve "$ADDR:443:127.0.0.1" "$@"
+  [ -n "$CACERT" ] && set -- --cacert "$CACERT" "$@"
+  curl --max-time 10 "$@"
+}
+
+check() {
+  FAILED=0
+  CACERT=''
+  [ -r "$ENV_FILE" ] || { printf 'cannot read %s — run as root.\n' "$ENV_FILE" >&2; exit 1; }
+  load_env
+  [ -n "$ADDR" ] || { printf 'no address in %s — re-run install.sh so it can record one.\n' "$ENV_FILE" >&2; exit 1; }
+
+  # Self-signed: trust the server's own certificate explicitly rather than
+  # curl -k. Skipping verification would pass while Traefik served the
+  # throwaway certificate it makes when ours is missing — which is the failure
+  # this is here to catch.
+  if [ -z "$DOMAIN" ]; then
+    CACERT=$(mktemp)
+    trap 'rm -f "$CACERT"' EXIT INT TERM
+    compose exec -T api cat "$CERT" > "$CACERT" 2>/dev/null || : > "$CACERT"
+    # Delete it here rather than only blanking the variable — the trap fires on
+    # $CACERT, so blanking alone strands the file.
+    [ -s "$CACERT" ] || { rm -f "$CACERT"; CACERT=''; }
+  fi
+
+  printf 'Checking %s\n' "https://$ADDR"
+
+  running=$(compose ps --status running --services 2>/dev/null || true)
+  down=''
+  for s in postgres api traefik; do
+    printf '%s\n' "$running" | grep -qx "$s" || down="$down $s"
+  done
+  if [ -n "$down" ]; then bad "containers not running:$down"
+  else pass 'containers running'; fi
+
+  if health=$(curl -fsS --max-time 10 http://127.0.0.1:8080/health 2>/dev/null); then
+    pass "api and database (version $(printf '%s' "$health" | sed 's/.*"version":"\([^"]*\)".*/\1/'))"
+  else
+    bad 'the api is not answering, or cannot reach the database'
+    note 'shockwave logs'
+  fi
+
+  if [ -z "$DOMAIN" ] && [ -z "$CACERT" ]; then
+    bad 'this server has no certificate of its own'
+    note 'Traefik is serving a throwaway one that changes on every restart.'
+    note 'Fix: shockwave logs, then shockwave rotate-cert'
+  elif probe pin -fsS "https://$ADDR/health" >/dev/null 2>&1; then
+    if [ -n "$DOMAIN" ]; then pass 'https on 443, with a certificate browsers trust'
+    else pass "https on 443, with this server's certificate"; fi
+  else
+    bad 'https on 443 is not serving a valid certificate for this address'
+    [ -n "$DOMAIN" ] && note "Usually Let's Encrypt could not issue: check $DOMAIN points at this server and 80/443 are open."
+    note 'shockwave logs traefik'
+  fi
+
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$APIKEY" \
+    | probe pin -sS -o /dev/null -w '%{http_code}' -K - "https://$ADDR/settings" 2>/dev/null || true)
+  case "$code" in
+    200)      pass 'the API key works' ;;
+    401)      bad "the API key in $ENV_FILE is not the one this server accepts" ;;
+    ''|000)   bad 'could not test the API key — the request never completed' ;;
+    *)        bad "unexpected reply testing the API key (HTTP $code)" ;;
+  esac
+
+  # Advisory, never a failure: this runs ON the server, so it cannot speak for
+  # the path from your laptop, and the clouds that NAT a public address make it
+  # fail even when everything is open.
+  if probe direct -fsS "https://$ADDR/health" >/dev/null 2>&1; then
+    note "reachable at https://$ADDR from the server itself"
+  else
+    note "could not reach https://$ADDR from the server itself — normal on AWS/GCP"
+  fi
+
+  printf '\n'
+  if [ "$FAILED" -eq 0 ]; then
+    printf '\033[0;32m✓ The server is healthy and the key works.\033[0m\n'
+    printf '  This ran on the box, so it cannot prove your laptop can reach it —\n'
+    printf '  if the app still fails to connect, open 80 and 443 in your cloud firewall.\n'
+    return 0
+  fi
+  printf '\033[0;31m✗ Problems found — see above.\033[0m\n'
+  return 1
+}
+
 usage() {
   cat <<'EOF'
 Usage: shockwave <command>
 
+  check          Test what the desktop app will use: this server's address, its
+                 certificate, and the API key. Run it whenever the app can't
+                 connect — it says which half is broken.
   fingerprint    Print this server's TLS certificate fingerprint — the value the
                  desktop app shows you to compare before you approve it.
   rotate-cert    Replace the certificate. Every desktop stops connecting until
@@ -46,6 +177,9 @@ EOF
 }
 
 case "${1:-}" in
+  check)
+    check
+    ;;
   fingerprint)
     fingerprint
     ;;

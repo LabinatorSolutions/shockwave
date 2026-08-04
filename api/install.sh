@@ -21,9 +21,12 @@
 #   4. Generates .env secrets on first run (never overwritten after that), and
 #      records this server's public address as COMPANION_HOST.
 #   5. docker compose up -d  — pulls ghcr.io/stephengpope/shockwave-companion.
-#   6. Waits for /health, prints the server URL, API key, and — with no domain —
-#      the certificate fingerprint you approve in the desktop app.
-#   7. Installs the `shockwave` command on PATH (subcommands: fingerprint,
+#   6. Waits for /health, then runs `shockwave check` — which tests the address,
+#      certificate and API key the desktop will actually use (the wait itself
+#      only proves the api container can talk to itself on a local port).
+#   7. Prints the server URL, API key, and — with no domain — the certificate
+#      fingerprint you approve in the desktop app.
+#   8. Installs the `shockwave` command on PATH (subcommands: check, fingerprint,
 #      rotate-cert, status, logs, version).
 #
 # Re-running is the update path: refreshes the compose/config files, pulls the
@@ -257,8 +260,20 @@ until curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; do
   [ "$i" -ge 45 ] && fail "companion not healthy after 90s — check: cd $DIR && $SUDO docker compose logs api"
   sleep 2
 done
-VERSION=$(curl -fsS http://127.0.0.1:8080/health | sed 's/.*"version":"\([^"]*\)".*/\1/')
-ok "Companion is up (version $VERSION)"
+ok "Companion is up"
+
+# That loop only proves the api container can talk to itself on a local port —
+# not the address, certificate or key printed below, which are what the desktop
+# actually uses. `shockwave check` tests those three, and it matters most right
+# here: with a domain, Let's Encrypt issues AFTER `up -d` returns, so a failed
+# issuance would otherwise reach the user as "✓ Install complete" followed by
+# "Couldn't connect" in the app. Never fatal — a fresh install is still worth
+# finishing, and the check names what to fix.
+printf '\n'
+say "Verifying the details you're about to type into the app..."
+# COMPANION_DIR, because SHOCKWAVE_DIR (the test hook) moves the install and the
+# command's own default would look in /opt for a stack that isn't there.
+$SUDO env COMPANION_DIR="$DIR" shockwave check || true
 
 # ── Done ────────────────────────────────────────────────────────────────────
 # Reuse the address recorded in .env rather than looking it up a second time —
