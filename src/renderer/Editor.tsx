@@ -133,21 +133,45 @@ const Editor = forwardRef<any, any>(function Editor(
   const filePathRef = useRef(filePath);
   const readOnlyRef = useRef(false);
 
-  // Swap the language grammar for the current file. Markdown is synchronous
-  // (the extension is prebuilt); code grammars come from
-  // @codemirror/language-data and lazy-load via dynamic import, so the file
-  // shows as plain text for the first open of a filetype until the chunk
-  // arrives. The generation counter guards against a stale load resolving
-  // after the user has switched files (or the view was rebuilt).
-  const applyLanguage = (view, langCmp, isMd, path) => {
+  // Bring every compartment in `view` into line with the refs above — read-only, the
+  // live-preview bundle, and the language grammar, in that order.
+  //
+  // The refs are the single description of how the editor is configured, and the
+  // compartments are just where that description is installed. Three things can put
+  // the two out of step: a prop change, a document swap (`view.setState` replaces
+  // compartment contents wholesale, so a parked state comes back configured however it
+  // was when it was parked), and a view rebuild. All three call this, and reconciling
+  // ALL of the compartments is the point — the swap used to re-apply the grammar
+  // alone, which is why opening a non-markdown file in another tab left the markdown
+  // file you'd parked without live preview until you toggled twice. Add a compartment,
+  // add it here, and every one of those paths already covers it.
+  //
+  // The grammar is the fiddly one: markdown is synchronous (the extension is prebuilt),
+  // but code grammars come from @codemirror/language-data and lazy-load via dynamic
+  // import, so the file shows as plain text for the first open of a filetype until the
+  // chunk arrives. The generation counter guards against a stale load resolving after
+  // the user has switched files (or the view was rebuilt).
+  const applyCompartments = (view) => {
+    const roCmp = readOnlyCompartmentRef.current;
+    const liveCmp = livePreviewCompartmentRef.current;
+    const live = livePreviewExtensionsRef.current;
+    const langCmp = languageCompartmentRef.current;
+    if (!view || !roCmp || !liveCmp || !live || !langCmp) return;
+    const isMd = isMarkdownRef.current;
     const gen = ++langGenerationRef.current;
-    if (isMd) {
-      view.dispatch({ effects: langCmp.reconfigure(markdownExtensionRef.current) });
-      return;
-    }
+    view.dispatch({
+      effects: [
+        roCmp.reconfigure(EditorState.readOnly.of(readOnlyRef.current)),
+        liveCmp.reconfigure(
+          (viewModeRef.current === VIEW_MODES.RAW || !isMd) ? [] : live,
+        ),
+        langCmp.reconfigure(isMd ? markdownExtensionRef.current : []),
+      ],
+    });
+    if (isMd) return;
+    const path = filePathRef.current;
     const name = path ? path.slice(path.lastIndexOf('/') + 1) : '';
     const desc = name ? LanguageDescription.matchFilename(languages, name) : null;
-    view.dispatch({ effects: langCmp.reconfigure([]) });
     if (!desc) return;
     desc.load().then((support) => {
       if (langGenerationRef.current !== gen || viewRef.current !== view) return;
@@ -195,19 +219,17 @@ const Editor = forwardRef<any, any>(function Editor(
   // Non-markdown files get their language's grammar by filename (or plain
   // text when unrecognized) and never show live preview.
   useEffect(() => {
-    // Set BEFORE the readiness bail-out — a state built later must see these even if the
-    // view wasn't up when the props changed.
+    // Set BEFORE applying — a state built later reads these too, so they must be right
+    // even if the view wasn't up when the props changed.
     viewModeRef.current = viewMode;
     isMarkdownRef.current = isMarkdown;
     filePathRef.current = filePath;
-    const view = viewRef.current;
-    const cmp = livePreviewCompartmentRef.current;
-    const live = livePreviewExtensionsRef.current;
-    const langCmp = languageCompartmentRef.current;
-    if (!view || !cmp || !live || !langCmp) return;
-    const nextLive = (viewMode === VIEW_MODES.RAW || !isMarkdown) ? [] : live;
-    view.dispatch({ effects: cmp.reconfigure(nextLive) });
-    applyLanguage(view, langCmp, isMarkdown, filePath);
+    // On a tab switch this fires BEFORE App's loader effect (child effects run first,
+    // and that one awaits a disk read besides), so the state still mounted here is the
+    // OUTGOING document's. Configuring it for the incoming file is wrong but harmless:
+    // loadDocument reconciles whatever it swaps in, including that state on its way
+    // back. The mistake was leaving that second call out.
+    applyCompartments(viewRef.current);
   }, [viewMode, isMarkdown, filePath]);
 
   // "Hide line numbers" doesn't actually remove the gutter — we keep its
@@ -362,10 +384,10 @@ const Editor = forwardRef<any, any>(function Editor(
       view.setState(next);
       isProgrammaticRef.current = false;
       currentDocKeyRef.current = key;
-      // setState replaces the compartment contents wholesale, so a non-markdown file's
-      // lazily-loaded grammar has to be re-applied against the new state.
-      const langCmp = languageCompartmentRef.current;
-      if (langCmp) applyLanguage(view, langCmp, isMarkdownRef.current, filePathRef.current);
+      // setState replaces the compartment contents wholesale — a fresh state carries what
+      // the factory read, a parked one carries what it was parked with — so the whole set
+      // gets reconciled against the current config here.
+      applyCompartments(view);
       applyViewState(view, viewState);
       statsRef.current?.(computeStats(view.state));
       historyRef.current?.({
@@ -639,9 +661,10 @@ const Editor = forwardRef<any, any>(function Editor(
     const view = new EditorView({ state: makeStateRef.current(''), parent: hostRef.current });
     viewRef.current = view;
     const docStates = docStatesRef.current;
-    // Rebuilds (dark toggle) don't re-run the reconfigure effect above, so a
-    // non-markdown file's grammar must be re-applied here.
-    if (!isMarkdown) applyLanguage(view, languageCompartment, false, filePath);
+    // Rebuilds (dark toggle) don't re-run the reconfigure effect above, and the fresh
+    // state carries whatever the factory read — which for a non-markdown file is no
+    // grammar at all, since that one loads asynchronously.
+    applyCompartments(view);
     statsRef.current?.({ words: 0, chars: 0 });
     historyRef.current?.({ canUndo: false, canRedo: false });
     return () => {
