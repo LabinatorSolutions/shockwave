@@ -11,16 +11,18 @@ allowed-tools: Bash(playwright-cli:*)
 `playwright-cli` is **bundled with Shockwave** and already on your PATH. Do NOT run
 `npm install`, `npx playwright`, or `playwright-cli install` — they don't apply.
 
-The browser binary is **not** bundled; it downloads on first use into an app-managed
-cache (no admin rights, ~77 MB, one time). If a `playwright-cli open` (or other
-browser command) fails because no browser is installed, run this once, then retry:
+The browser is already installed on the server. In the desktop app it downloads
+once on first use into an app-managed cache (no admin rights, ~77 MB).
+
+If any browser command reports that no browser is installed, run this once and
+retry — it should not normally be needed:
 
 ```bash
-playwright-cli install-browser chromium --only-shell
+playwright-cli install-browser chromium
 ```
 
-This is normal first-run setup — tell the user it's a one-time download. Subsequent
-runs are instant.
+Not `--only-shell` — that installs the headless shell, which this CLI never
+launches, so browser commands still fail afterwards.
 
 ## Quick start
 

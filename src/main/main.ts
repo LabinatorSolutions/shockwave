@@ -2800,6 +2800,14 @@ installOpenFileBridge(async (relPath) => {
     // browser is fetched lazily by the agent on first use (the skill instructs it),
     // so users who never touch Playwright never pay the ~77 MB download.
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(app.getPath('userData'), 'ms-playwright');
+    // The CLI's default browser is the **chrome channel** — real Google Chrome at a
+    // system path — which we neither install nor bundle, so a bare `playwright-cli
+    // open` fails with "Chromium distribution 'chrome' is not found" even after the
+    // download above. Point the default at the build we actually fetch (`chromium`
+    // resolves to chrome-for-testing, the revision this CLI's playwright pins), so
+    // the agent never has to pass `--browser` and the skill never has to teach it to.
+    // Same value the companion sets in api/Dockerfile — one behaviour on both hosts.
+    process.env.PLAYWRIGHT_MCP_BROWSER = 'chromium';
     if (made.length) console.log('[cli-tools] shims ready on PATH:', made.join(', '));
   } catch (err: any) {
     console.warn('[cli-tools] shim setup failed:', err?.message ?? err);
