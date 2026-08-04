@@ -17,6 +17,7 @@ import { getDb } from './db.js';
 import * as store from './store.js';
 import { mintToken } from './oauth.js';
 import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
+import { OPEN_FILE_STUB } from './openFileStub.js';
 import { voiceConfigOf } from '../../agent-core/voiceProviders.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
 import { logger, errStr } from './log.js';
@@ -48,6 +49,10 @@ export function makeCompanionRuntime(pool: PgPool, key: Buffer) {
       makeSendMessageTool((text, opts) => sendTelegramMessage(pool, key, text, {
         ...opts, workspaceId, workDir: workspacePath,
       })),
+      // Registered so the catalog the prompt lists and the tools pi holds are the
+      // same set. It cannot work here and says so; the gate refuses the call
+      // first anyway. See openFileStub.ts.
+      OPEN_FILE_STUB,
     ],
     // Per-run scratch dir so concurrent runs don't share pi's settings.json.
     dataDir: (chatId) => runScratchDir(chatId),
