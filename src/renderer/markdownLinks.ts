@@ -3,38 +3,25 @@
 // touches the link, the raw `[text](url)` syntax is revealed so the user can
 // edit it — same convention as hideMarkdownMarkers.
 
-import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
+// The label stays REAL DOCUMENT TEXT: we hide `[` and `](url)` and mark the
+// span between them — the same shape the image-link branch below already uses.
+// Replacing the whole link with a widget is the obvious alternative and quietly
+// drops every other decoration covering that text: a widget renders as a direct
+// child of the line, outside the mark spans syntax highlighting emits, so
+// `### [Title](url)` came out at body size and `[**bold**](url)` showed its
+// asterisks. Headings, bold, italic and inline code can all reach a mark; none
+// of them can reach a widget.
+
+import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
-
-class MdLinkWidget extends WidgetType {
-  url; text;
-  constructor(text, url) {
-    super();
-    this.text = text;
-    this.url = url;
-  }
-  eq(other) { return other.text === this.text && other.url === this.url; }
-  toDOM() {
-    const a = document.createElement('a');
-    a.className = 'cm-md-link';
-    a.textContent = this.text;
-    a.href = this.url;
-    a.title = this.url;
-    a.addEventListener('mousedown', (e) => e.preventDefault());
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      window.api.openExternal(this.url);
-    });
-    return a;
-  }
-  ignoreEvent() { return false; }
-}
 
 function extractParts(state, linkNode) {
   // Walk children of a Link node: LinkMark "[", inline content, LinkMark "]",
   // LinkMark "(", URL, LinkMark ")". Returns either:
-  //   { kind: 'text', text, url }         — normal link, replace with widget
+  //   { kind: 'text', text, textFrom, textTo, url }
+  //                                       — normal link; caller hides the
+  //                                         brackets + url, marks the label
   //   { kind: 'image', imageFrom, imageTo, url }
   //                                       — link wrapping an image; caller
   //                                         hides the wrapper, leaves image
@@ -62,7 +49,13 @@ function extractParts(state, linkNode) {
   }
   const text = state.doc.sliceString(openBracketEnd, closeBracketStart);
   if (!text) return null;
-  return { kind: 'text', text, url: urlText };
+  return {
+    kind: 'text',
+    text,
+    textFrom: openBracketEnd,
+    textTo: closeBracketStart,
+    url: urlText,
+  };
 }
 
 const hide = Decoration.replace({});
@@ -104,11 +97,19 @@ function buildDecorations(view) {
             deco: hide,
           });
         } else {
+          // Hide `[`, mark the label, hide `](url)`. The url rides on the mark
+          // as an attribute so the click handler reads what is actually on
+          // screen rather than re-deriving it from a position.
+          decos.push({ from: node.from, to: parts.textFrom, deco: hide });
           decos.push({
-            from: node.from,
-            to: node.to,
-            deco: Decoration.replace({ widget: new MdLinkWidget(parts.text, parts.url) }),
+            from: parts.textFrom,
+            to: parts.textTo,
+            deco: Decoration.mark({
+              class: 'cm-md-link',
+              attributes: { 'data-url': parts.url, title: parts.url },
+            }),
           });
+          decos.push({ from: parts.textTo, to: node.to, deco: hide });
         }
         return false;
       },
@@ -132,7 +133,7 @@ export function findLinkAtPos(state, pos) {
   return { from: node.from, to: node.to, ...parts };
 }
 
-export const markdownLinks = ViewPlugin.fromClass(
+const linkPlugin = ViewPlugin.fromClass(
   class {
     decorations;
     constructor(view) {
@@ -148,3 +149,32 @@ export const markdownLinks = ViewPlugin.fromClass(
     decorations: (v) => v.decorations,
   },
 );
+
+// The label is ordinary text now, so opening the url is the editor's job rather
+// than an <a>'s. Same two-step the widget used: swallow mousedown so CodeMirror
+// doesn't place the cursor (which would reveal the raw syntax under the pointer
+// mid-click), open on click. Both no-op unless the pointer is actually over a
+// link label, so text selection, image links and wiki-links are untouched.
+function linkElementAt(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return null;
+  return target.closest('.cm-md-link');
+}
+
+const linkClicks = EditorView.domEventHandlers({
+  mousedown(event) {
+    if (!linkElementAt(event)) return false;
+    event.preventDefault();
+    return true;
+  },
+  click(event) {
+    const el = linkElementAt(event);
+    const url = el?.getAttribute('data-url');
+    if (!url) return false;
+    event.preventDefault();
+    window.api.openExternal(url);
+    return true;
+  },
+});
+
+export const markdownLinks = [linkPlugin, linkClicks];
