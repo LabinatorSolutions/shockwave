@@ -319,6 +319,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caCheckoutPoolSize = codingAgent?.checkoutPoolSize;
   const caReviewInterval = codingAgent?.reviewInterval;
   const caMemoryInterval = codingAgent?.memoryInterval;
+  const caBackgroundQuietMinutes = codingAgent?.backgroundQuietMinutes;
   const caMemoryCharLimit = codingAgent?.memoryCharLimit;
   const caUserCharLimit = codingAgent?.userCharLimit;
   const updateCa = (patch) => onCodingAgentChange?.({
@@ -333,6 +334,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     checkoutPoolSize: caCheckoutPoolSize,
     reviewInterval: caReviewInterval,
     memoryInterval: caMemoryInterval,
+    backgroundQuietMinutes: caBackgroundQuietMinutes,
     memoryCharLimit: caMemoryCharLimit,
     userCharLimit: caUserCharLimit,
     ...patch,
@@ -369,6 +371,13 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const memoryField = useCommitField(
     caMemoryInterval == null ? '' : String(caMemoryInterval),
     (next) => updateCa({ memoryInterval: next === '' ? undefined : Number(next) }),
+  );
+  // Explicit-blank again, and for a different reason than its neighbours: 0 here
+  // means "start as soon as a chat is eligible", not "off". The shorthand would
+  // read that as unset and silently reinstate the five-minute wait.
+  const quietField = useCommitField(
+    caBackgroundQuietMinutes == null ? '' : String(caBackgroundQuietMinutes),
+    (next) => updateCa({ backgroundQuietMinutes: next === '' ? undefined : Number(next) }),
   );
   // The two budgets take the SHORTHAND, not the explicit-blank form: 0 is not a
   // meaningful size, and a store that can hold nothing would fail every write
@@ -498,6 +507,37 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
           </div>
           <FieldDescription className="text-xs">
             Tool calls in a chat, anywhere it runs, before that review starts. 0 turns it off.
+          </FieldDescription>
+        </Field>
+      </SettingsGroup>
+
+      <SettingsDivider />
+
+      {/* Its own group, after both, because it belongs to BOTH — the two above
+          come due at different times, but how long to leave a conversation alone
+          is a fact about the chat, not about which pass is asking. Putting it
+          inside either group would read as that pass's own number. */}
+      <SettingsGroup
+        title="Waiting for you to finish"
+        description="A run only looks at a chat once you've stopped adding to it. Applies to memory and review alike."
+      >
+        <Field>
+          <FieldLabel htmlFor="agent-background-quiet">Quiet Minutes</FieldLabel>
+          <div>
+            <Input
+              id="agent-background-quiet"
+              className={NUMBER_FIELD}
+              type="number"
+              min={0}
+              placeholder="5"
+              value={quietField.value}
+              onChange={(e) => quietField.onChange(e.target.value)}
+              onBlur={quietField.onBlur}
+            />
+          </div>
+          <FieldDescription className="text-xs">
+            Silence in a chat before either run may open it. Nothing waits on these runs, so
+            there&apos;s no cost to a longer wait. 0 starts as soon as a chat is eligible.
           </FieldDescription>
         </Field>
       </SettingsGroup>

@@ -56,6 +56,9 @@ const ENABLED = (process.env.REVIEW_ENABLED ?? 'true').toLowerCase() !== 'false'
  *  its equivalents to 10. */
 const DEFAULT_INTERVAL = 10;
 
+/** Unset ⇒ 5 minutes, read at the point of use for the same reason. */
+const DEFAULT_QUIET_MINUTES = 5;
+
 /**
  * A threshold, or 0 meaning the user turned that process off.
  *
@@ -66,6 +69,23 @@ const DEFAULT_INTERVAL = 10;
 function threshold(settings: any, field: 'reviewInterval' | 'memoryInterval'): number {
   const raw = Number(settings?.codingAgent?.[field]);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_INTERVAL;
+}
+
+/**
+ * How long a chat must have been quiet before either process may open it.
+ *
+ * ONE number for both, unlike the thresholds. The two processes measure
+ * different work and so come due at different times, but "is the user still in
+ * this conversation?" is a fact about the source chat, not about which pass is
+ * asking — two knobs would be two answers to one question.
+ *
+ * 0 survives, and here it means "no wait" rather than "off": the thresholds are
+ * what switch a process off, and this number can only ever delay one.
+ */
+function quietMs(settings: any): number {
+  const raw = Number(settings?.codingAgent?.backgroundQuietMinutes);
+  const minutes = Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_QUIET_MINUTES;
+  return minutes * 60_000;
 }
 
 type Kind = 'review' | 'memory';
@@ -82,20 +102,22 @@ interface Candidate { kind: Kind; due: store.DueChat }
  */
 export async function sweepOnce(pool: PgPool, key: Buffer, runtime: any): Promise<void> {
   const db = getDb(pool);
-  // One settings read for both thresholds. Unreadable settings must not wedge
-  // the loop, so a failure falls back to the defaults rather than throwing.
+  // One settings read for both thresholds and the quiet window. Unreadable
+  // settings must not wedge the loop, so a failure falls back to the defaults
+  // rather than throwing.
   let settings: any = {};
   try { settings = await store.readSettings(db, key); } catch { /* defaults */ }
 
   const candidates: Candidate[] = [];
+  const quiet = quietMs(settings);
   const reviewThreshold = threshold(settings, 'reviewInterval');
   if (reviewThreshold > 0) {
-    const [due] = await store.chatsDueForReview(db, reviewThreshold, 1);
+    const [due] = await store.chatsDueForReview(db, reviewThreshold, quiet, 1);
     if (due) candidates.push({ kind: 'review', due });
   }
   const memoryThreshold = threshold(settings, 'memoryInterval');
   if (memoryThreshold > 0) {
-    const [due] = await store.chatsDueForMemory(db, memoryThreshold, 1);
+    const [due] = await store.chatsDueForMemory(db, memoryThreshold, quiet, 1);
     if (due) candidates.push({ kind: 'memory', due });
   }
   if (!candidates.length) return;

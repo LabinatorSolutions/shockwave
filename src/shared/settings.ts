@@ -129,6 +129,20 @@ export interface CodingAgentSettings {
   // why the two are separate processes with separate counters rather than one
   // pass doing both. Unset ⇒ 10, 0 disables. hermes' `memory.nudge_interval`.
   memoryInterval?: number;
+  // How long a chat must sit untouched before either background process may
+  // open it. Both use this one number: they come due at different times because
+  // they measure different work, but "are you still in this conversation?" is a
+  // fact about the chat, not about which pass is asking.
+  //
+  // It exists because a finished TURN is not a finished CONVERSATION. The
+  // running flag clears the moment the agent stops talking, so without a wait a
+  // background run can start while you are typing your next message — examining
+  // half a conversation, out of a checkout your next turn is about to write
+  // into. Nothing waits on these runs, so delaying one costs nothing.
+  //
+  // Unset ⇒ 5, and 0 means no wait rather than off — the two intervals above are
+  // what switch a process off.
+  backgroundQuietMinutes?: number;
   // Char budgets for MEMORY.md and USER.md. The cap is the mechanism, not a
   // safety rail: a write that would exceed it is refused with the current
   // entries attached and an instruction to consolidate, which is what keeps

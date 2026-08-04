@@ -396,20 +396,28 @@ Separate croner from cron deliberately — a job scheduled for 2am should fire a
 
 Turns happen three ways — desktop, Telegram, cron — across two processes, and only this server sees all of them, because every turn's messages land in its `message` table whoever ran it. Hooking the turn would mean writing it twice and having it never fire while the desktop is closed. It also means there is no counter to keep: "how much has happened" is a count of rows past a mark on the chat, which cannot drift and survives restarts. hermes carries incremented counters precisely because it cannot count what actually happened.
 
-### A chat is not reviewable until its work has landed
+### A chat is not reviewable until its work has landed AND you have stopped talking
 
-`running` clears when the agent stops talking, which is **before** the check-in — `agentSend` ends with `setRunning(chatId, null)` and only then does the caller push. Both sweeps pick chats on `running = false`, so there is a window where a chat looks finished and its work is still in flight. A review run starting in that window clones a checkout **missing the work its conversation describes**, and two agents end up pushing to the same repo at once.
+Two conditions, in `settledAndQuiet(quietMs)` (`store.ts`), and they answer different questions. Both sweeps use it.
 
-So every server-side run lands through **`checkInAndStamp`** (`gitFixer.ts`), which checks in and then records `chat.checked_in_at`. The due queries require:
+**Landed.** `running` clears when the agent stops talking, which is **before** the check-in — `agentSend` ends with `setRunning(chatId, null)` and only then does the caller push. Both sweeps pick chats on `running = false`, so there is a window where a chat looks finished and its work is still in flight. A run starting in that window clones a checkout **missing the work its conversation describes**, and two agents end up pushing to the same repo at once. So every server-side run lands through **`checkInAndStamp`** (`gitFixer.ts`), which checks in and then records `chat.checked_in_at`:
 
 ```
-c.checked_in_at is null                                   -- desktop: nothing to wait for
+c.checked_in_at is null                                   -- desktop: no check-in exists
 or c.checked_in_at > (max message created_at for the chat) -- this turn's check-in has finished
 ```
 
 Nothing else pushes for a given chat, so a check-in later than the conversation's last word must be that turn's — which is why no turn-start column is needed.
 
-**The NULL arm is desktop chats, and it is not a loophole.** They never check in: their work reaches GitHub through the desktop's sync engine on a timer, unconnected to any chat. Without that arm, desktop chats — most of them — would never be reviewed again.
+**Settled.** Landed says the last *turn* ended. It says nothing about whether the *conversation* has, and `running` clears the instant the agent stops talking — so without a wait a run can start while the user is composing their next message. It then examines half a conversation, out of a checkout the next turn is about to write into. So the settling timestamp must also be `quietMs` old:
+
+```
+coalesce(c.checked_in_at, max message created_at) <= now() - quietMs
+```
+
+`quietMs` is `codingAgent.backgroundQuietMinutes` (synced; unset ⇒ 5, **0 means no wait**, not off — the two intervals are what switch a process off). **One number for both processes**, deliberately, and the one place they share something beyond the clock: they come due at different times because they measure different work, but *"is the user still in this conversation?"* is a fact about the source chat, not about which pass is asking. Two knobs would be two answers to one question. Nothing waits on these runs, so a longer wait costs nothing.
+
+**The NULL arm is desktop chats, it is not a loophole, and the quiet window is what makes it defensible.** They never check in — their files reach GitHub through the desktop's sync engine on its own timer (10s default), which reports to nobody, so the server has no landing to verify. Before the quiet window that arm was a bare pass: a desktop chat became eligible the instant the agent stopped talking, with its work possibly still sitting on the user's machine. Measuring the wait from the last message instead is a **bet, not proof** — minutes of silence against a ten-second tick — and it is knowingly wrong in one case: if sync is switched off for that workspace, offline, or stopped on a conflict, the work never lands and no wait length helps. Closing that properly means the desktop reporting its pushes to the server, which is a bigger change and not made. Dropping the NULL arm is not the alternative: without it, desktop chats — most of them — would never be examined again.
 
 **Stamped on failure too.** It records "we finished trying", not "we succeeded". A chat that is never stamped drops out of review permanently, and a conversation whose push conflicted is one worth learning from.
 
@@ -424,10 +432,11 @@ Not covered by an automated test: the due queries need a live Postgres, like the
 - **The mark is the chat's own high-water mark**, not `max(seq)` over the joined rows — the join is filtered by role, so that stops short of the rest of the conversation while the run read all of it.
 - **The mark also jumps to wherever the agent last did that job ITSELF** (`selfSaveMark` in `store.ts`): the newest `role='tool'` row whose `tool_name` is `manage_skill` / `memory`. hermes resets its equivalent counter on the foreground tool call and we had never ported that half — so a chat where the user said "remember that" and the agent did was still counted as owing the work, and got a background run to learn something already learned. Computed from data we already store, so nothing has to reach back from `agent-core` into Postgres to move a counter.
 - **`protect: true` plus awaiting the run inside the tick** bounds this to one background run in flight. That is also why their claim on the warm-checkout queue is *lighter* than cron's: cron can fire several jobs at once, these cannot.
+- **`settledAndQuiet` gates both sweeps, and both halves of it matter.** Drop the landed half and a run clones a checkout mid-push; drop the quiet half and it opens a chat the user is still typing into. `quietMs` is passed in rather than read here so `store.ts` keeps no settings import.
 
 ### Settings and migration
 
-`codingAgent.reviewInterval` and `codingAgent.memoryInterval` (synced; unset ⇒ 10, **0 disables** either one independently) are the thresholds — the numbers a user would actually change, which is why they are synced rather than env. The cadence (`REVIEW_SCHEDULE`) and master switch (`REVIEW_ENABLED`) are env, like `CRON_REFRESH_SCHEDULE` and `CRON_ENABLED`: server tuning, not user behaviour. The two char budgets (`memoryCharLimit` / `userCharLimit`) are synced too and travel to every run through `RunOpts`, so a memory pass never consolidates to a size the next desktop turn considers over the limit.
+`codingAgent.reviewInterval` and `codingAgent.memoryInterval` (synced; unset ⇒ 10, **0 disables** either one independently) are the thresholds — the numbers a user would actually change, which is why they are synced rather than env. `codingAgent.backgroundQuietMinutes` (synced; unset ⇒ 5, 0 = no wait) is the third, shared by both — see the section above. The cadence (`REVIEW_SCHEDULE`) and master switch (`REVIEW_ENABLED`) are env, like `CRON_REFRESH_SCHEDULE` and `CRON_ENABLED`: server tuning, not user behaviour. The two char budgets (`memoryCharLimit` / `userCharLimit`) are synced too and travel to every run through `RunOpts`, so a memory pass never consolidates to a size the next desktop turn considers over the limit.
 
 **Migration note.** Both `last_reviewed_seq` and `last_memory_seq` are seeded to each existing chat's current high-water mark rather than 0, or every chat in the database would be due the first time the sweep ran.
 

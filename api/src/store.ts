@@ -581,29 +581,47 @@ export async function setRunning(db: Db, chatId: string, machine: string | null)
  * Ordered oldest-first so a backlog drains in the order the work happened.
  */
 /**
- * Is this chat's work safely in GitHub, so a background run may open it?
+ * Has this chat's work reached GitHub, and has it been still for long enough,
+ * so a background run may open it?
  *
- * `running` clears when the agent stops talking, which is BEFORE the check-in.
- * Without this a chat whose push is still in flight looks finished: the run
- * would clone a checkout missing that work, and two agents would be pushing to
- * the same repo at once.
+ * Two conditions answering two different questions, and a chat needs both.
  *
- * Two ways to qualify:
+ * **Landed.** `running` clears when the agent stops talking, which is BEFORE the
+ * check-in. Without this a chat whose push is still in flight looks finished:
+ * the run clones a checkout missing that work, and two agents end up pushing to
+ * the same repo at once. `checked_in_at > the chat's newest message` is the
+ * proof — nothing else pushes for this chat, so a check-in later than the
+ * conversation's last word must be that turn's.
  *
- *   checked_in_at > the chat's newest message — the check-in that finished after
- *     the conversation's last word must be this turn's, since nothing else
- *     pushes for this chat.
- *   checked_in_at IS NULL — a desktop chat, which never checks in at all. Its
- *     work reaches GitHub through the sync engine on a timer, unconnected to any
- *     chat, so there is nothing to wait for. Without this arm, desktop chats —
- *     most of them — would never be reviewed again.
+ * **Settled.** Landed says the last turn finished. It says nothing about whether
+ * the user is still in the conversation, and `running` clears the instant the
+ * agent stops talking — so a reply thirty seconds later means the run just
+ * examined half a conversation, out of a checkout the next turn is about to
+ * write into. `quietMs` of silence is what separates "the turn ended" from "the
+ * conversation ended".
+ *
+ * **A desktop chat has no check-in at all** (`checked_in_at` is NULL forever) —
+ * its files reach GitHub through the sync engine's own timer, which reports to
+ * nobody. So there is no landing to prove and the quiet window is measured from
+ * the last message instead. That is a *bet*, not proof: the sync tick is ten
+ * seconds and the window is minutes, so the push has almost certainly happened.
+ * Almost. If sync is switched off, offline, or stopped on a conflict, no wait
+ * long enough exists and the run reads a stale tree — the price of the NULL arm,
+ * which is itself non-negotiable, since without it desktop chats (most of them)
+ * would never be examined again.
  */
-const checkInSettled = sql`(
-  c.checked_in_at is null
-  or c.checked_in_at > (select max(created_at) from message where chat_id = c.id)
+const settledAndQuiet = (quietMs: number) => sql`(
+  (
+    c.checked_in_at is null
+    or c.checked_in_at > (select max(created_at) from message where chat_id = c.id)
+  )
+  and coalesce(
+    c.checked_in_at,
+    (select max(created_at) from message where chat_id = c.id)
+  ) <= ${now() - quietMs}
 )`;
 
-export async function chatsDueForReview(db: Db, threshold: number, limit = 5) {
+export async function chatsDueForReview(db: Db, threshold: number, quietMs: number, limit = 5) {
   const rows = await db.execute(sql`
     select c.id            as "chatId",
            c.workspace_id  as "workspaceId",
@@ -627,7 +645,7 @@ export async function chatsDueForReview(db: Db, threshold: number, limit = 5) {
      where c.deleted = false
        and c.running = false
        and coalesce(c.source, '') not in ('review', 'memory')
-       and ${checkInSettled}
+       and ${settledAndQuiet(quietMs)}
      group by c.id, c.workspace_id
     having count(m.seq) >= ${threshold}
      order by min(m.created_at) asc
@@ -646,7 +664,7 @@ export async function chatsDueForReview(db: Db, threshold: number, limit = 5) {
  * would put a branch in each of those spots, which is how the next change to one
  * process silently lands in the other.
  */
-export async function chatsDueForMemory(db: Db, threshold: number, limit = 5) {
+export async function chatsDueForMemory(db: Db, threshold: number, quietMs: number, limit = 5) {
   const rows = await db.execute(sql`
     select c.id            as "chatId",
            c.workspace_id  as "workspaceId",
@@ -661,7 +679,7 @@ export async function chatsDueForMemory(db: Db, threshold: number, limit = 5) {
      where c.deleted = false
        and c.running = false
        and coalesce(c.source, '') not in ('review', 'memory')
-       and ${checkInSettled}
+       and ${settledAndQuiet(quietMs)}
      group by c.id, c.workspace_id
     having count(m.seq) >= ${threshold}
      order by min(m.created_at) asc
