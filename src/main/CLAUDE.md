@@ -209,7 +209,19 @@ Chats run concurrently (one live pi session per chat). Events forwarded to the r
 
 ### Live feed — one always-on stream
 
-`startLiveFeed()` (called once in `whenReady`, stopped on `before-quit`) holds **one** SSE connection to the companion's `GET /events` for the life of the app, carrying every chat's events — Telegram, cron, and the same chat open on another machine — and forwards them into the same `agent:event` channel a local turn uses, so a remote turn draws identically. It reconnects forever with backoff; on reconnect it fires `chat:feedResync` so the renderer re-reads its loaded chats (anything during the outage was missed).
+`startLiveFeed()` (called once in `whenReady`, stopped on `before-quit`) holds **one** SSE connection to the companion's `GET /events` for the life of the app, carrying every chat's events — Telegram, cron, and the same chat open on another machine — and forwards them into the same `agent:event` channel a local turn uses, so a remote turn draws identically. On reconnect it fires `chat:feedResync` so the renderer re-reads its loaded chats (anything during the outage was missed).
+
+**Reconnecting is three rules and nothing else** — no backoff, no liveness check, no state to get wrong:
+
+1. **Retry every 5s, flat, forever** (`FEED_RETRY_MS`).
+2. **Opening the stream has a 10s deadline** (`STREAM_CONNECT_TIMEOUT_MS` in `client.ts`); the *open* stream has none, because a quiet companion legitimately sends nothing for hours.
+3. **`startLiveFeed()` tears down first and never skips.** Call it whenever, from wherever, as often as you like.
+
+> Rule 3 is why the app used to need a click. It opened with `if (feedAbort) return`, and `feedAbort` is set the instant `api.stream` *returns* — before the response arrives. So an attempt that hung (a half-closed socket after sleep/wake, a restarting companion — no RST, the socket just sits) held that flag with no retry pending, and every later attempt returned at the door. The app sat offline permanently with the retry loop intact and locked out of it. Settings → Connect worked only because `api:write` calls `stopLiveFeed()` first, cancelling the hung attempt. Rule 2 is what makes rule 3's teardown enough: nothing can be blocked by something stuck, because nothing is allowed to still be there.
+>
+> **`powerMonitor.on('resume')` reconnects unconditionally, not "if offline"** — waking is the one moment the connection can be gone with nothing saying so, so its own report of being online is the thing that isn't trustworthy. Window focus deliberately gets no handler: it fires constantly and could only save a few seconds of an outage the 5s loop is already working through.
+>
+> The companion writes `: ping` every 10s (`api/src/server.ts`) purely so routers and proxies don't cut an idle line. **The desktop never counts pings and has no silence timer.** A broken connection surfaces as the connection breaking; one that broke without surfacing is fixed on wake.
 
 Events **this machine produced** are dropped (`e.machine === os.hostname()`; `agent-core` stamps every event it emits): they already reached the renderer over IPC, and we POST every one of them up to `/chat/:id/events` so other clients see them — the copy coming back would double-render.
 
@@ -221,7 +233,7 @@ Events **this machine produced** are dropped (`e.machine === os.hostname()`; `ag
 
 The feed is also the app's **reachability signal**. Its stream opening means the companion answered; its `done()` means we lost it. `setCompanionOnline(online)` is edge-triggered on those two points and is the ONLY place companion-owned renderer state is refreshed: going online calls `notifyWorkspacesChanged()`, which re-reads and pushes `workspaces` + `activeWorkspaceId` down the existing `settings:changed` channel. It also broadcasts `companion:state` so the UI can distinguish "couldn't ask" from "nothing there".
 
-**Do not add a refresh call to any new site that changes connectivity — route it through the feed instead.** `api:write` (Settings → Connect) is the worked example: it doesn't refetch anything, it calls `stopLiveFeed()` + `startLiveFeed()`, and the reopen does the refresh. That also makes connecting immediate, since the retry loop backs off to 30s. `api:test` does the same on a successful probe while offline — the settings-nav gate follows `companionOnline`, so a probe that succeeds must not leave the feed parked in its backoff.
+**Do not add a refresh call to any new site that changes connectivity — route it through the feed instead.** `api:write` (Settings → Connect) is the worked example: it doesn't refetch anything, it calls `stopLiveFeed()` + `startLiveFeed()`, and the reopen does the refresh. `api:test` does the same on a successful probe while offline — the settings-nav gate follows `companionOnline`, so a probe that succeeds must not leave it waiting out a retry interval. (Both predate the reconnect rules above and are now belt rather than mechanism: the loop recovers on its own within 5s either way.)
 
 > This replaced a single refresh site — the renderer's boot read. Workspaces live only on the companion, so a desktop that started while it was down held an empty list for the whole session: neither the companion coming back (including from its own upgrade restart) nor connecting one in Settings asked again, and quitting the app was the only recovery. The fix is deliberately *not* a refresh call at each of those places; that's the pattern that missed them. Adding a fourth would miss the fifth.
 >

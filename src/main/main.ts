@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, protocol, net, safeStorage, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, protocol, net, safeStorage, screen, powerMonitor } from 'electron';
 // CJS package with lazy getter exports — named ESM imports fail at runtime
 // (cjs-module-lexer can't see them); destructure off the default instead.
 import electronUpdater from 'electron-updater';
@@ -2149,7 +2149,11 @@ ipcMain.handle('app:machineId', () => os.hostname());
 // a chat you already had open could never start listening at all.
 let feedAbort: (() => void) | null = null;
 let feedRetry: NodeJS.Timeout | null = null;
-let feedBackoff = 1000;
+
+// Flat, and short. There is no backing off: a retry is one request against one
+// server the user owns, and the cost of being wrong about how long the outage
+// will last is that the app sits disconnected long after the companion is back.
+const FEED_RETRY_MS = 5_000;
 
 // ── Companion connection state — ONE rule, not a list of refresh call sites ──
 //
@@ -2206,17 +2210,28 @@ function setCompanionOnline(online: boolean) {
   else if (refreshRetry) { clearTimeout(refreshRetry); refreshRetry = null; }
 }
 
+// Open the feed, replacing whatever is there. Safe to call at any moment, from
+// anywhere, however many times — that is the point.
+//
+// It used to open with `if (feedAbort) return`, and that guard is what made the
+// app need a click. `feedAbort` is set the instant `api.stream` RETURNS, which
+// is before the response arrives — so an attempt that hung (see the connect
+// deadline in client.ts) held the flag with no retry pending, and every later
+// attempt returned at the door. The app sat offline forever with the retry loop
+// intact but permanently locked out of it. Pressing Connect worked only because
+// `api:write` calls stopLiveFeed() first, which cancelled the hung attempt.
+//
+// So: no skip. Tear down first, then start. Nothing can be blocked by something
+// that is stuck, because nothing is allowed to still be there.
 function startLiveFeed() {
-  if (feedAbort) return;
-  let opened = false;
+  stopLiveFeed();
   const done = () => {
     feedAbort = null;
     setCompanionOnline(false);
     // Reconnect forever. Anything that happened while we were down was missed,
     // so the renderer re-reads its loaded chats once we're back.
     if (feedRetry) clearTimeout(feedRetry);
-    feedBackoff = opened ? 1000 : Math.min(feedBackoff * 2, 30_000);
-    feedRetry = setTimeout(startLiveFeed, feedBackoff);
+    feedRetry = setTimeout(startLiveFeed, FEED_RETRY_MS);
   };
   const announceReconnect = () => {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -2225,7 +2240,6 @@ function startLiveFeed() {
   };
   try {
     feedAbort = api.stream('/events', (e) => {
-      feedBackoff = 1000;
       // The companion changed a setting itself — `/voice` from the bot is the
       // first of these. Re-read and push a full snapshot; the event deliberately
       // carries no value, so there is one source of truth and one route to it.
@@ -2254,13 +2268,12 @@ function startLiveFeed() {
       // to fire on the FIRST EVENT instead, so a quiet server (no chats
       // running) reconnected silently — chat resync stalled, and nothing could
       // hang off "the companion came back".
-      opened = true;
       setCompanionOnline(true);
       announceReconnect();
       void onFeedOpen();
     });
   } catch {
-    done(); // not configured yet — retry with backoff
+    done(); // not configured yet — retry on the same 5s loop
   }
 }
 
@@ -2856,6 +2869,17 @@ app.whenReady().then(async () => {
   // Hold the companion's live feed open for the whole session, so a Telegram or
   // cron turn streams into the UI whether or not that chat is on screen.
   startLiveFeed();
+  // Waking is the one moment the connection can be gone with nothing saying so:
+  // the machine slept, its sockets went stale, and nothing was transmitting to
+  // find out. So reconnect UNCONDITIONALLY rather than "if offline" — offline is
+  // exactly what this case fails to report about itself. (`powerMonitor` may not
+  // be touched before ready, which is why it is wired here and not at module
+  // scope beside the feed.)
+  //
+  // Window focus deliberately gets no handler: it fires constantly, and against a
+  // flat 5s retry it could only ever save a few seconds of an outage the loop is
+  // already working through.
+  powerMonitor.on('resume', () => startLiveFeed());
   // One-time carry-over of a pre-sqlite `settings.json` into the `setting`
   // table. No-op once the table has rows. Must precede every settings read
   // below, or the app would boot on defaults and then persist over the import.

@@ -52,6 +52,15 @@ function transportError(err: any, url: string): ApiError {
 // timeout to reach for, and a bound on total time is not a substitute for one.
 const HEALTH_TIMEOUT_MS = 20_000;
 
+// The other bounded thing: OPENING a stream. Not the stream itself — once the
+// response arrives it stays open for hours with no deadline at all. This covers
+// the attempt, because the caller's entire retry loop waits on this one call to
+// finish, and a server that accepts the connection and then says nothing (a
+// half-closed socket after sleep/wake, a restarting companion — no RST, the
+// socket just sits) makes it never finish. That stalled the live feed forever:
+// nothing failed, so nothing retried. Same reasoning as the health probe above.
+const STREAM_CONNECT_TIMEOUT_MS = 10_000;
+
 function base(): { url: string; apiKey: string } {
   const c = readApiConfig();
   if (!c.url || !c.apiKey) throw new ApiError('config', 'The Shockwave server is not configured.');
@@ -159,19 +168,27 @@ export const api = {
   // frame (parsed JSON); `onOpen` fires once when the stream's HTTP response
   // arrives (the connection is up — before any event, which on a quiet server
   // may be a long way off); `onClose` fires once when the stream ends for any
-  // reason (abort, drop, non-2xx) so the caller can reconnect. Returns an abort
-  // fn. No timeout — it stays open until aborted or the connection drops.
+  // reason (abort, drop, non-2xx, or failing to open in time) so the caller can
+  // reconnect. Returns an abort fn.
+  //
+  // OPENING is bounded (STREAM_CONNECT_TIMEOUT_MS); the open stream is not, and
+  // must not be — a quiet companion sends nothing for hours and that is normal.
   stream(pathname: string, onEvent: (evt: any) => void, onClose?: () => void, onOpen?: () => void): () => void {
     const { url, apiKey } = base();
     const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
     const ctrl = new AbortController();
     let aborted = false;
+    // Aborting fires the catch below, so a timed-out attempt reaches `onClose`
+    // like any other failure and the caller's retry loop carries on.
+    let connectTimer: NodeJS.Timeout | null = setTimeout(() => ctrl.abort(), STREAM_CONNECT_TIMEOUT_MS);
+    const clearConnectTimer = () => { if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; } };
     (async () => {
       try {
         const res = await companionFetch(target, {
           headers: { Authorization: `Bearer ${apiKey}`, Accept: 'text/event-stream' },
           signal: ctrl.signal,
         });
+        clearConnectTimer(); // answered — the deadline covered opening, not reading
         if (!res.ok || !res.body) return;
         onOpen?.();
         const reader = res.body.getReader();
@@ -191,9 +208,11 @@ export const api = {
             }
           }
         }
-      } catch { /* aborted or connection dropped */ }
+      } catch { /* aborted, timed out, or connection dropped */ }
+      clearConnectTimer();
       if (!aborted) onClose?.(); // dropped on its own → caller reconnects
     })();
-    return () => { aborted = true; ctrl.abort(); }; // deliberate stop → no onClose, no reconnect
+    // Deliberate stop → no onClose, no reconnect.
+    return () => { aborted = true; clearConnectTimer(); ctrl.abort(); };
   },
 };

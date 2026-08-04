@@ -183,7 +183,11 @@ app.get('/events', (req, res) => {
   });
   res.write(': connected\n\n'); // open the stream immediately
   const unsubscribe = feed.subscribe(res);
-  const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25_000);
+  // Keeps routers/proxies from cutting an idle line — nothing more. The client
+  // never counts these or reacts to them; it only reconnects when the connection
+  // actually breaks. Fixed, not configurable: the number means nothing on its own
+  // and a knob only creates two places for it to disagree.
+  const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 10_000);
   req.on('close', () => { clearInterval(ping); unsubscribe(); });
 });
 
