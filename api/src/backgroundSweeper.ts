@@ -56,8 +56,8 @@ const ENABLED = (process.env.REVIEW_ENABLED ?? 'true').toLowerCase() !== 'false'
  *  its equivalents to 10. */
 const DEFAULT_INTERVAL = 10;
 
-/** Unset ⇒ 5 minutes, read at the point of use for the same reason. */
-const DEFAULT_QUIET_MINUTES = 5;
+/** Unset ⇒ 10 minutes, read at the point of use for the same reason. */
+const DEFAULT_QUIET_MINUTES = 10;
 
 /**
  * A threshold, or 0 meaning the user turned that process off.

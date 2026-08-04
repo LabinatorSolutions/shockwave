@@ -375,7 +375,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   );
   // Explicit-blank again, and for a different reason than its neighbours: 0 here
   // means "start as soon as a chat is eligible", not "off". The shorthand would
-  // read that as unset and silently reinstate the five-minute wait.
+  // read that as unset and silently reinstate the ten-minute wait.
   const quietField = useCommitField(
     caBackgroundQuietMinutes == null ? '' : String(caBackgroundQuietMinutes),
     (next) => updateCa({ backgroundQuietMinutes: next === '' ? undefined : Number(next) }),
@@ -530,7 +530,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
               className={NUMBER_FIELD}
               type="number"
               min={0}
-              placeholder="5"
+              placeholder="10"
               value={quietField.value}
               onChange={(e) => quietField.onChange(e.target.value)}
               onBlur={quietField.onBlur}

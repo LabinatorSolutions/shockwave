@@ -41,7 +41,7 @@ export interface BackgroundKind {
   /** `chat.source`, and the name in the log. Also picks the run's tool set
    *  (`toolsForSource` in agent-core) — which is why it must be exactly the
    *  string the catalog scopes on. */
-  source: 'review' | 'memory';
+  source: store.BackgroundSource;
   /** The chat's title, and the commit subject. */
   title: string;
   /** The instruction this run receives, on top of the conversation it resumed. */

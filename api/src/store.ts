@@ -495,18 +495,34 @@ export async function upsertChat(db: Db, row: {
  * is 'review' or 'memory'; a run that inherited 'desktop' would cross its own
  * threshold, come due, and review itself — forever. The watermarks are likewise
  * fresh: they belong to the chat being examined, not to the examination.
+ *
+ * It also REFUSES a source chat that is itself a background run, which the SQL
+ * above is already supposed to prevent — see `BACKGROUND_SOURCES`. Two guards
+ * because they cover different failures: the query decides what gets picked, and
+ * this decides what may be opened however it was picked. This one is the cheap
+ * half of the pair (one column on a select that already runs) and it is the half
+ * that cannot be bypassed by adding a second caller.
  */
 export async function cloneChatForBackground(db: Db, opts: {
-  sourceChatId: string; newChatId: string; source: 'review' | 'memory'; title: string;
+  sourceChatId: string; newChatId: string; source: BackgroundSource; title: string;
 }): Promise<{ workspaceId: string; workspacePathHint: null }> {
   const [src] = await db.select({
     workspaceId: chatTable.workspaceId,
     systemPrompt: chatTable.systemPrompt,
     model: chatTable.model,
     transcript: chatTable.transcript,
+    source: chatTable.source,
   }).from(chatTable).where(eq(chatTable.chatId, opts.sourceChatId));
 
   if (!src) throw new Error(`Chat ${opts.sourceChatId} not found.`);
+  // Throws rather than returning quietly: nothing legitimate asks for this, so a
+  // caller that does is broken and should be visible in the log as broken. The
+  // sweeper already catches per-run failures, so it costs one tick.
+  if (isBackgroundSource(src.source)) {
+    throw new Error(
+      `Chat ${opts.sourceChatId} is a ${src.source} run — a background run cannot examine another background run.`,
+    );
+  }
   // Both are required to continue the conversation, and a run that silently
   // started from empty would look like a review that found nothing to say.
   if (!src.transcript) throw new Error(`Chat ${opts.sourceChatId} has no stored conversation to review.`);
@@ -561,6 +577,38 @@ export async function setRunning(db: Db, chatId: string, machine: string | null)
 }
 
 // ── Reviews sweep ───────────────────────────────────────────────────
+
+/**
+ * The chats a background run must never open: the ones background runs produce.
+ *
+ * A review run makes tool calls and holds a conversation like any other chat, so
+ * left eligible it crosses its own threshold, reviews itself, and the review of
+ * that review does the same — a run every tick, forever, each one landing a
+ * commit. A memory run is the same shape, and the two cross-contaminate: a
+ * memory run's messages must not make it due for REVIEW either, which is why one
+ * list covers both sweeps rather than each excluding only itself.
+ *
+ * Declared once and used three times — both sweep queries and
+ * `cloneChatForBackground` — because the two queries are deliberately near-copies
+ * of each other (see `chatsDueForMemory`) and this is the one line in them that
+ * must never differ. It is also why the runtime guard exists at all: the SQL
+ * decides which chat is PICKED, and a hole anywhere else that reaches
+ * `runBackground` — a hand-edited query, a manual re-run route added later —
+ * bypasses it entirely. The clone is the choke point every background run passes
+ * through, whatever selected it.
+ */
+export const BACKGROUND_SOURCES = ['review', 'memory'] as const;
+export type BackgroundSource = (typeof BACKGROUND_SOURCES)[number];
+
+export function isBackgroundSource(source: string | null | undefined): boolean {
+  return BACKGROUND_SOURCES.includes(source as BackgroundSource);
+}
+
+/** The same rule as a predicate on `chat c`. Built from the list above so the
+ *  two cannot drift apart. */
+const notBackgroundChat = sql`coalesce(c.source, '') not in (${
+  sql.join(BACKGROUND_SOURCES.map((s) => sql`${s}`), sql`, `)
+})`;
 
 /**
  * Chats with at least `threshold` tool calls since they were last reviewed.
@@ -644,7 +692,7 @@ export async function chatsDueForReview(db: Db, threshold: number, quietMs: numb
        and m.role = 'tool'
      where c.deleted = false
        and c.running = false
-       and coalesce(c.source, '') not in ('review', 'memory')
+       and ${notBackgroundChat}
        and ${settledAndQuiet(quietMs)}
      group by c.id, c.workspace_id
     having count(m.seq) >= ${threshold}
@@ -678,7 +726,7 @@ export async function chatsDueForMemory(db: Db, threshold: number, quietMs: numb
        and m.role = 'user'
      where c.deleted = false
        and c.running = false
-       and coalesce(c.source, '') not in ('review', 'memory')
+       and ${notBackgroundChat}
        and ${settledAndQuiet(quietMs)}
      group by c.id, c.workspace_id
     having count(m.seq) >= ${threshold}
