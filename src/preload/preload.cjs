@@ -461,12 +461,14 @@ contextBridge.exposeInMainWorld('api', {
      *  @returns {Promise<{ voices?: Array<{id: string, name: string, preview?: string}>,
      *                      error?: string }>} */
     listVoices: () => ipcRenderer.invoke('voice:listVoices'),
-    /** What the stored key can actually DO. Deepgram gates transcription and
-     *  token-minting separately, so a good restricted key is `{ok:true,
-     *  canStream:false}` rather than a failure.
-     *  @returns {Promise<{ ok: boolean, canStream?: boolean, engineName?: string,
-     *                      streamError?: string, error?: string }>} */
-    verifyKey: () => ipcRenderer.invoke('voice:verifyKey'),
+    /** What ONE vendor's stored key is permitted to do, job by job. `ok:false` is
+     *  the key being refused outright; otherwise `checks` carries a verdict per
+     *  job that vendor supports, and some of them may have failed.
+     *  @param {string} slug
+     *  @returns {Promise<{ ok: boolean, engineName?: string, error?: string,
+     *                      checks?: Array<{ job: 'listen'|'mic'|'speak', ok: boolean,
+     *                                       detail?: string }> }>} */
+    verifyKey: (slug) => ipcRenderer.invoke('voice:verifyKey', slug),
   },
 
   // ---- App / updates ------------------------------------------------------

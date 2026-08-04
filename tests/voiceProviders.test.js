@@ -15,9 +15,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   VOICE_PROVIDERS, voiceProvider, voiceLabel, listenProviders, speakProviders,
-  voiceConfigOf, listenProviderOf, speakProviderOf,
-  keyForProvider, listenKey, speakKey, canSpeak,
-  DEFAULT_LISTEN,
+  voiceConfigOf, listenProviderOf, speakProviderOf, micProviderOf,
+  keyForProvider, listenKey, speakKey, micKey, canSpeak,
+  providersFor, providerForJob, canDo, micProviders,
 } from '../agent-core/voiceProviders.ts';
 
 // ── the matrix ───────────────────────────────────────────────────────────────
@@ -62,13 +62,106 @@ test('an unknown slug resolves to nothing and labels as itself', () => {
 
 // ── which vendor, and which key ──────────────────────────────────────────────
 
-test('listening has a default and speaking deliberately does not', () => {
-  // Speaking costs money on every reply, so an unconfigured install must not
-  // arrive already pointed at a vendor.
-  assert.equal(listenProviderOf({}), DEFAULT_LISTEN);
-  assert.equal(listenProviderOf(null), 'assemblyai');
-  assert.equal(speakProviderOf({}), '');
-  assert.equal(speakProviderOf(null), '');
+test('nothing stored resolves to nothing — no vendor is named out of thin air', () => {
+  // `DEFAULT_LISTEN = 'assemblyai'` used to sit here and it named a vendor
+  // whether or not a key for it existed, so an install was told "No AssemblyAI
+  // key — add one" for a provider nobody had picked. Unset must read as unset.
+  for (const input of [{}, null, undefined]) {
+    assert.equal(listenProviderOf(input), '');
+    assert.equal(micProviderOf(input), '');
+    assert.equal(speakProviderOf(input), '');
+  }
+});
+
+test('one key and one capable vendor resolves itself — that is not a default', () => {
+  // Resolution from stored data: the answer is unreachable unless the key is
+  // actually there, which is the whole difference from the old constant.
+  const config = voiceConfigOf({ voiceKeys: { elevenlabs: 'xi' } });
+  assert.equal(listenProviderOf(config), 'elevenlabs');
+  assert.equal(micProviderOf(config), 'elevenlabs');
+});
+
+test('speaking never resolves itself, however few keys there are', () => {
+  // It costs money per reply. Pasting a key to transcribe with must not start
+  // synthesizing audio nobody asked for.
+  const config = voiceConfigOf({ voiceKeys: { elevenlabs: 'xi' } });
+  assert.equal(speakProviderOf(config), '');
+  assert.equal(canSpeak(config), false);
+});
+
+test('two keys and no choice stays unset rather than guessing', () => {
+  const config = voiceConfigOf({ voiceKeys: { assemblyai: 'a', deepgram: 'd' } });
+  assert.equal(listenProviderOf(config), '');
+  assert.equal(micProviderOf(config), '');
+});
+
+test('a chosen vendor that cannot do the job is ignored, not obeyed', () => {
+  // AssemblyAI in the speaking slot is not a thing that can happen through the
+  // UI, but a hand-edited settings row must not make `speak.ts` reach for a
+  // vendor with no synthesis endpoint.
+  const config = voiceConfigOf({
+    speech: { provider: 'assemblyai' },
+    voiceKeys: { assemblyai: 'a' },
+  });
+  assert.equal(speakProviderOf(config), '');
+});
+
+// ── the microphone is its own assignment ─────────────────────────────────────
+
+test('the microphone follows transcription until it is pointed somewhere else', () => {
+  const shared = voiceConfigOf({
+    transcription: { provider: 'deepgram' },
+    voiceKeys: { deepgram: 'dg' },
+  });
+  assert.equal(micProviderOf(shared), 'deepgram', 'one account doing both jobs is the ordinary case');
+
+  // The case the assignment exists for: Deepgram's DEFAULT key transcribes and
+  // cannot mint a streaming token, so the mic goes elsewhere while transcription
+  // stays put. Before this the mic was simply dead with nowhere to go.
+  const split = voiceConfigOf({
+    transcription: { provider: 'deepgram', micProvider: 'assemblyai' },
+    voiceKeys: { deepgram: 'dg', assemblyai: 'aai' },
+  });
+  assert.equal(listenProviderOf(split), 'deepgram');
+  assert.equal(micProviderOf(split), 'assemblyai');
+  assert.equal(listenKey(split), 'dg');
+  assert.equal(micKey(split), 'aai');
+});
+
+test('providerForJob answers for all three jobs', () => {
+  const config = voiceConfigOf({
+    transcription: { provider: 'deepgram', micProvider: 'assemblyai' },
+    speech: { provider: 'elevenlabs' },
+    voiceKeys: { deepgram: 'dg', assemblyai: 'aai', elevenlabs: 'xi' },
+  });
+  assert.equal(providerForJob(config, 'listen'), 'deepgram');
+  assert.equal(providerForJob(config, 'mic'), 'assemblyai');
+  assert.equal(providerForJob(config, 'speak'), 'elevenlabs');
+});
+
+test('mic is a capability in its own right, separate from listen', () => {
+  // `mic` is optional on the table, so a transcribe-only vendor added later
+  // cannot silently become the microphone by inheriting the transcription slot.
+  assert.deepEqual(micProviders().map((p) => p.slug), ['assemblyai', 'deepgram', 'elevenlabs']);
+  assert.equal(canDo(voiceProvider('assemblyai'), 'mic'), true);
+  assert.equal(canDo(voiceProvider('assemblyai'), 'speak'), false);
+  assert.deepEqual(providersFor('speak').map((p) => p.slug), ['deepgram', 'elevenlabs']);
+});
+
+// ── the renderer resolves through the same functions ─────────────────────────
+
+test('presence flags stand in for keys, so Settings resolves as the app does', () => {
+  // The renderer never receives key values — main strips them and sends
+  // `hasVoiceKey`. If the page had to reimplement "which vendor does this job",
+  // Settings could show one answer while the agent used another.
+  const fromFlags = voiceConfigOf({ hasVoiceKey: { elevenlabs: true, deepgram: false } });
+  assert.equal(listenProviderOf(fromFlags), 'elevenlabs', 'a true flag counts as a key');
+  assert.equal(keyForProvider(fromFlags, 'deepgram'), undefined, 'a false flag does not');
+
+  // Real keys still win where they exist — main is not affected by any of this.
+  const fromKeys = voiceConfigOf({ voiceKeys: { deepgram: 'dg' }, hasVoiceKey: { elevenlabs: true } });
+  assert.equal(keyForProvider(fromKeys, 'deepgram'), 'dg');
+  assert.equal(keyForProvider(fromKeys, 'elevenlabs'), undefined);
 });
 
 test('one key per vendor serves both directions', () => {

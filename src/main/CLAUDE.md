@@ -373,7 +373,11 @@ Turning off only the first moves the download decision to the user while leaving
 
 ## Voice IPC
 
-`voice:getToken` mints a short-lived streaming token from whichever vendor `settings.transcription.provider` names — AssemblyAI's `/v3/token`, Deepgram's `/v1/auth/grant`, or ElevenLabs' `/v1/single-use-token/realtime_scribe`. **One handler covers all three because all three offer exactly this**, which is why the desktop can switch engines without weakening anything: the long-lived key never leaves main, and only the session credential crosses to the renderer.
+**Three jobs, assigned separately: `mic`, `listen`, `speak`.** `providerForJob(config, job)` in `agent-core/voiceProviders.ts` is the one place that answers "which vendor does this", and `resolveVoiceEngine(job)` is main's wrapper around it. The microphone is its own assignment (`transcription.micProvider`, unset ⇒ whatever transcribes) because **a key can be permitted to transcribe and not to stream, and on Deepgram that is the DEFAULT key** — so without it the ordinary Deepgram setup is a dead mic with nowhere to go.
+
+> **There is no `DEFAULT_LISTEN` any more, and reintroducing one is a regression.** It was `'assemblyai'`, applied whether or not a key for that vendor existed — so an install holding one ElevenLabs key was told *"No AssemblyAI key — add one"*, naming a vendor nobody had chosen for a job a working key already existed for. Unset now reads as unset (`"No transcription provider selected"`). What replaced it is **resolution, not a default**: `soleKeyedProvider` picks a vendor only when exactly one capable vendor **has a key**, so the old answer is unreachable and ambiguity stays unset. Speaking is deliberately excluded from even that — it costs money per reply, so pasting a transcription key must never start synthesizing.
+
+`voice:getToken` mints a short-lived streaming token from whichever vendor the **microphone** is assigned to — AssemblyAI's `/v3/token`, Deepgram's `/v1/auth/grant`, or ElevenLabs' `/v1/single-use-token/realtime_scribe`. **One handler covers all three because all three offer exactly this**, which is why the desktop can switch engines without weakening anything: the long-lived key never leaves main, and only the session credential crosses to the renderer.
 
 It returns **`{ token, provider, tokenTtlMs, singleUse }`**. The provider has to come back with the token — the renderer needs it to pick the socket URL and to read what comes back, and inferring it from a second settings read would be a second answer that can disagree with the one the token was minted against. **`tokenTtlMs` and `singleUse` travel for the same reason and are not decoration**: AssemblyAI and Deepgram issue reusable 60-second tokens, which is what the renderer's cache was built around, while **ElevenLabs' is good for 15 minutes and is consumed on first use**. A constant cache window is wrong for both — it throws away a good ElevenLabs token, and reusing one fails the SECOND microphone click at connect time with a bare `onerror` that says nothing about why the first worked.
 
@@ -381,11 +385,23 @@ It returns **`{ token, provider, tokenTtlMs, singleUse }`**. The provider has to
 
 Which vendor, and which key that implies, is `agent-core/voiceProviders.ts`'s job — main never branches on a provider string itself. That table replaced four `provider === 'deepgram'` ternaries here.
 
-**`voice:verifyKey` is a separate question and must stay separate.** The one transcription key feeds three consumers — the microphone, Telegram voice notes, the agent's `transcribe` tool — and **Deepgram gates them differently**: transcribing needs any valid key, minting a streaming token needs Member or higher. So the mint is not a proxy for "is this key good". It asks `GET /v1/auth/token` and then the grant, returning `{ ok, canStream }`; AssemblyAI has one credential with one capability, so there the mint is still the whole answer.
+**`voice:verifyKey(slug)` asks ONE vendor what its key is permitted to do, job by job.** Not the assigned vendor — the named one, because the settings page lists every vendor and each row checks its own key. It returns `{ ok, engineName, checks: [{ job, ok, detail? }] }`, one entry per job that vendor supports; `ok: false` is the key being refused outright, and there is then nothing to report per job.
+
+Each check is **the real call the job makes**, because every cheaper proxy has been wrong here at least once:
+
+| job | check | why not something cheaper |
+|---|---|---|
+| `listen` | key validity (`checkVoiceKeyValid`) | no vendor we carry gates transcription separately. If one ever does it needs its own probe, not an assumption. |
+| `mic` | `mintVoiceToken` — the actual grant | the one permission that genuinely splits. See the box below. |
+| `speak` | `probeSpeak` — synthesizes two characters and throws the audio away | a key can be valid, list voices happily, and still lack permission to synthesize (ElevenLabs scopes per endpoint) or have no credit. |
+
+> **Nothing checked speaking at all before this**, which is exactly how a broken speech key stayed invisible until a Telegram reply failed to come back as audio and the page still showed green. `probeSpeak` lives in `agent-core/speak.ts` and goes through the same `PROVIDERS` table a real reply does — so it exercises the configured voice and model rather than a second copy of the vendor's URL, and adding a vendor is still one function. It never throws: verifying a key must not fail louder than using one.
+
+`checkVoiceKeyValid` picks the one call any live key passes whatever it is permitted to DO — Deepgram `GET /v1/auth/token`, ElevenLabs `GET /v1/user`, and for AssemblyAI the token mint, since it ships no key-check endpoint and its key has exactly one capability anyway.
 
 > **Read `/v1/auth/token`'s `scopes` — the 200 means nothing.** That endpoint accepts any valid key and only reports whose it is, so treating the status code as "this key transcribes" is wrong: a key scoped `account:write` answers 200 and cannot transcribe a syllable. It shipped that way for an afternoon and told a user their unusable key was fine. The response body carries the key's own `scopes`, which is the actual answer — `usage:write` (or a `member`/`admin`/`owner` role, which bundle it) transcribes; only the roles can mint. Both failure messages name the scopes they found, because that string is what turns "insufficient permissions" into a console click. **Deepgram's key-creation default is `usage:write`, which lands exactly in the can't-mint case** — Member is behind the "Advanced" toggle.
 
-`ok: true, canStream: false` is a **restricted Deepgram key** — genuinely fine for everything but the microphone. Settings paints that green with a note rather than red; treating it as a failure tells the user to replace a key that works. Both handlers share `resolveVoiceEngine` / `mintVoiceToken` / `voiceFailure`, so the reason string can't drift between the thing that starts the mic and the thing that reports on it.
+A `mic` check that failed while `listen` passed is a **restricted Deepgram key** — genuinely fine for everything but the microphone. Settings prints it as a muted per-job line rather than red, because treating it as a failure tells the user to replace a key that works. **And now it is actionable**: point the Microphone assignment at another vendor. `voice:verifyKey` and `voice:getToken` share `mintVoiceToken` / `voiceFailure`, so the reason string can't drift between the thing that starts the mic and the thing that reports on it.
 
 The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/CLAUDE.md`.
 
@@ -401,7 +417,7 @@ The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/C
 | OAuth | `oauth:listPresets`, `oauth:startConnect`, `oauth:disconnect` |
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |
-| Agent Voice | `voice:getToken` (also reports the token's lifetime + whether it survives use), `voice:verifyKey` (per-capability key check — see below), `voice:listVoices` (the speaking vendor's voices, for the picker) |
+| Agent Voice | `voice:getToken` (mints for the MICROPHONE's vendor; also reports the token's lifetime + whether it survives use), `voice:verifyKey(slug)` (what one vendor's key may do, job by job — see below), `voice:listVoices` (the speaking vendor's voices, for the picker) |
 | Agent | `agent:send` (takes `chatId`; steers if that chat is mid-turn), `agent:abort` (per chatId), `agent:runningChats`, `agent:listProviders`, `agent:listModels`, `agent:listThinkingLevels`, `agent:validateConnection` (checks an openai-compatible `{baseUrl}/models`); plus push events `agent:event` / `agent:error` (stamped with `chatId`) |
 | Chat (all over HTTP to the companion) | `chat:list`, `chat:listPinned`, `chat:setPinned`, `chat:search`, `chat:getMessages` (optional `after` seq), `chat:open` (returns the row + messages + this machine's `workspacePath` for the chat's workspace), `chat:delete`, `chat:rename`; plus push event `chat:feedResync` (the live feed reconnected — re-read loaded chats) |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |

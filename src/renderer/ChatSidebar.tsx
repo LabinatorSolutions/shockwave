@@ -708,7 +708,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   );
 }
 
-const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets, chatSources, onChatSourcesChange }, ref) {
+const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets, onOpenVoiceSettings, chatSources, onChatSourcesChange }, ref) {
   // All chat state (transcripts, running flags, drafts, counters) lives in
   // chatStore — OUTSIDE this component — so background chats keep streaming
   // and nothing is lost when the sidebar collapses (unmount) or the workspace
@@ -804,7 +804,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   // Voice input hook. Mounts on sidebar mount (always, even while the sidebar
   // is collapsed to a 28px strip) so the token prefetch runs early — every
   // mic click after the first ~200ms uses the cached token, zero round-trip.
-  const { voiceAvailable, isConnecting: voiceConnecting, isRecording: voiceRecording, startRecording: startVoice, stopRecording: stopVoice } = useVoiceInput({
+  const { voiceAvailable, voiceError, isConnecting: voiceConnecting, isRecording: voiceRecording, startRecording: startVoice, stopRecording: stopVoice } = useVoiceInput({
     getToken: () => window.api.voice.getToken(),
     onTranscript: (finalText) => {
       setInput((prev) => {
@@ -1273,23 +1273,34 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               message into the running turn (pi queues it and delivers at the
               next step boundary). */}
           <div className="flex items-center gap-1.5">
-            {voiceAvailable && (
-              <button
-                type="button"
-                className={cn(
-                  'flex h-[26px] min-w-[26px] items-center justify-center rounded-[7px] px-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40',
-                  voiceRecording && 'bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive',
-                )}
-                onClick={voiceRecording ? stopVoice : startVoice}
-                disabled={voiceConnecting}
-                title={voiceRecording ? 'Stop recording' : voiceConnecting ? 'Connecting…' : 'Voice input'}
-                aria-label={voiceRecording ? 'Stop recording' : 'Start voice input'}
-              >
-                {voiceRecording
-                  ? <VoiceBars volumeRef={voiceVolumeRef} isRecording={voiceRecording} />
-                  : <MicIcon size={15} />}
-              </button>
-            )}
+            {/* The mic is ALWAYS drawn, even when the token mint refuses.
+                Hiding it on failure is how a fixable key problem — a Deepgram
+                key without permission to mint, a companion that was away at
+                mount — became a feature that looked like it had never been
+                built: no icon, no message, nothing to click. Unavailable is a
+                dimmed mic whose tooltip carries the vendor's own sentence and
+                whose click opens the page that fixes it. */}
+            <button
+              type="button"
+              className={cn(
+                'flex h-[26px] min-w-[26px] items-center justify-center rounded-[7px] px-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40',
+                voiceRecording && 'bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive',
+                !voiceAvailable && !voiceRecording && 'opacity-40',
+              )}
+              onClick={voiceRecording ? stopVoice : voiceAvailable ? startVoice : onOpenVoiceSettings}
+              disabled={voiceConnecting}
+              title={
+                voiceRecording ? 'Stop recording'
+                  : voiceConnecting ? 'Connecting…'
+                    : voiceAvailable ? 'Voice input'
+                      : `${voiceError || 'Voice input is not set up.'}\nClick to open Agent Voice settings.`
+              }
+              aria-label={voiceRecording ? 'Stop recording' : voiceAvailable ? 'Start voice input' : 'Voice input unavailable — open settings'}
+            >
+              {voiceRecording
+                ? <VoiceBars volumeRef={voiceVolumeRef} isRecording={voiceRecording} />
+                : <MicIcon size={15} />}
+            </button>
             {running && !frozen && (
               <button
                 type="button"

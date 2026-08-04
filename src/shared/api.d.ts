@@ -434,15 +434,18 @@ export interface ShockwaveApi {
       voices?: Array<{ id: string; name: string; preview?: string }>;
       error?: string;
     }>;
-    /** Per-capability key check. `ok` means the key transcribes; `canStream`
-     *  means it can also mint a microphone token. Deepgram can be the first
-     *  without the second (a restricted key), which is not a failure. */
-    verifyKey(): Promise<{
+    /** What ONE vendor's key is permitted to do, job by job.
+     *
+     *  `ok: false` is the key itself being refused — there is nothing to report
+     *  per job. Otherwise `checks` carries one entry per job that vendor supports,
+     *  any of which may have failed on its own: Deepgram's default key
+     *  transcribes and cannot mint a microphone token, which is a real answer
+     *  rather than a rejection. */
+    verifyKey(slug: string): Promise<{
       ok: boolean;
-      canStream?: boolean;
       engineName?: string;
-      streamError?: string;
       error?: string;
+      checks?: Array<{ job: 'listen' | 'mic' | 'speak'; ok: boolean; detail?: string }>;
     }>;
   };
 

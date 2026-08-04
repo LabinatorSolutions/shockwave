@@ -26,7 +26,9 @@ const DEFAULT_CANONICAL: Settings = {
   // that never ran. Unset stays unset; the field renders its placeholder.
   codingAgent: { provider: '', model: '', hasProviderKey: {}, baseUrl: '' },
   agentSecrets: [],
-  transcription: { provider: 'assemblyai' },
+  // Unset, like every other DB-backed value here. A seeded vendor would be
+  // written back on the next save as if it had been chosen.
+  transcription: { provider: '' },
   speech: {},
   hasVoiceKey: {},
   sync: { hasPat: false, pullIntervalSeconds: 10 },
@@ -82,7 +84,8 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   const [treeSortOrder, setTreeSortOrder] = useState<TreeSortOrder>(TREE_SORT_ORDERS.NAME_ASC);
   const [codingAgentSettings, setCodingAgentSettings] = useState<CodingAgentSettings>(DEFAULT_CANONICAL.codingAgent);
   const [agentSecrets, setAgentSecrets] = useState<AgentSecret[]>([]);
-  const [transcription, setTranscription] = useState<Transcription>({ provider: 'assemblyai' });
+  // Unset until hydrate — never a guessed vendor. See the note in `hydrateSettings`.
+  const [transcription, setTranscription] = useState<Transcription>({ provider: '' });
   // The speaking half, and the per-vendor key flags both halves render dots from.
   // `hasVoiceKey` is a MAP (slug -> true), the shape a wildcard credential's flag
   // takes — see stripCredentials.
@@ -361,8 +364,16 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     // Carry the presence FLAGS through — main strips the values, so these are the
     // only thing telling a field whether a credential is stored. Dropping them here
     // is why every box read as empty.
+    // Both provider fields, and NEITHER is defaulted. This was a two-field
+    // whitelist that also substituted `'assemblyai'`, which broke twice over: a
+    // field added to the slice (`micProvider`) was silently dropped on every
+    // hydrate — so it persisted correctly and then vanished from the screen —
+    // and the fallback re-invented exactly the vendor-nobody-chose that
+    // `listenProviderOf` stopped inventing. Unset stays unset; resolution is
+    // `agent-core/voiceProviders.ts`'s job, at the point of use.
     const tr: Transcription = {
-      provider: disk.transcription?.provider || 'assemblyai',
+      provider: disk.transcription?.provider || '',
+      micProvider: disk.transcription?.micProvider || '',
       echoTelegramTranscript: !!disk.transcription?.echoTelegramTranscript,
     };
     // Speaking is opt-in, so an unset provider stays unset — there is no vendor

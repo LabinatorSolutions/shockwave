@@ -149,8 +149,8 @@ export interface CodingAgentSettings {
   // half a conversation, out of a checkout your next turn is about to write
   // into. Nothing waits on these runs, so delaying one costs nothing.
   //
-  // Unset ⇒ 5, and 0 means no wait rather than off — the two intervals above are
-  // what switch a process off.
+  // Unset ⇒ 10, and 0 means no wait rather than off — the two intervals above
+  // are what switch a process off.
   backgroundQuietMinutes?: number;
   // Char budgets for MEMORY.md and USER.md. The cap is the mechanism, not a
   // safety rail: a write that would exceed it is refused with the current
@@ -255,6 +255,11 @@ export interface Settings {
    *  consumer reads `?? false` — see api/src/telegram/webhook.ts). */
   transcription: {
     provider: string;
+    /** The MICROPHONE's vendor, when it differs from `provider`. Unset ⇒ the same
+     *  one, if it has a microphone. Separate because a key can be permitted to
+     *  transcribe and not to stream — see `micProviderOf` in
+     *  `agent-core/voiceProviders.ts` for why that is the common case. */
+    micProvider?: string;
     echoTelegramTranscript?: boolean;
   };
   /** Speaking. An unset `provider` means speech is not configured, and every

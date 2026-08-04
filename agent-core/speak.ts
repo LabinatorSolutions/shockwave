@@ -199,6 +199,46 @@ const PROVIDERS: Record<string, (text: string, apiKey: string, config: VoiceConf
 
 export { canSpeak };
 
+/** The shortest thing worth saying. Two characters, so the probe below costs
+ *  about as little as a synthesis request can. */
+const PROBE_SCRIPT = 'ok';
+
+/**
+ * Can this key actually synthesize? Runs the REAL provider on a two-character
+ * script and throws the bytes away.
+ *
+ * A probe and not a lookup, because neither vendor will answer the question any
+ * other way: an API key can be valid, list voices happily, and still lack
+ * permission to synthesize (ElevenLabs scopes per endpoint) or have no credit
+ * left. Reading a permissions endpoint would report a capability the actual call
+ * refuses — the same mistake Deepgram's `scopes` field invites on the listening
+ * side, where the only trustworthy answer also turned out to be making the call.
+ *
+ * It goes through `PROVIDERS`, so it exercises the configured voice and model
+ * rather than a second copy of the vendor's URL — a bad voice id fails here for
+ * the same reason it would fail on a real reply. Adding a vendor still means
+ * writing one function.
+ *
+ * **Never throws.** Verifying a key must not be able to fail louder than using
+ * one; the reason comes back as text for the settings page to print.
+ */
+export async function probeSpeak(
+  provider: string,
+  apiKey: string,
+  config: VoiceConfig,
+): Promise<{ ok: boolean; detail?: string }> {
+  const run = PROVIDERS[provider];
+  if (!run) return { ok: false, detail: `${voiceLabel(provider)} does not do text to speech.` };
+  try {
+    const speech = await run(PROBE_SCRIPT, apiKey, config);
+    // An empty body is a refusal the status code didn't admit to.
+    if (!speech?.bytes?.length) return { ok: false, detail: `${voiceLabel(provider)} returned no audio.` };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, detail: e?.message ?? String(e) };
+  }
+}
+
 /**
  * Speak `text` into an Ogg/Opus file at `outPath`. Returns the path, or `null`
  * when speech isn't configured or the script cleaned down to nothing.

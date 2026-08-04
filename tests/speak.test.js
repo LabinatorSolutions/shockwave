@@ -12,7 +12,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sniffContainer, speakToFile, speakLimitFor, isSpeakProvider } from '../agent-core/speak.ts';
+import {
+  sniffContainer, speakToFile, speakLimitFor, isSpeakProvider, probeSpeak,
+} from '../agent-core/speak.ts';
 import { voiceConfigOf } from '../agent-core/voiceProviders.ts';
 
 // ── the sniffer ──────────────────────────────────────────────────────────────
@@ -81,4 +83,37 @@ test('only the vendors with an implementation are speak providers', () => {
   assert.equal(isSpeakProvider('elevenlabs'), true);
   assert.equal(isSpeakProvider('assemblyai'), false);
   assert.equal(isSpeakProvider('nope'), false);
+});
+
+// ── verifying a speaking key ─────────────────────────────────────────────────
+//
+// The probe itself needs a live vendor, so what is pinned here is the contract
+// every caller depends on: it answers rather than throwing. Settings calls it
+// from an IPC handler, and a key check must not be able to fail louder than
+// actually using the key — which never throws either (see speakToFile).
+
+test('probing a vendor that cannot speak answers, and does not throw', async () => {
+  const res = await probeSpeak('assemblyai', 'irrelevant', voiceConfigOf({}));
+  assert.equal(res.ok, false);
+  assert.match(res.detail, /text to speech/i);
+});
+
+test('probing an unknown vendor answers, and does not throw', async () => {
+  const res = await probeSpeak('nope', 'irrelevant', voiceConfigOf({}));
+  assert.equal(res.ok, false);
+  assert.ok(res.detail);
+});
+
+test('a network failure comes back as a reason, never as a rejection', async () => {
+  // The reason has to reach the settings page as text — "couldn't check" with
+  // nothing after it is what made a broken speech key invisible in the first place.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('getaddrinfo ENOTFOUND'); };
+  try {
+    const res = await probeSpeak('deepgram', 'k', voiceConfigOf({ speech: { provider: 'deepgram' } }));
+    assert.equal(res.ok, false);
+    assert.match(res.detail, /ENOTFOUND/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

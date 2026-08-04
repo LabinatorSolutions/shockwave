@@ -42,9 +42,13 @@ import { readApiConfig, writeApiConfig } from './api/config.js';
 // companion and the renderer. Gates settings:deleteCredential.
 import { isDeletableCredential } from '../../agent-core/credentials.js';
 import {
-  voiceConfigOf, voiceProvider, voiceLabel,
-  listenProviderOf, listenKey, speakProviderOf, speakKey,
+  voiceConfigOf, voiceProvider, voiceLabel, keyForProvider,
+  providerForJob, canDo, speakProviderOf, speakKey,
+  type VoiceJob,
 } from '../../agent-core/voiceProviders.js';
+// Verifying a speaking key runs the real synthesis path on two characters —
+// nothing cheaper answers the question honestly. See probeSpeak.
+import { probeSpeak } from '../../agent-core/speak.js';
 import {
   approveFingerprint, forgetFingerprint, approvedFingerprint,
   onCertNeedsApproval, readServerCert, getPendingCert, hostOf,
@@ -1156,13 +1160,26 @@ ipcMain.handle('oauth:disconnect', async (_evt, name) => {
  * Report the REAL reason too: "not configured" is a lie when the key is
  * configured and the server simply isn't reachable.
  */
-async function resolveVoiceEngine() {
+const JOB_LABEL: Record<VoiceJob, string> = {
+  listen: 'transcription',
+  mic: 'microphone',
+  speak: 'speech',
+};
+
+async function resolveVoiceEngine(job: VoiceJob) {
   const { settings, online, reason } = await readSettingsSafe();
   if (!online) return { error: reason || "Can't reach your companion server." } as const;
   const config = voiceConfigOf(settings);
-  const provider = listenProviderOf(config);
+  const provider = providerForJob(config, job);
+  // Unset is its own answer, and it must not be dressed up as a missing key.
+  // This used to fall back to a hardcoded AssemblyAI, so an install with one
+  // ElevenLabs key was told to go and add an AssemblyAI key — naming a vendor
+  // nobody had chosen, for a job a key already existed for.
+  if (!provider) {
+    return { error: `No ${JOB_LABEL[job]} provider selected — pick one under Settings → Agent Voice.` } as const;
+  }
   const engineName = voiceLabel(provider);
-  const apiKey = listenKey(config);
+  const apiKey = keyForProvider(config, provider);
   // Name the engine: with three of them, "not configured" left you checking the
   // field you'd just filled in, for the provider you weren't using.
   if (!apiKey) return { error: `No ${engineName} key — add one under Settings → Agent Voice.` } as const;
@@ -1248,7 +1265,10 @@ async function mintVoiceToken(provider: string, engineName: string, apiKey: stri
 }
 
 ipcMain.handle('voice:getToken', async () => {
-  const engine = await resolveVoiceEngine();
+  // The MICROPHONE's vendor, which is not always the transcribing one — see
+  // `micProviderOf`. A Deepgram key that transcribes but can't stream is the
+  // ordinary case, and this is the assignment that lets the mic go elsewhere.
+  const engine = await resolveVoiceEngine('mic');
   if ('error' in engine) return { error: engine.error };
   const { provider, engineName, apiKey } = engine;
   try {
@@ -1268,56 +1288,96 @@ ipcMain.handle('voice:getToken', async () => {
 });
 
 /**
- * Check what the stored key can actually DO — per capability, not pass/fail.
+ * Is this vendor's key valid at all? One call, chosen so any live key passes it
+ * whatever that key is permitted to DO — permissions are the next question, and
+ * conflating the two is what made a restricted key read as rejected.
  *
- * The key feeds three consumers (the microphone, Telegram voice notes, the
- * agent's `transcribe` tool) and Deepgram gates them differently: transcription
- * needs any valid key, minting a streaming token needs Member or higher. So a
- * perfectly good restricted key made Verify say "rejected", which is false for
- * two of the three uses and sends the user to replace a key that works.
- *
- * Verify used to BE the token mint, on the reasoning that AssemblyAI ships no
- * key-check endpoint so the cheapest real request is the check, and this app
- * only ever used the streaming product. Both premises died with the second
- * engine. AssemblyAI still works that way — one credential, one capability, so
- * the mint remains the whole answer — while Deepgram is asked two questions.
+ * AssemblyAI is the odd one: it ships no key-check endpoint, so the cheapest
+ * real request IS the check, and that request happens to be the token mint.
+ * Its key therefore has exactly one capability and validity settles all of it.
  */
-ipcMain.handle('voice:verifyKey', async () => {
-  const engine = await resolveVoiceEngine();
-  if ('error' in engine) return { ok: false, error: engine.error };
-  const { provider, engineName, apiKey } = engine;
+async function checkVoiceKeyValid(provider: string, engineName: string, apiKey: string) {
+  if (provider === 'deepgram') {
+    // Accepts ANY valid key and reports whose it is.
+    //
+    // DO NOT gate on the `scopes` in the body. It is not the key's capability
+    // list — a Member key that mints tokens successfully still reports
+    // `["account:write"]`, so reading it as permissions rejects a working key.
+    // Verified against two real keys: identical `scopes`, one grants and one
+    // doesn't. The only trustworthy answer is to make the call you care about.
+    const res = await fetch('https://api.deepgram.com/v1/auth/token', {
+      headers: { Authorization: `Token ${apiKey}` },
+    });
+    return res.ok ? { ok: true as const } : { ok: false as const, error: await voiceFailure(res, provider, engineName) };
+  }
+  if (provider === 'elevenlabs') {
+    const res = await fetch('https://api.elevenlabs.io/v1/user', { headers: { 'xi-api-key': apiKey } });
+    return res.ok ? { ok: true as const } : { ok: false as const, error: await voiceFailure(res, provider, engineName) };
+  }
+  const minted = await mintVoiceToken(provider, engineName, apiKey);
+  return 'error' in minted ? { ok: false as const, error: minted.error } : { ok: true as const };
+}
+
+/**
+ * What one vendor's key is actually PERMITTED to do, job by job.
+ *
+ * The shape is per capability rather than pass/fail because a key genuinely can
+ * be good for one job and not another, and saying "rejected" to that sends
+ * someone to replace a key that works. **Deepgram's key-creation default is
+ * `usage:write`, which transcribes and cannot mint a streaming token** — Member
+ * is behind an "Advanced" toggle — so the split is the ordinary case, not a
+ * corner. That answer is now actionable: the microphone has its own assignment
+ * and can be pointed at another vendor.
+ *
+ * Only jobs the vendor supports at all are reported; the table decides that, not
+ * this function. Each check is the REAL call the job makes, because every
+ * cheaper proxy has been wrong at least once here — a permissions endpoint that
+ * reports a capability the actual request refuses is worse than no check.
+ *
+ * `ok: false` means the key itself was refused, and there is nothing to report
+ * per job. Anything else returns `ok: true` plus the per-job verdicts, including
+ * when every one of them failed.
+ */
+ipcMain.handle('voice:verifyKey', async (_e, slug: string) => {
+  const vendor = voiceProvider(slug);
+  if (!vendor) return { ok: false, error: `"${slug}" is not a speech provider this app knows.` };
+
+  const { settings, online, reason } = await readSettingsSafe();
+  if (!online) return { ok: false, error: reason || "Can't reach your companion server." };
+  const config = voiceConfigOf(settings);
+  const engineName = vendor.label;
+  const apiKey = keyForProvider(config, slug);
+  if (!apiKey) return { ok: false, error: `No ${engineName} key stored.` };
 
   try {
-    if (provider === 'deepgram') {
-      // This endpoint accepts ANY valid key and answers with the key's own
-      // `scopes` — which is the actual capability answer, not the 200. Treating
-      // the 200 as "it transcribes" was wrong: a key scoped `account:write` is
-      // perfectly valid here and cannot transcribe a thing.
-      const who = await fetch('https://api.deepgram.com/v1/auth/token', {
-        headers: { Authorization: `Token ${apiKey}` },
-      });
-      if (!who.ok) return { ok: false, error: await voiceFailure(who, provider, engineName) };
+    const valid = await checkVoiceKeyValid(slug, engineName, apiKey);
+    if (!valid.ok) return { ok: false, error: valid.error, engineName };
 
-      // DO NOT gate on the `scopes` in this response. It is not the key's
-      // capability list — a Member key that mints tokens successfully still
-      // reports `["account:write"]` here, so reading it as permissions rejects a
-      // working key. Verified against two real keys: identical `scopes`, one
-      // grants and one doesn't. The only trustworthy answer is to make the call.
-      const minted = await mintVoiceToken(provider, engineName, apiKey);
-      if ('error' in minted) {
-        // The key is valid (the call above passed) and just can't mint. Voice
-        // notes and the transcribe tool may well work; only the microphone is
-        // definitely out, so this is a note, not a rejection.
-        return { ok: true, canStream: false, engineName, streamError: minted.error };
-      }
-      return { ok: true, canStream: true, engineName };
+    const checks: Array<{ job: VoiceJob; ok: boolean; detail?: string }> = [];
+
+    // Transcribing is the one job with no separate permission gate on any vendor
+    // we carry — a key that authenticates transcribes. If that ever stops being
+    // true it needs its own probe here, not an assumption.
+    if (canDo(vendor, 'listen')) checks.push({ job: 'listen', ok: true });
+
+    if (canDo(vendor, 'mic')) {
+      const minted = await mintVoiceToken(slug, engineName, apiKey);
+      checks.push('error' in minted
+        ? { job: 'mic', ok: false, detail: minted.error }
+        : { job: 'mic', ok: true });
     }
 
-    const minted = await mintVoiceToken(provider, engineName, apiKey);
-    if ('error' in minted) return { ok: false, error: minted.error };
-    return { ok: true, canStream: true, engineName };
+    if (canDo(vendor, 'speak')) {
+      // Synthesizes two characters and throws the audio away. Nothing checked
+      // speaking at all before this, which is why a broken speech key stayed
+      // invisible until a Telegram reply failed to come back as audio.
+      const spoke = await probeSpeak(slug, apiKey, config);
+      checks.push({ job: 'speak', ok: spoke.ok, detail: spoke.detail });
+    }
+
+    return { ok: true, engineName, checks };
   } catch (err: any) {
-    console.warn(`[voice] ${provider} verify failed:`, err.message);
+    console.warn(`[voice] ${slug} verify failed:`, err.message);
     return { ok: false, error: `Couldn't reach ${engineName}: ${err?.message ?? 'network error'}` };
   }
 });

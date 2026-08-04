@@ -82,8 +82,6 @@ export const VOICE_PROVIDERS: VoiceProvider[] = [
   },
 ];
 
-/** The vendor used when nothing is stored. Listening only — see DEFAULT_SPEAK. */
-export const DEFAULT_LISTEN = 'assemblyai';
 /** No default. Speaking is opt-in: it costs money and nobody asked for it yet. */
 export const DEFAULT_SPEAK = '';
 
@@ -91,8 +89,19 @@ export function voiceProvider(slug: string | undefined | null): VoiceProvider | 
   return VOICE_PROVIDERS.find((p) => p.slug === slug);
 }
 
-export const listenProviders = (): VoiceProvider[] => VOICE_PROVIDERS.filter((p) => p.listen);
-export const speakProviders = (): VoiceProvider[] => VOICE_PROVIDERS.filter((p) => p.speak);
+/** The three jobs a vendor can be assigned to. `mic` is separate from `listen`
+ *  because a vendor can be permitted one and not the other — see `micProviderOf`. */
+export type VoiceJob = 'listen' | 'mic' | 'speak';
+
+export const canDo = (p: VoiceProvider | undefined, job: VoiceJob): boolean => (
+  job === 'mic' ? !!p?.mic : !!p?.[job]
+);
+
+export const providersFor = (job: VoiceJob): VoiceProvider[] => VOICE_PROVIDERS.filter((p) => canDo(p, job));
+
+export const listenProviders = (): VoiceProvider[] => providersFor('listen');
+export const speakProviders = (): VoiceProvider[] => providersFor('speak');
+export const micProviders = (): VoiceProvider[] => providersFor('mic');
 
 /** A vendor's display name, or the raw slug when it isn't one we know. */
 export function voiceLabel(slug: string | undefined | null): string {
@@ -105,9 +114,21 @@ export function voiceLabel(slug: string | undefined | null): string {
  * and that is exactly the reasoning that was duplicated four times.
  */
 export interface VoiceConfig {
-  /** Listening. `provider` applies to the mic, voice notes, and the transcribe tool. */
+  /** Listening. `provider` covers Telegram voice notes and the `transcribe` tool. */
   transcription?: {
     provider?: string;
+    /**
+     * The MICROPHONE's own vendor, when it differs from the one above.
+     *
+     * A separate assignment because a vendor can be permitted to transcribe and
+     * not to stream: Deepgram gates the streaming grant behind Member, and its
+     * key-creation DEFAULT is `usage:write`, which transcribes perfectly and
+     * cannot mint. That is the ordinary Deepgram key, not an exotic one — so
+     * without this the common setup is a dead microphone with nowhere to go.
+     *
+     * Unset ⇒ whatever transcribes, when that vendor has a microphone at all.
+     */
+    micProvider?: string;
     echoTelegramTranscript?: boolean;
   };
   /** Speaking. Unset `provider` means speech is not configured. */
@@ -134,16 +155,86 @@ export function voiceConfigOf(settings: any): VoiceConfig {
   return {
     transcription: settings?.transcription ?? {},
     speech: settings?.speech ?? {},
-    voiceKeys: settings?.voiceKeys ?? {},
+    // The renderer never receives key VALUES — main strips them and substitutes
+    // `hasVoiceKey`, a map of slug -> true. Resolution only ever asks whether a
+    // key is there, so the flags are folded in here and the settings page
+    // resolves through the same functions the consumers use. The alternative is
+    // the page reimplementing "which vendor does this job", which is exactly the
+    // drift that ends with Settings showing one answer and the agent using another.
+    voiceKeys: settings?.voiceKeys ?? presenceKeys(settings?.hasVoiceKey),
   };
 }
 
-export function listenProviderOf(config: VoiceConfig | undefined | null): string {
-  return config?.transcription?.provider || DEFAULT_LISTEN;
+/** Presence flags -> a key map whose values exist and are never used for anything
+ *  but that test. Nothing can be sent anywhere with these; `keyForProvider` only
+ *  asks for a non-empty string. */
+function presenceKeys(flags: unknown): Record<string, string> {
+  if (!flags || typeof flags !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [slug, present] of Object.entries(flags as Record<string, unknown>)) {
+    if (present) out[slug] = 'stored';
+  }
+  return out;
 }
 
+/**
+ * The vendor to use for `job` when nothing has been assigned to it: the one that
+ * can do the job AND has a key, but only when exactly one qualifies.
+ *
+ * This is resolution from stored data, NOT a default — which is the difference
+ * that matters. `DEFAULT_LISTEN = 'assemblyai'` used to sit here, and it named a
+ * vendor whether or not a key for it existed: an install with one ElevenLabs key
+ * and no chosen provider was told "No AssemblyAI key — add one", pointing at a
+ * vendor nobody had picked while a perfectly good key sat unused. A vendor
+ * cannot be resolved here unless its key is present, so that answer is
+ * unreachable. Ambiguity (two keys, no choice) stays unset and says so.
+ */
+function soleKeyedProvider(config: VoiceConfig | undefined | null, job: VoiceJob): string {
+  const able = providersFor(job).filter((p) => keyForProvider(config, p.slug));
+  return able.length === 1 ? able[0].slug : '';
+}
+
+/** Whichever vendor transcribes: Telegram voice notes and the `transcribe` tool. */
+export function listenProviderOf(config: VoiceConfig | undefined | null): string {
+  const chosen = config?.transcription?.provider;
+  if (chosen && canDo(voiceProvider(chosen), 'listen')) return chosen;
+  return soleKeyedProvider(config, 'listen');
+}
+
+/**
+ * Whichever vendor runs the live microphone.
+ *
+ * Falls back to the transcribing vendor, since one account doing both jobs is
+ * the ordinary case and asking twice would be noise. It only falls back when
+ * that vendor HAS a microphone — `mic` is optional on the table, so a
+ * transcribe-only vendor added later can't silently become the mic.
+ */
+export function micProviderOf(config: VoiceConfig | undefined | null): string {
+  const chosen = config?.transcription?.micProvider;
+  if (chosen && canDo(voiceProvider(chosen), 'mic')) return chosen;
+  const listen = listenProviderOf(config);
+  if (listen && canDo(voiceProvider(listen), 'mic')) return listen;
+  return soleKeyedProvider(config, 'mic');
+}
+
+/**
+ * Whichever vendor speaks.
+ *
+ * **No sole-key resolution here, deliberately.** Speaking costs money per reply,
+ * so it stays opt-in: pasting a key to transcribe with must never start
+ * synthesizing audio nobody asked for. Unset means silent.
+ */
 export function speakProviderOf(config: VoiceConfig | undefined | null): string {
-  return config?.speech?.provider || DEFAULT_SPEAK;
+  const chosen = config?.speech?.provider;
+  if (chosen && canDo(voiceProvider(chosen), 'speak')) return chosen;
+  return DEFAULT_SPEAK;
+}
+
+/** The vendor assigned to one job, whichever way it was resolved. */
+export function providerForJob(config: VoiceConfig | undefined | null, job: VoiceJob): string {
+  return job === 'mic' ? micProviderOf(config)
+    : job === 'speak' ? speakProviderOf(config)
+      : listenProviderOf(config);
 }
 
 /** The stored key for one vendor, whichever job it was picked for. */
@@ -163,6 +254,10 @@ export const listenKey = (config: VoiceConfig | undefined | null): string | unde
 /** The key for whichever vendor is selected for speaking. */
 export const speakKey = (config: VoiceConfig | undefined | null): string | undefined =>
   keyForProvider(config, speakProviderOf(config));
+
+/** The key for whichever vendor runs the microphone. */
+export const micKey = (config: VoiceConfig | undefined | null): string | undefined =>
+  keyForProvider(config, micProviderOf(config));
 
 /**
  * Is speaking usable right now — a vendor chosen, and a key stored for it?

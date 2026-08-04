@@ -39,6 +39,48 @@ const GOODBYE: Record<string, string> = {
 /** The vendors this file knows how to talk to. Anything else falls back below. */
 const KNOWN = new Set(['assemblyai', 'deepgram', 'elevenlabs']);
 
+/**
+ * How long the socket stays open after we say "the audio stopped".
+ *
+ * The goodbye above asks the vendor to flush whatever is half-transcribed, and
+ * that answer arrives over the SAME socket — so closing it in the next statement
+ * threw away the end of every utterance. Not a race we lost sometimes: `close()`
+ * moves readyState off OPEN synchronously and the HTML spec drops incoming
+ * messages from that moment, so the flush could never land. Measured against a
+ * live Deepgram socket: 0 messages after the goodbye as it was written, 3 with
+ * the close deferred.
+ *
+ * The microphone and the audio graph are already torn down by then, so nothing
+ * further is sent — this is a socket lingering to hear the last words, not a
+ * recording that keeps running. The vendors close it themselves once flushed
+ * (Deepgram answers and hangs up with 1000); this is only the backstop for one
+ * that doesn't.
+ */
+const FLUSH_GRACE_MS = 1500;
+
+/**
+ * Every mounted `useVoiceInput` re-asks when the voice settings change.
+ *
+ * There are two instances — the chat composer's and the Settings page's — with
+ * no state between them, and the token mint runs ONCE per mount. So fixing a
+ * rejected key on the Settings page left the composer's copy holding the old
+ * refusal for the life of the app: its mic stayed hidden, Verify went green, and
+ * nothing connected the two. Restarting was the only way back.
+ *
+ * A module-level fan-out rather than an IPC push because **`settings:changed`
+ * never fires for the renderer's own writes** (main passes `notify: false` — the
+ * renderer already has what it just wrote), and saving the key here IS a
+ * renderer write. The push is still subscribed to below for changes that come
+ * from elsewhere; this covers the ones that don't.
+ */
+const configListeners = new Set<() => void>();
+
+/** Tell every mounted hook the voice config moved — call after saving a key,
+ *  switching provider, or removing one. */
+export function notifyVoiceConfigChanged(): void {
+  for (const fn of configListeners) fn();
+}
+
 /** Base64 without a FileReader round trip — the worklet fires every ~256ms. */
 function toBase64(bytes: Uint8Array): string {
   let binary = '';
@@ -67,6 +109,12 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
   const [isConnecting, setIsConnecting] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [voiceAvailable, setVoiceAvailable] = useState(false);
+  // WHY the mint refused, kept rather than reduced to `voiceAvailable: false`.
+  // The reason is the whole difference between a control that looks unbuilt and
+  // one that can be fixed: "Deepgram rejected the key for streaming (HTTP 403) —
+  // it needs Member permissions" is one click from solved, and it was being
+  // thrown away here while Settings → Verify printed the same sentence.
+  const [voiceError, setVoiceError] = useState<string>('');
   const wsRef = useRef<any>(null);
   const streamRef = useRef<any>(null);
   const audioCtxRef = useRef<any>(null);
@@ -140,15 +188,49 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
         singleUse: result.singleUse,
       };
       tokenTimeRef.current = Date.now();
-      if (!stale) setVoiceAvailable(true);
+      if (!stale) { setVoiceAvailable(true); setVoiceError(''); }
     } else if (!stale) {
       setVoiceAvailable(false);
+      setVoiceError(result.error);
     }
     return result;
   }, []);
 
   useEffect(() => {
     fetchVoiceToken();
+  }, [fetchVoiceToken]);
+
+  // Re-ask when the voice settings move. Two sources, because neither covers the
+  // other: the module fan-out above carries THIS window's own saves (which the
+  // IPC push deliberately skips), and `settings:changed` carries everything that
+  // happened elsewhere — another machine, the companion, a `/voice` command.
+  //
+  // The push fires for every settings write in the app, so it is filtered rather
+  // than minting a token each time. Two triggers, and the first is the one that
+  // matters: **re-ask whenever we have no working token**, because a key being
+  // replaced with a good one leaves `hasVoiceKey` true→true and changes no
+  // fingerprint we can see (the renderer never receives key VALUES). The
+  // fingerprint catches the rest — provider switched, a key added or removed.
+  const availableRef = useRef(voiceAvailable);
+  availableRef.current = voiceAvailable;
+  useEffect(() => {
+    const refetch = () => { fetchVoiceToken(); };
+    configListeners.add(refetch);
+    let fingerprint = '';
+    const off = window.api.settings.onChanged?.(({ settings }: any) => {
+      // BOTH provider fields. The microphone has its own assignment, and it is
+      // the one this hook actually mints against — watching only `provider`
+      // would miss the whole point of pointing the mic somewhere else.
+      const next = JSON.stringify([
+        settings?.transcription?.provider,
+        settings?.transcription?.micProvider,
+        settings?.hasVoiceKey,
+      ]);
+      const moved = fingerprint !== '' && next !== fingerprint;
+      fingerprint = next;
+      if (moved || !availableRef.current) refetch();
+    });
+    return () => { configListeners.delete(refetch); off?.(); };
   }, [fetchVoiceToken]);
 
   const getReadyToken = useCallback(async () => {
@@ -189,13 +271,19 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
       streamRef.current = null;
     }
     if (wsRef.current) {
-      if (wsRef.current.readyState === WebSocket.OPEN) {
-        // All three want to be told the audio has stopped so they can flush
-        // whatever is half-transcribed; they just spell it differently.
-        wsRef.current.send(GOODBYE[providerRef.current] ?? GOODBYE.assemblyai);
-      }
-      wsRef.current.close();
+      const ws = wsRef.current;
       wsRef.current = null;
+      if (ws.readyState === WebSocket.OPEN) {
+        // All three want to be told the audio has stopped so they can flush
+        // whatever is half-transcribed; they just spell it differently. The
+        // answer comes back on this socket, so it is left open long enough to
+        // arrive — see FLUSH_GRACE_MS. `onmessage` is still attached, so those
+        // last words commit through the same path as every other one.
+        ws.send(GOODBYE[providerRef.current] ?? GOODBYE.assemblyai);
+        setTimeout(() => { try { ws.close(); } catch { /* already gone */ } }, FLUSH_GRACE_MS);
+      } else {
+        ws.close();
+      }
     }
 
     connectingRef.current = false;
@@ -395,7 +483,10 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     cleanup();
   }, [cleanup]);
 
-  // `recheck` is for the settings page: the prefetch above is mount-only, and
-  // the key is read server-side, so saving a new key needs an explicit re-ask.
-  return { voiceAvailable, isConnecting, isRecording, startRecording, stopRecording, recheck: fetchVoiceToken };
+  // No `recheck` here any more. Re-asking used to be the caller's job, which
+  // meant only the caller that remembered got a fresh answer — the Settings page
+  // did, the composer did not, and a fixed key left the mic hidden until
+  // restart. `notifyVoiceConfigChanged()` reaches every instance instead, so
+  // there is one mechanism rather than one per call site.
+  return { voiceAvailable, voiceError, isConnecting, isRecording, startRecording, stopRecording };
 }
