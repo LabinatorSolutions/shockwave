@@ -1,7 +1,7 @@
 import React, { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronDown, ChevronRight, Sparkles, KeyRound, Pin } from 'lucide-react';
+import { ChevronDown, ChevronRight, Circle, Sparkles, KeyRound, Pin } from 'lucide-react';
 import { PaperclipIcon, PlayIcon, StopIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon, SearchIcon, PlusIcon, TrashIcon } from './Icons.jsx';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuItem } from '@/components/ui/dropdown-menu';
@@ -313,30 +313,35 @@ function SpinnerIcon({ size = 12 }: { size?: number }) {
   );
 }
 
-// Collapsible extended-thinking block. While streaming it shows the same
-// spinner + shimmering label as the "Working" indicator ("Thinking"); once
-// thinking_end fires it freezes to a static "Thought" summary. Closed by
-// default in both states — the body only shows when the user expands it.
+// Collapsible extended-thinking block. Deliberately the SAME card as ToolEntry
+// below — chevron, status circle, label — because both are "the agent did
+// something on its way to an answer" and two different shapes for that read as
+// two different kinds of event. While streaming the circle spins and the label
+// shimmers ("Thinking"); once thinking_end fires it freezes to a static ring +
+// "Thought". Closed by default in both states.
 function ThinkingEntry({ entry }) {
   const streaming = !entry.done;
   const [open, setOpen] = useState(false);
   return (
-    // Demoted aside (spec §6): small caption + chevron, body behind a 2px rule.
-    <div className="flex flex-col gap-[5px]">
-      <button
-        type="button"
-        className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-2 hover:text-muted-foreground"
-        onClick={() => setOpen((v) => !v)}
-      >
+    <div className="rounded-[10px] border border-border bg-raise px-2.5 py-[7px]">
+      <button type="button" className="flex w-full min-w-0 items-center gap-2 text-left" onClick={() => setOpen((v) => !v)}>
         {open
-          ? <ChevronDown className="size-3" strokeWidth={2.2} />
-          : <ChevronRight className="size-3" strokeWidth={2.2} />}
-        {streaming
-          ? (<><SpinnerIcon /><span className="thinking-shimmer">Thinking</span></>)
-          : (<span>Thought</span>)}
+          ? <ChevronDown className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />
+          : <ChevronRight className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />}
+        <span className="w-3 shrink-0 text-[11px] leading-none text-muted-2">
+          {streaming ? <SpinnerIcon size={11} /> : <Circle size={11} strokeWidth={2.2} aria-hidden="true" />}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] font-medium text-muted-foreground">
+          {streaming ? <span className="thinking-shimmer">Thinking</span> : 'Thought'}
+        </span>
       </button>
-      {open && entry.text && (
-        <div className="whitespace-pre-wrap border-l-2 border-border pl-[11px] text-[13px] leading-[1.55] text-muted-foreground">{entry.text}</div>
+      {open && (entry.text || streaming) && (
+        <div className="mt-1.5 border-t border-border pt-1.5">
+          <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-[12.5px] leading-[1.55] text-muted-foreground">
+            <span>{entry.text}</span>
+            {streaming && <span className="animate-pulse" aria-hidden="true">▌</span>}
+          </div>
+        </div>
       )}
     </div>
   );
