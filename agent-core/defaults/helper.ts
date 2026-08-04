@@ -227,6 +227,18 @@ Its name comes from a format string the user chose and its folder from a second 
 
 Match what's already in the file: if the day's entries are bullets under a heading, add a bullet in that shape; if the note already has a timestamp convention, follow that one instead of introducing a second.${hasOpenFile ? '\n\nAfter you write to it, call `open_file` so the user can see it.' : ''}`;
 
+// The workspace's templates, listed directly — folder and files read at chat
+// creation (`readTemplates` in templates.ts) and frozen with the prompt, same
+// snapshot behaviour as the memory blocks. Present only when the workspace has
+// templates at all.
+const TEMPLATES = (t: { folder: string; files: string[] }) => `# Templates
+
+The user keeps file templates in \`${t.folder}/\`:
+
+${t.files.map((f) => `- \`${f}\``).join('\n')}
+
+When you create a file of a kind one of these covers — meeting notes, a weekly review — seed it from the template. **Copy the template verbatim** — nothing in Shockwave substitutes placeholders — then fill it in.`;
+
 const MARKDOWN = `# Markdown supported
 
 Shockwave renders **CommonMark only** (no GFM), with these specifics:
@@ -308,8 +320,8 @@ Skills are scanned at session boot. After writing the files, tell the user to cl
 // sections — it is NOT derivable from `tools`, so every caller must pass it (see
 // `rebuildSystemPrompt` in index.ts, which forwards it for exactly this reason).
 export function buildShockwaveHelper(
-  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, timezone, memory }:
-    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; timezone?: string; memory?: string } = {},
+  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, timezone, memory, templates }:
+    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; timezone?: string; memory?: string; templates?: { folder: string; files: string[] } } = {},
 ): string {
   return [
     BOUNDARIES(scratchDir),
@@ -341,6 +353,10 @@ export function buildShockwaveHelper(
       ? [DAILY_NOTES(tools.some((t) => t.name === 'open_file'))]
       : []),
     ...(tools.some((t) => t.name === 'memory') ? [MEMORY] : []),
+    // Skipped entirely when the workspace has no templates (folder unset,
+    // missing, or holding no .md files) — a heading over nothing reads as an
+    // instruction to go looking for it.
+    ...(templates && templates.folder && templates.files.length ? [TEMPLATES(templates)] : []),
     MARKDOWN,
     // Same rule again. Authoring guidance for a run that cannot author is the
     // clearest possible case of describing a capability that isn't there.

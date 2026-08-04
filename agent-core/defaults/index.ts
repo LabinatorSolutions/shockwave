@@ -49,6 +49,14 @@ export interface PromptOpts {
    * both branches.
    */
   memory?: string;
+  /**
+   * The workspace's templates — folder + `.md` list, read at chat creation by
+   * `readTemplates` (templates.ts) and frozen with the prompt. Undefined (no
+   * folder configured, folder missing, or empty) means no Templates section,
+   * not an error. Passed in rather than read here for the same reason as
+   * `memory`: reading is async and assembly stays a single pass.
+   */
+  templates?: { folder: string; files: string[] };
 }
 
 // Build the full system prompt for the given workspace. Reads that workspace's
@@ -89,5 +97,6 @@ function helperFor(opts: PromptOpts): string {
     scratchDir: opts.scratchDir,
     timezone: opts.timezone,
     memory: opts.memory,
+    templates: opts.templates,
   });
 }

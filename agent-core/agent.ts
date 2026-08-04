@@ -25,6 +25,7 @@ import { makeTranscribeTool, type VoiceConfig } from './transcribe.js';
 import { makeDailyNoteTool } from './dailyNoteTool.js';
 import { makeSkillTools } from './skillTool.js';
 import { makeMemoryTool } from './memoryTool.js';
+import { readTemplates } from './templates.js';
 import { makeChatSearchTool, type ChatSearchHost } from './chatSearch.js';
 import { imagesOf } from './messageImages.js';
 
@@ -366,7 +367,10 @@ export function createAgentRuntime(host: AgentHost) {
     // knowledge about the user, and a review run writing skills is better for
     // knowing it; only the how-to-save section is gated on holding the tool.
     const memory = await memoryHandle.render();
-    const promptOpts = { unattended: !!unattended, source, scratchDir, timezone, memory };
+    // The templates snapshot, frozen with the prompt like the memory blocks.
+    // Undefined (unconfigured / missing / empty folder) just skips the section.
+    const templates = await readTemplates(workspacePath);
+    const promptOpts = { unattended: !!unattended, source, scratchDir, timezone, memory, templates };
 
     let sessionManager: any;
     let promptOverride: string;
