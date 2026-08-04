@@ -30,9 +30,17 @@ function textOf(content: any): string {
  * checkout and its attachment staging dir. Pass none and nothing is delivered,
  * which is what a caller with no notion of either should get.
  */
-/** What an empty bubble shows. Also `flushInner`'s fallback when the text so far
- *  cleans down to nothing (a segment that is only a file tag). */
+/** `flushInner`'s fallback when the text so far cleans down to nothing (a segment
+ *  that is only a file tag). STATIC, unlike the animated bubble below: the
+ *  "message is not modified" throw it produces is what leaves the slot claimable
+ *  in exactly that case — see the note in `flushInner`. */
 const PLACEHOLDER = '…';
+
+/** The frames the waiting bubble cycles through, one per 600ms. It only ever
+ *  runs before the first output of a turn — the first tool line or token claims
+ *  the bubble and the animation stops — so on a normal turn this is a handful of
+ *  edits, all inside a wait the user would otherwise spend watching a static dot. */
+const DOTS = ['...', '....', '.....', '......'];
 
 /**
  * `speak` is injected rather than imported so this file stays a RENDERER of
@@ -94,13 +102,34 @@ export function makeTelegramSink(
   // lands can't edit a message id we don't have yet.
   chain = chain.then(async () => {
     try {
-      const m = await client.sendMessage(chatId, PLACEHOLDER);
+      const m = await client.sendMessage(chatId, DOTS[0]);
       messageId = m?.message_id ?? null;
       placeholder = messageId != null;
     } catch { /* couldn't post it — fall back to the bubble being born on first flush */ }
   });
 
   const editTimer = setInterval(() => { void flush(false); }, 1300);
+
+  // Grow the waiting bubble a dot at a time so a slow first token looks like
+  // waiting rather than like nothing happening. Two stop conditions and no third:
+  //
+  //  - the slot is claimed (or was never posted) — the animation is over the
+  //    moment the turn has something real to show, which is the whole point;
+  //  - an edit failed. 600ms is faster than Telegram's ~1 edit/sec ceiling, and
+  //    `call()` retries a 429 INSIDE the chain — so a throttled frame would stall
+  //    the first tool line behind it. Stopping on the first error caps that at one
+  //    retry, ever, and leaves the dots frozen, which still reads as a placeholder.
+  //
+  // On the chain like every other write: a frame must not edit a message id the
+  // post hasn't produced yet, and must not overtake the text it's standing in for.
+  let frame = 0;
+  const dotTimer = setInterval(() => {
+    chain = chain.then(async () => {
+      if (!placeholder || messageId == null) { clearInterval(dotTimer); return; }
+      frame = (frame + 1) % DOTS.length;
+      await client.editMessageText(chatId, messageId, DOTS[frame]);
+    }).catch(() => { clearInterval(dotTimer); });
+  }, 600);
 
   function flush(force: boolean): Promise<void> {
     chain = chain.then(() => flushInner(force)).catch(() => { /* best-effort */ });
@@ -187,12 +216,14 @@ export function makeTelegramSink(
    */
   async function dispose() {
     clearInterval(editTimer);
+    clearInterval(dotTimer);
     await chain.catch(() => { /* best-effort */ });
     await dropPlaceholder();
   }
 
   async function done(finalMessages?: any[]) {
     clearInterval(editTimer);
+    clearInterval(dotTimer);
     await chain;   // let any in-flight post land so `messageId` is truthful
     // Authoritative final: the last assistant message from agent_end (falls back
     // to whatever we accumulated from deltas).
