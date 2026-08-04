@@ -17,6 +17,7 @@ import { prepareCheckout, landed, type GitAuth } from '../git.js';
 import { checkInAndStamp } from '../gitFixer.js';
 import { TelegramClient, ALLOWED_UPDATES } from './client.js';
 import { makeTelegramSink } from './stream.js';
+import { startWaitingBubble } from './waitingBubble.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace, chatNotice } from './commands.js';
 import { transcribeAudio, warmTranscription, listenProviderOf, voiceLabel } from './transcribe.js';
 import { voiceConfigOf } from '../../../agent-core/voiceProviders.js';
@@ -217,10 +218,24 @@ function hasEmoji(list: any, emoji: string): boolean {
  * voice replies (`speakInto`), with the same "recording" indicator while the
  * audio is made.
  *
+ * The wait is not short and it is not a flash: the whole clip is synthesised
+ * before anything is sent — one request to the vendor, every byte of audio, an
+ * ffmpeg conversion when the format needs it, then the upload — and it grows
+ * with the length of what is being read. So it gets the SAME waiting bubble a
+ * turn posts, for the same reason: the "recording" indicator sits up beside the
+ * bot's name, away from where you are looking, and says the same thing whether
+ * the wait is one second or ten.
+ *
+ * The bubble is DELETED rather than taken over, which is the one way this path
+ * differs from a turn: a text message cannot be edited into audio. It is a plain
+ * message, NOT a reply — the reply-to-the-reacted-message belongs on the answer,
+ * and a bubble that is about to be deleted anyway pointing at anything is noise.
+ *
  * A miss (message sent before recording existed, or past the TTL) does nothing:
  * there is no text to read and no useful thing to say about that. A synthesis
  * failure DOES reply — the user asked for something and silence would read as
- * the bot ignoring them.
+ * the bot ignoring them — and it replies to the message it couldn't read, since
+ * a bare "couldn't do it" at the bottom of a busy chat names nothing.
  */
 async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
   const tgChatId = Number(reaction.chat?.id);
@@ -234,10 +249,12 @@ async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
     // Whatever this says is recorded against the chat the bubble it read belongs
     // to, so replying to the "couldn't do it" lands in the same conversation.
     (id, text) => { store.recordTelegramSent(db, tgChatId, id, text, stored.originChatId).catch(() => {}); },
+    (id) => { store.deleteTelegramSent(db, tgChatId, id).catch(() => {}); },
   );
   // Same indicator loop as a turn, started on "recording" — synthesis is the
   // only work here, so there is no typing phase to show first.
   const typing = startTyping(client, tgChatId, 'record_voice');
+  const bubble = startWaitingBubble(client, tgChatId);
   try {
     // A long reply arrives split into numbered bubbles, and the trailing "(2/3)"
     // is chunk bookkeeping, not something to read aloud.
@@ -251,8 +268,15 @@ async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
         '⚠️ I couldn\'t turn that into audio — check the speech voice in Settings.',
         { replyToMessageId: messageId }).catch(() => {});
     }
+    // Whatever went out went out FIRST, then the dots go. Deleting before the
+    // answer is sent leaves a moment with nothing on screen at all, which is the
+    // gap the bubble exists to fill.
+    await bubble.remove();
   } finally {
     typing.stop();
+    // Belt and braces for a throw between the two: freezing the dots is better
+    // than leaving them growing forever over a reading that is not coming.
+    bubble.stop();
   }
 }
 
@@ -356,8 +380,13 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
   const remember = (messageId: number, text: string) => {
     store.recordTelegramSent(db, dm, messageId, text, chatId).catch(() => {});
   };
+  // And forgotten when the bubble is taken back — a waiting bubble the turn
+  // deleted describes a message that is no longer there to point at.
+  const forget = (messageId: number) => {
+    store.deleteTelegramSent(db, dm, messageId).catch(() => {});
+  };
   try {
-    const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'), remember);
+    const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'), remember, forget);
     // Say we're here BEFORE doing any of the work. The first sign of life used
     // to come from makeTelegramSink, which is built after the workspace checkout
     // — so on a plain text message the user watched an empty chat through a
@@ -439,7 +468,7 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
     await runTurnInner(db, key, runtime, acc, client, dm, input, msg, ready.value, typing);
   } catch (err: any) {
     const token = await store.getTelegramSecret(db, key, 'botToken').catch(() => '');
-    if (token) await new TelegramClient(token, remember).sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
+    if (token) await new TelegramClient(token, remember, forget).sendMessage(dm, `⚠️ Something went wrong running the agent:\n${err?.message ?? String(err)}`).catch(() => {});
     throw err;
   } finally {
     typing.stop();

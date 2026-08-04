@@ -63,8 +63,18 @@ export class TelegramClient {
    *
    * NOT fired for `sendFile`: a voice bubble's text is the script that was spoken,
    * which lives with the caller (`speakInto` records it itself).
+   *
+   * `onDeleted` is the same rule pointed the other way: a record exists because a
+   * message went out, so it goes away because the message did. Without it every
+   * deleted waiting bubble leaves a row saying "..." — unreachable rather than
+   * harmful, since the message it describes no longer exists to point at, but
+   * there is no reason to keep it and no caller should have to remember.
    */
-  constructor(private token: string, private onSent?: (messageId: number, text: string) => void) {}
+  constructor(
+    private token: string,
+    private onSent?: (messageId: number, text: string) => void,
+    private onDeleted?: (messageId: number) => void,
+  ) {}
 
   async call(method: string, body: Record<string, any> = {}): Promise<any> {
     const url = `https://api.telegram.org/bot${this.token}/${method}`;
@@ -130,7 +140,11 @@ export class TelegramClient {
     this.onSent?.(messageId, text);
     return r;
   }
-  deleteMessage(chatId: number, messageId: number) { return this.call('deleteMessage', { chat_id: chatId, message_id: messageId }); }
+  async deleteMessage(chatId: number, messageId: number) {
+    const r = await this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
+    this.onDeleted?.(messageId);
+    return r;
+  }
   sendChatAction(chatId: number, action = 'typing') { return this.call('sendChatAction', { chat_id: chatId, action }); }
 
   /**

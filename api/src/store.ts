@@ -945,6 +945,16 @@ export async function recordTelegramSent(
     });
 }
 
+// The one thing that DOES remove a row, and the exception that proves the rule
+// above: nothing expires these, but a message the bot deleted itself can never
+// be pointed at again, so its row describes something that is not on screen.
+// Called from the client's `onDeleted` hook rather than from the delete sites,
+// for the same reason recording lives on `onSent`.
+export async function deleteTelegramSent(db: Db, chatId: number, messageId: number) {
+  await db.delete(telegramSent)
+    .where(and(eq(telegramSent.chatId, chatId), eq(telegramSent.messageId, messageId)));
+}
+
 export async function getTelegramSent(
   db: Db, chatId: number, messageId: number,
 ): Promise<{ content: string; originChatId: string | null } | null> {

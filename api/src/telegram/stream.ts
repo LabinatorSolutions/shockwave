@@ -10,6 +10,7 @@
 
 import type { TelegramClient } from './client.js';
 import { splitMessage } from './client.js';
+import { startWaitingBubble } from './waitingBubble.js';
 import {
   extractMedia, extractLocalFiles, filterDeliveryPaths, deliveryKind,
 } from '../../../agent-core/mediaTags.ts';
@@ -31,16 +32,9 @@ function textOf(content: any): string {
  * which is what a caller with no notion of either should get.
  */
 /** `flushInner`'s fallback when the text so far cleans down to nothing (a segment
- *  that is only a file tag). STATIC, unlike the animated bubble below: the
- *  "message is not modified" throw it produces is what leaves the slot claimable
- *  in exactly that case — see the note in `flushInner`. */
+ *  that is only a file tag). A bubble holding this has still had nothing real
+ *  written into it, which `unwritten` below is what tracks. */
 const PLACEHOLDER = '…';
-
-/** The frames the waiting bubble cycles through, one per 600ms. It only ever
- *  runs before the first output of a turn — the first tool line or token claims
- *  the bubble and the animation stops — so on a normal turn this is a handful of
- *  edits, all inside a wait the user would otherwise spend watching a static dot. */
-const DOTS = ['...', '....', '.....', '......'];
 
 /**
  * `speak` is injected rather than imported so this file stays a RENDERER of
@@ -76,10 +70,16 @@ export function makeTelegramSink(
   let messageId: number | null = null; // Telegram message being edited for this segment
   let dirty = false;
   let lastEdit = 0;
-  // True while `messageId` points at a bubble nothing has been written into yet.
-  // That bubble is a SLOT, claimed by whichever of text or a tool line renders
-  // first — see the placeholder post below and `toolLine`.
-  let placeholder = false;
+  // True while the message we hold has had nothing real written into it — either
+  // the waiting bubble just handed over, or a body that cleaned down to
+  // `PLACEHOLDER`. That message is a SLOT: a tool line takes it over rather than
+  // posting below it. A rate-limited edit leaves it a slot too, which is why this
+  // clears only once a write has LANDED.
+  let unwritten = false;
+  // Whether the bubble has been asked for yet. Separate from `messageId` because
+  // a failed post yields no id, and asking twice would then return null and wipe
+  // an id we already hold.
+  let tookBubble = false;
 
   // Every flush is chained, and `done()` awaits the chain. Without that, the
   // first post ("H") could still be in flight when the turn ended: `done` saw
@@ -92,44 +92,27 @@ export function makeTelegramSink(
   // checkout, so a typing indicator that began here left the user watching an
   // empty chat through the slowest part of the turn.
 
-  // Post the bubble BEFORE the agent has produced anything, so the reply has a
-  // visible home from the start and the wait for the first token happens inside
-  // a message rather than in an empty chat. It is the same bubble the text is
-  // then edited into — nothing extra is sent, the first flush just becomes an
-  // edit instead of a post, so this costs exactly one API call per turn.
-  //
-  // On the chain like every other write, so a delta that arrives before the post
-  // lands can't edit a message id we don't have yet.
-  chain = chain.then(async () => {
-    try {
-      const m = await client.sendMessage(chatId, DOTS[0]);
-      messageId = m?.message_id ?? null;
-      placeholder = messageId != null;
-    } catch { /* couldn't post it — fall back to the bubble being born on first flush */ }
-  });
+  // The waiting bubble goes up BEFORE the agent has produced anything, so the
+  // reply has a visible home from the start and the wait for the first token
+  // happens inside a message rather than in an empty chat. Whichever of text or
+  // a tool line renders first takes that same message over, so this costs
+  // exactly one API call per turn.
+  const bubble = startWaitingBubble(client, chatId);
 
   const editTimer = setInterval(() => { void flush(false); }, 1300);
 
-  // Grow the waiting bubble a dot at a time so a slow first token looks like
-  // waiting rather than like nothing happening. Two stop conditions and no third:
-  //
-  //  - the slot is claimed (or was never posted) — the animation is over the
-  //    moment the turn has something real to show, which is the whole point;
-  //  - an edit failed. 600ms is faster than Telegram's ~1 edit/sec ceiling, and
-  //    `call()` retries a 429 INSIDE the chain — so a throttled frame would stall
-  //    the first tool line behind it. Stopping on the first error caps that at one
-  //    retry, ever, and leaves the dots frozen, which still reads as a placeholder.
-  //
-  // On the chain like every other write: a frame must not edit a message id the
-  // post hasn't produced yet, and must not overtake the text it's standing in for.
-  let frame = 0;
-  const dotTimer = setInterval(() => {
-    chain = chain.then(async () => {
-      if (!placeholder || messageId == null) { clearInterval(dotTimer); return; }
-      frame = (frame + 1) % DOTS.length;
-      await client.editMessageText(chatId, messageId, DOTS[frame]);
-    }).catch(() => { clearInterval(dotTimer); });
-  }, 600);
+  /**
+   * Take the waiting bubble over, once. Called from inside the chain, so by the
+   * time anything writes, the animation has stopped and the bubble will never
+   * touch the message again — one writer at a time is what keeps a dot from
+   * landing on top of the first words of a reply.
+   */
+  async function takeSlot() {
+    if (tookBubble) return;
+    tookBubble = true;
+    messageId = await bubble.claim();
+    unwritten = messageId != null;
+  }
 
   function flush(force: boolean): Promise<void> {
     chain = chain.then(() => flushInner(force)).catch(() => { /* best-effort */ });
@@ -145,6 +128,7 @@ export function makeTelegramSink(
     if (!dirty) return;
     if (!force && Date.now() - lastEdit < 1300) return;
     dirty = false; lastEdit = Date.now();
+    await takeSlot();
     // Strip file tags as we go. The text is edited into a live message every
     // ~1.3s, so without this the user watches `MEDIA:/data/...` get typed out and
     // then vanish. Only the tag form is removed here — it's synchronous, whereas
@@ -155,12 +139,11 @@ export function makeTelegramSink(
     try {
       if (messageId == null) { const m = await client.sendMessage(chatId, body); messageId = m?.message_id ?? null; }
       else await client.editMessageText(chatId, messageId, body);
-      // Only once a write has actually LANDED is the bubble no longer a free
-      // slot. Inside the try on purpose: a rate-limited edit leaves it claimable,
-      // and an unchanged body (text that cleaned down to `PLACEHOLDER` again)
-      // throws "message is not modified", which is precisely the case where it
-      // still holds nothing.
-      placeholder = false;
+      // Only once a write has actually LANDED does the message stop being a free
+      // slot. Inside the try on purpose: a rate-limited edit leaves it claimable.
+      // The `PLACEHOLDER` body is the one case where a landed write still leaves
+      // it holding nothing, so it stays a slot.
+      unwritten = body === PLACEHOLDER;
     } catch { /* rate limit / transient — the final flush will correct it */ }
   }
 
@@ -169,14 +152,16 @@ export function makeTelegramSink(
   function toolLine(name: string) {
     void flush(true);         // close the current text segment first (ordering)
     chain = chain.then(async () => {
-      // The placeholder belongs to whatever renders first, and on most turns that
-      // is a tool call — the agent reads or greps before it says anything. Take
-      // the bubble over instead of posting below it, or every tool-first turn
-      // leaves a bare "…" stranded above the tool line, never updated again.
-      const slot = placeholder ? messageId : null;
-      // Reset BEFORE the await, not after: `emit` appends to `text` outside this
+      // Reset BEFORE any await, not after: `emit` appends to `text` outside this
       // chain, so a delta arriving mid-send would be wiped by a later reset.
-      messageId = null; text = ''; placeholder = false;
+      text = '';
+      // The waiting bubble belongs to whatever renders first, and on most turns
+      // that is a tool call — the agent reads or greps before it says anything.
+      // Take it over instead of posting below it, or every tool-first turn leaves
+      // a bare "..." stranded above the tool line, never updated again.
+      await takeSlot();
+      const slot = unwritten ? messageId : null;
+      messageId = null; unwritten = false;
       const line = `${TOOL_EMOJI[name] || '🔧'} ${name}`;
       try {
         if (slot != null) await client.editMessageText(chatId, slot, line);
@@ -199,11 +184,17 @@ export function makeTelegramSink(
     }
   }
 
-  /** Remove an unclaimed placeholder bubble. No-op once anything has written to it. */
+  /**
+   * Take back the waiting bubble when nothing was ever written into it. Two
+   * cases, because ownership may or may not have moved yet: the bubble still
+   * holds the message and deletes it itself, or we took the slot and never wrote
+   * anything real into it. No-op once anything has landed there.
+   */
   async function dropPlaceholder() {
-    if (!placeholder || messageId == null) return;
+    if (!tookBubble) { await bubble.remove(); return; }
+    if (!unwritten || messageId == null) return;
     const id = messageId;
-    messageId = null; placeholder = false;
+    messageId = null; unwritten = false;
     await client.deleteMessage(chatId, id).catch(() => { /* best-effort */ });
   }
 
@@ -216,15 +207,19 @@ export function makeTelegramSink(
    */
   async function dispose() {
     clearInterval(editTimer);
-    clearInterval(dotTimer);
+    bubble.stop();
     await chain.catch(() => { /* best-effort */ });
     await dropPlaceholder();
   }
 
   async function done(finalMessages?: any[]) {
     clearInterval(editTimer);
-    clearInterval(dotTimer);
+    bubble.stop();
     await chain;   // let any in-flight post land so `messageId` is truthful
+    // A turn that never rendered anything — no tool call, no streamed token —
+    // still has the waiting bubble up. Take it, so the final message edits into
+    // it rather than posting below a stray "...".
+    await takeSlot();
     // Authoritative final: the last assistant message from agent_end (falls back
     // to whatever we accumulated from deltas).
     let final = text;
