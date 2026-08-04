@@ -19,7 +19,7 @@ import { mintToken } from './oauth.js';
 import { initSweeper } from './sweeper.js';
 import { initCheckoutPool } from './checkoutPool.js';
 import { initBackgroundSweeper } from './backgroundSweeper.js';
-import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus, syncCommands as tgSyncCommands } from './telegram/webhook.js';
+import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus, syncCommands as tgSyncCommands, syncWebhookConfig as tgSyncWebhookConfig } from './telegram/webhook.js';
 import { configuredHost, ensureSelfSignedCert, readCertPem, removeSelfSignedCert } from './telegram/selfSigned.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
 
@@ -247,26 +247,27 @@ app.post('/workspaces/:id/voice', handle(async (req) => {
 }));
 
 // ── Telegram (desktop Settings triggers these companion actions) ─────────────
-app.post('/telegram/connect', handle(async (req) => {
-  // COMPANION_DOMAIN set -> a real domain (Let's Encrypt) or an ngrok host: the
-  // cert is already trusted, so just register the URL. Unset -> hand Telegram a
-  // copy of the certificate made at boot.
-  //
-  // This must NEVER create a certificate. It used to, which meant the server's
-  // identity changed the first time Telegram was connected — after every desktop
-  // had already approved the previous one. Creation happens once, at boot.
+// COMPANION_DOMAIN set -> a real domain (Let's Encrypt) or an ngrok host: the
+// cert is already trusted, so just register the URL. Unset -> hand Telegram a
+// copy of the certificate made at boot.
+//
+// This must NEVER create a certificate. It used to, which meant the server's
+// identity changed the first time Telegram was connected — after every desktop
+// had already approved the previous one. Creation happens once, at boot.
+//
+// Shared by /telegram/connect and the boot-time webhook reconcile
+// (tgSyncWebhookConfig), so both register against the same address.
+async function resolveTelegramPublic(): Promise<{ publicUrl: string; certificatePem?: string }> {
   const domain = process.env.COMPANION_DOMAIN;
-  let publicUrl: string;
-  let certificatePem: string | undefined;
-  if (domain) {
-    publicUrl = `https://${domain}`;
-  } else {
-    const host = configuredHost();
-    const pem = await readCertPem();
-    if (!pem) throw new Error('No certificate on disk — restart the companion so it can create one.');
-    certificatePem = pem;
-    publicUrl = `https://${host}`;
-  }
+  if (domain) return { publicUrl: `https://${domain}` };
+  const host = configuredHost();
+  const pem = await readCertPem();
+  if (!pem) throw new Error('No certificate on disk — restart the companion so it can create one.');
+  return { publicUrl: `https://${host}`, certificatePem: pem };
+}
+
+app.post('/telegram/connect', handle(async (req) => {
+  const { publicUrl, certificatePem } = await resolveTelegramPublic();
   return tgConnect(pool, masterKey, {
     botToken: String(req.body?.botToken ?? ''),
     authorizedTgUserId: Number(req.body?.authorizedTgUserId),
@@ -393,6 +394,7 @@ async function settleTls(): Promise<void> {
   initCheckoutPool(pool, masterKey);            // keeps a warm checkout ready for a new Telegram chat
   initBackgroundSweeper(pool, masterKey, agentRuntime); // reviews skills + saves memory from chats that have done enough
   tgSyncCommands(pool, masterKey, log);         // keep the /commands menu current
+  tgSyncWebhookConfig(pool, masterKey, resolveTelegramPublic, log); // pick up new update kinds (reactions)
   const server = app.listen(PORT, () => log.info({ port: PORT }, 'shockwave-api listening'));
   const shutdown = () => { server.close(() => pool.end().finally(() => process.exit(0))); setTimeout(() => process.exit(0), 5000).unref(); };
   process.on('SIGTERM', shutdown);

@@ -15,7 +15,7 @@ import * as store from '../store.js';
 import * as feed from '../feed.js';
 import { prepareCheckout, landed, type GitAuth } from '../git.js';
 import { checkInAndStamp } from '../gitFixer.js';
-import { TelegramClient } from './client.js';
+import { TelegramClient, ALLOWED_UPDATES } from './client.js';
 import { makeTelegramSink } from './stream.js';
 import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
 import { transcribeAudio, warmTranscription, listenProviderOf, voiceLabel } from './transcribe.js';
@@ -48,6 +48,12 @@ const isBusy = (chatId: string) => busy.has(chatId);
 const REACT_TRANSCRIBING = '\u{270D}';  // ✍ writing hand, no U+FE0F
 const REACT_HEARD = '\u{1F44D}';        // 👍 thumbs up
 
+// The USER's reaction that asks for a bot message read back as a voice note.
+// 🎉 because the trigger must come from Telegram's default quick-reaction row —
+// picking a non-default emoji means expanding the picker every single time — and
+// the defaults offer nothing audio-shaped, so the least ambiguous leftover wins.
+const REACT_SPEAK = '\u{1F389}';        // 🎉 party popper
+
 function timingSafeEqualStr(a: string, b: string): boolean {
   const ab = Buffer.from(a); const bb = Buffer.from(b);
   if (ab.length !== bb.length) return false;
@@ -76,6 +82,38 @@ export async function disconnect(pool: PgPool, key: Buffer) {
   const token = await store.getTelegramSecret(db, key, 'botToken').catch(() => '');
   if (token) { try { await new TelegramClient(token).deleteWebhook(); } catch { /* best-effort */ } }
   await store.clearTelegramAccount(db);
+}
+
+// Re-register the webhook when the SUBSCRIPTION is stale. Telegram keeps the
+// allowed_updates list from the last setWebhook, so a bot connected before
+// `message_reaction` existed never hears about reactions — the same trap as the
+// command menu below, solved the same way: reconcile at boot. Asking Telegram
+// first (getWebhookInfo) keeps this a read on every boot after the first, and
+// the re-register keeps the pending queue (dropPending: false) so messages sent
+// while the server was down still arrive.
+export async function syncWebhookConfig(
+  pool: PgPool, key: Buffer,
+  resolvePublic: () => Promise<{ publicUrl: string; certificatePem?: string }>,
+  log?: any,
+) {
+  const db = getDb(pool);
+  const acc = await store.getTelegramAccount(db);
+  if (!acc?.enabled) return;
+  try {
+    const token = await store.getTelegramSecret(db, key, 'botToken');
+    const secret = await store.getTelegramSecret(db, key, 'webhookSecret');
+    if (!token || !secret) return;
+    const client = new TelegramClient(token);
+    const info = await client.getWebhookInfo();
+    const have: string[] = Array.isArray(info?.allowed_updates) ? info.allowed_updates : [];
+    if (ALLOWED_UPDATES.every((u) => have.includes(u))) return;
+    const { publicUrl, certificatePem } = await resolvePublic();
+    const webhookUrl = `${publicUrl.replace(/\/$/, '')}/telegram/webhook`;
+    await client.setWebhook(webhookUrl, secret, certificatePem, { dropPending: false });
+    log?.info({ allowedUpdates: ALLOWED_UPDATES }, 'telegram webhook re-registered for new update kinds');
+  } catch (e: any) {
+    log?.warn({ err: e?.message }, 'telegram webhook config sync failed');
+  }
 }
 
 // Push the current command list to Telegram. Runs at every boot, not just at
@@ -127,6 +165,23 @@ export async function handleWebhook(pool: PgPool, key: Buffer, runtime: any, req
   }
 
   const update = req.body || {};
+
+  // A reaction, not a message. Only the 🎉 being ADDED fires (present in the new
+  // list, absent from the old — so taking it off does nothing), and only from
+  // the authorized user. The bot's own progress reactions (✍/👍) can't loop this:
+  // Telegram never reports reactions set by bots.
+  const reaction = update.message_reaction;
+  if (reaction) {
+    if (reaction.user?.id !== acc.authorizedTgUserId) { res.sendStatus(200); return; }
+    if (!(await store.markTelegramUpdate(db, update.update_id))) { res.sendStatus(200); return; }
+    res.sendStatus(200); // fast ack; do the work out-of-band
+    if (hasEmoji(reaction.new_reaction, REACT_SPEAK) && !hasEmoji(reaction.old_reaction, REACT_SPEAK)) {
+      speakReactedMessage(db, key, reaction)
+        .catch((e: any) => log?.warn({ err: e?.message }, 'speaking a reacted message failed'));
+    }
+    return;
+  }
+
   const msg = update.message;
   // Single authorized user, DM-only. Unknown senders are silently ignored.
   if (!msg || msg.from?.id !== acc.authorizedTgUserId) { res.sendStatus(200); return; }
@@ -148,6 +203,49 @@ export async function handleWebhook(pool: PgPool, key: Buffer, runtime: any, req
 
 function runTurnLogged(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: any[], log: any) {
   runTurn(pool, key, runtime, acc, msgs).catch((e: any) => log?.error({ err: e?.message }, 'telegram turn failed'));
+}
+
+/** Whether a reaction list carries the given emoji. Telegram sends the full old
+ *  and new lists, so "was it just added" is a membership check on each. */
+function hasEmoji(list: any, emoji: string): boolean {
+  return Array.isArray(list) && list.some((r) => r?.type === 'emoji' && r?.emoji === emoji);
+}
+
+/**
+ * 🎉 on a bot message → the same message as a voice note, replying to the bubble
+ * it reads. No agent run — a stored-text lookup and the SAME synthesis path as
+ * voice replies (`speakInto`), with the same "recording" indicator while the
+ * audio is made.
+ *
+ * A miss (message sent before recording existed, or past the TTL) does nothing:
+ * there is no text to read and no useful thing to say about that. A synthesis
+ * failure DOES reply — the user asked for something and silence would read as
+ * the bot ignoring them.
+ */
+async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
+  const tgChatId = Number(reaction.chat?.id);
+  const messageId = Number(reaction.message_id);
+  if (!Number.isFinite(tgChatId) || !Number.isFinite(messageId)) return;
+  const stored = await store.getTelegramSent(db, tgChatId, messageId);
+  if (stored == null) return;
+
+  const client = new TelegramClient(await store.getTelegramSecret(db, key, 'botToken'));
+  // Same indicator loop as a turn, started on "recording" — synthesis is the
+  // only work here, so there is no typing phase to show first.
+  const typing = startTyping(client, tgChatId, 'record_voice');
+  try {
+    // A long reply arrives split into numbered bubbles, and the trailing "(2/3)"
+    // is chunk bookkeeping, not something to read aloud.
+    const text = stored.replace(/\n\n\(\d+\/\d+\)$/, '');
+    const spoke = await speakInto(db, key, client, tgChatId, text, null, { replyToMessageId: messageId });
+    if (!spoke) {
+      await client.sendMessage(tgChatId,
+        '⚠️ I couldn\'t turn that into audio — check the speech voice in Settings.',
+        { replyToMessageId: messageId }).catch(() => {});
+    }
+  } finally {
+    typing.stop();
+  }
 }
 
 // Telegram sends album items back-to-back, so a short wait that restarts on each
@@ -300,8 +398,8 @@ function settle<T>(p: Promise<T>): Promise<Settled<T>> {
  * next `typing` tick. The switch belongs to the loop rather than to whoever wants
  * the change.
  */
-function startTyping(client: TelegramClient, dm: number) {
-  let action = 'typing';
+function startTyping(client: TelegramClient, dm: number, initial = 'typing') {
+  let action = initial;
   const ping = () => { client.sendChatAction(dm, action).catch(() => { /* best-effort */ }); };
   ping();
   const timer = setInterval(ping, TYPING_INTERVAL_MS);
@@ -568,6 +666,9 @@ async function runTurnInner(
     // typing loop rather than be sent once: Telegram expires an action after ~5s,
     // so the loop's next `typing` tick would paint over a one-off.
     onSpeakStart: () => typing.set('record_voice'),
+    // Remember what each final bubble said, so a 🎉 reaction on it later can be
+    // answered with a voice note (speakReactedMessage).
+    record: (messageId, text) => { store.recordTelegramSent(db, dm, messageId, text).catch(() => {}); },
   });
   let finalMessages: any[] | undefined;
   const emit = (e: any) => {

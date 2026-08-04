@@ -48,21 +48,27 @@ export async function sendTelegramMessage(
     // is never also a settings write.
     const mode = opts.output ?? await store.getVoiceReply(db, opts.workspaceId);
 
+    // Each sent bubble is remembered by its message number, so a 🎉 reaction on
+    // it can be answered with audio later. Best-effort — losing the record costs
+    // a reaction, not the message.
+    const sendChunks = async () => {
+      for (const c of splitMessage(String(text ?? ''))) {
+        const m = await client.sendMessage(acc.dmChatId!, c);
+        if (m?.message_id != null) await store.recordTelegramSent(db, acc.dmChatId!, m.message_id, c).catch(() => {});
+      }
+    };
+
     // Text first when the mode sends it at all. Voice-only is the one mode that
     // withholds it, and it is opt-in twice over precisely because a voice note
     // can't be skimmed, searched or quoted.
-    if (sendsText(mode)) {
-      for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId, c);
-    }
+    if (sendsText(mode)) await sendChunks();
 
     if (speaks(mode)) {
       const spoke = await speakInto(db, key, client, acc.dmChatId, text, opts.workDir ?? null);
       // Voice-only withheld the text, so a synthesis failure would deliver
       // NOTHING. Fall back to sending it rather than losing the message — the
       // mode is a preference, and an undelivered answer is not a way to honour it.
-      if (!spoke && !sendsText(mode)) {
-        for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId, c);
-      }
+      if (!spoke && !sendsText(mode)) await sendChunks();
     }
 
     return { ok: true };
@@ -83,6 +89,9 @@ export async function speakInto(
   chatId: number,
   text: string,
   workDir: string | null,
+  /** Send the voice note as a reply to this message — how a 🎉-triggered reading
+   *  points back at the bubble it reads. Absent for ordinary voice replies. */
+  opts: { replyToMessageId?: number } = {},
 ): Promise<boolean> {
   let file: string | null = null;
   try {
@@ -98,7 +107,7 @@ export async function speakInto(
       (message) => tlog.warn({ err: message }, 'speaking the reply failed'),
     );
     if (!file) return false;
-    await client.sendFile('voice', chatId, file);
+    await client.sendFile('voice', chatId, file, undefined, { replyToMessageId: opts.replyToMessageId });
     return true;
   } catch (e: any) {
     tlog.warn({ err: e?.message ?? String(e) }, 'sending the voice reply failed');

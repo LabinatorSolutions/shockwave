@@ -220,9 +220,21 @@ CREATE TABLE IF NOT EXISTS telegram_account (
   updated_at            bigint NOT NULL
 );
 
+ALTER TABLE telegram_account ADD COLUMN IF NOT EXISTS active_workspace_id text;
+
+-- What each bot message said, keyed by Telegram's message number — a reaction
+-- update names only the number, so speaking a reacted message back needs this.
+-- Rows are pruned on insert after a fixed TTL (store.ts).
+CREATE TABLE IF NOT EXISTS telegram_sent (
+  chat_id     bigint NOT NULL,
+  message_id  bigint NOT NULL,
+  content     text NOT NULL,
+  created_at  bigint NOT NULL,
+  PRIMARY KEY (chat_id, message_id)
+);
+
 -- Cron run history (per workspace + job). croner computes next-run in memory, so
 -- only what the UI shows is persisted: last run / error / chat.
-ALTER TABLE telegram_account ADD COLUMN IF NOT EXISTS active_workspace_id text;
 
 CREATE TABLE IF NOT EXISTS cron_state (
   workspace_id    text NOT NULL,

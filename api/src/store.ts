@@ -17,7 +17,7 @@ import {
 } from './keys.ts';
 import {
   workspace, setting, agentSecret, secretValue, chatTable, message, cronState, telegramAccount,
-  attachment,
+  telegramSent, attachment,
 } from './schema.js';
 import { and, eq, lt, gt, desc, asc, ilike, like, sql, inArray } from 'drizzle-orm';
 
@@ -851,6 +851,29 @@ export async function markTelegramUpdate(db: Db, updateId: number): Promise<bool
     .set({ lastUpdateId: updateId })
     .where(and(eq(telegramAccount.id, 'default'), lt(telegramAccount.lastUpdateId, updateId)));
   return (res.rowCount ?? 0) > 0;
+}
+
+// ── Sent-message lookup (🎉 reaction → speak it back) ────────────────────────
+
+// How long a bot message stays speakable. Past this, reacting does nothing —
+// same as reacting to a message sent before the table existed.
+const TELEGRAM_SENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Upsert, because the streamed bubble is EDITED into its final text — the same
+// message number can be recorded again with better content. Pruning rides on the
+// insert: one user's message volume makes a scheduled sweep more machinery than
+// the table is worth.
+export async function recordTelegramSent(db: Db, chatId: number, messageId: number, content: string) {
+  await db.insert(telegramSent)
+    .values({ chatId, messageId, content, createdAt: now() })
+    .onConflictDoUpdate({ target: [telegramSent.chatId, telegramSent.messageId], set: { content, createdAt: now() } });
+  await db.delete(telegramSent).where(lt(telegramSent.createdAt, now() - TELEGRAM_SENT_TTL_MS));
+}
+
+export async function getTelegramSent(db: Db, chatId: number, messageId: number): Promise<string | null> {
+  const rows = await db.select().from(telegramSent)
+    .where(and(eq(telegramSent.chatId, chatId), eq(telegramSent.messageId, messageId)));
+  return rows[0]?.content ?? null;
 }
 
 // ── Chat search (the agent's `search_chats` tool) ────────────────────────────

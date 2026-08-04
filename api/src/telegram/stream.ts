@@ -55,7 +55,15 @@ export function makeTelegramSink(
   client: TelegramClient,
   chatId: number,
   deliverRoots: string[] = [],
-  opts: { speak?: (text: string) => Promise<boolean>; textToo?: boolean; onSpeakStart?: () => void } = {},
+  opts: {
+    speak?: (text: string) => Promise<boolean>; textToo?: boolean; onSpeakStart?: () => void;
+    /** Remember what a sent bubble said, keyed by its Telegram message number —
+     *  what lets a 🎉 reaction on it be answered with audio later. Injected like
+     *  `speak`, so this file stays a renderer with no store. Called only for the
+     *  FINAL text (mid-stream edits are superseded; tool lines aren't worth
+     *  speaking). Best-effort — a lost record costs a reaction, not a reply. */
+    record?: (messageId: number, text: string) => void;
+  } = {},
 ) {
   let text = '';            // current assistant text segment
   // Everything the agent has said THIS turn, across tool boundaries. `text` is
@@ -243,8 +251,12 @@ export function makeTelegramSink(
         try {
           const chunks = splitMessage(final);
           if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0]);
-          else await client.sendMessage(chatId, chunks[0]);
-          for (const c of chunks.slice(1)) await client.sendMessage(chatId, c);
+          else { const m = await client.sendMessage(chatId, chunks[0]); messageId = m?.message_id ?? null; }
+          if (messageId != null) opts.record?.(messageId, chunks[0]);
+          for (const c of chunks.slice(1)) {
+            const m = await client.sendMessage(chatId, c);
+            if (m?.message_id != null) opts.record?.(m.message_id, c);
+          }
         } catch { /* best-effort */ }
       } else {
         // Nothing was ever written into it, so the bubble is still the "…" slot.

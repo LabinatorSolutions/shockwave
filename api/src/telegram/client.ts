@@ -29,6 +29,12 @@ const KIND_METHOD: Record<SendKind, { method: string; field: string }> = {
  * 429. `res.json()` is typed `unknown`, so this is what the three call sites
  * assert it to rather than each reaching into an untyped value.
  */
+// What the webhook subscribes to. Telegram sends ONLY the listed kinds and keeps
+// the list until the next setWebhook — so adding a kind here does nothing for an
+// already-connected bot until it re-registers (syncWebhookConfig at boot handles
+// that). `message_reaction` is what makes the 🎉-to-audio reply possible.
+export const ALLOWED_UPDATES = ['message', 'message_reaction'];
+
 type TgResponse = {
   ok?: boolean;
   result?: any;
@@ -66,15 +72,20 @@ export class TelegramClient {
   getMe() { return this.call('getMe'); }
   // With a self-signed cert, Telegram needs its public PEM uploaded (multipart);
   // with a real/ngrok cert, plain JSON. `certificatePem` selects the path.
-  async setWebhook(url: string, secretToken: string, certificatePem?: string) {
+  //
+  // `dropPending: false` is the boot re-register path (syncWebhookConfig): its
+  // whole point is picking up a new allowed_updates list, and dropping the queue
+  // there would lose messages sent while the server was down.
+  async setWebhook(url: string, secretToken: string, certificatePem?: string, opts: { dropPending?: boolean } = {}) {
+    const drop = opts.dropPending !== false;
     if (!certificatePem) {
-      return this.call('setWebhook', { url, secret_token: secretToken, allowed_updates: ['message'], drop_pending_updates: true });
+      return this.call('setWebhook', { url, secret_token: secretToken, allowed_updates: ALLOWED_UPDATES, drop_pending_updates: drop });
     }
     const form = new FormData();
     form.set('url', url);
     form.set('secret_token', secretToken);
-    form.set('allowed_updates', JSON.stringify(['message']));
-    form.set('drop_pending_updates', 'true');
+    form.set('allowed_updates', JSON.stringify(ALLOWED_UPDATES));
+    form.set('drop_pending_updates', String(drop));
     form.set('certificate', new Blob([certificatePem], { type: 'application/x-pem-file' }), 'cert.pem');
     const res = await fetch(`https://api.telegram.org/bot${this.token}/setWebhook`, { method: 'POST', body: form });
     const json = await readEnvelope(res);
@@ -82,6 +93,10 @@ export class TelegramClient {
     return json.result;
   }
   deleteWebhook() { return this.call('deleteWebhook', { drop_pending_updates: true }); }
+  // What Telegram currently has registered — url and allowed_updates included.
+  // How boot tells whether the subscription list is stale without re-registering
+  // (and re-uploading a certificate) on every start.
+  getWebhookInfo() { return this.call('getWebhookInfo'); }
   sendMessage(chatId: number, text: string, opts: { replyToMessageId?: number } = {}) {
     return this.call('sendMessage', {
       chat_id: chatId, text,
@@ -121,7 +136,7 @@ export class TelegramClient {
 
   // Upload a local file. Multipart rather than the JSON `call()` above, because
   // that is the only way to hand Telegram bytes it doesn't already host.
-  private async upload(kind: SendKind, chatId: number, filePath: string, caption?: string): Promise<any> {
+  private async upload(kind: SendKind, chatId: number, filePath: string, caption?: string, opts: { replyToMessageId?: number } = {}): Promise<any> {
     const { method, field } = KIND_METHOD[kind];
     const stat = await fs.stat(filePath);
     if (stat.size > MAX_OUTBOUND_BYTES) {
@@ -135,6 +150,7 @@ export class TelegramClient {
     // and the reply text has already been delivered separately anyway.
     if (caption) form.set('caption', caption.slice(0, 1024));
     if (kind === 'document') form.set('filename', name);
+    if (opts.replyToMessageId) form.set('reply_parameters', JSON.stringify({ message_id: opts.replyToMessageId, allow_sending_without_reply: true }));
 
     const res = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
     const json = await readEnvelope(res);
@@ -149,12 +165,12 @@ export class TelegramClient {
    * dimension limits (tall screenshots, extreme aspect ratios) even though the file
    * is perfectly valid, and arriving as a file beats not arriving.
    */
-  async sendFile(kind: SendKind, chatId: number, filePath: string, caption?: string): Promise<any> {
-    if (kind !== 'photo') return this.upload(kind, chatId, filePath, caption);
+  async sendFile(kind: SendKind, chatId: number, filePath: string, caption?: string, opts: { replyToMessageId?: number } = {}): Promise<any> {
+    if (kind !== 'photo') return this.upload(kind, chatId, filePath, caption, opts);
     try {
-      return await this.upload('photo', chatId, filePath, caption);
+      return await this.upload('photo', chatId, filePath, caption, opts);
     } catch {
-      return this.upload('document', chatId, filePath, caption);
+      return this.upload('document', chatId, filePath, caption, opts);
     }
   }
 }

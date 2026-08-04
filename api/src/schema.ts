@@ -122,6 +122,17 @@ export const telegramAccount = pgTable('telegram_account', {
   updatedAt: epochMs('updated_at').notNull(),
 });
 
+// What each bot message SAID, keyed by Telegram's own message number. A reaction
+// update carries only that number — never the content — so speaking a reacted
+// message back needs this lookup. Written when a reply lands (final chunks, not
+// mid-stream edits); rows expire after TELEGRAM_SENT_TTL_MS (pruned on insert).
+export const telegramSent = pgTable('telegram_sent', {
+  chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+  messageId: bigint('message_id', { mode: 'number' }).notNull(),
+  content: text('content').notNull(),
+  createdAt: epochMs('created_at').notNull(),
+}, (t) => [primaryKey({ columns: [t.chatId, t.messageId] })]);
+
 // Cron run HISTORY only (per workspace + job). croner computes next-run in
 // memory, so nothing scheduling-related is persisted here — just what the desktop
 // UI shows: when it last ran, the last error, and which chat it produced.
