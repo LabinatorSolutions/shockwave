@@ -125,6 +125,8 @@ export default function SettingsModal({
   onReloadSecrets,
   transcription,
   onTranscriptionChange,
+  telegram,
+  onTelegramChange,
   speech,
   onSpeechChange,
   hasVoiceKey,
@@ -369,6 +371,8 @@ export default function SettingsModal({
               workspaces={workspaces}
               transcription={transcription}
               onTranscriptionChange={onTranscriptionChange}
+              telegram={telegram}
+              onTelegramChange={onTelegramChange}
             />
           )}
         </div>

@@ -8,15 +8,24 @@ import { Input } from '@/components/ui/input';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { useCommitField } from './useCommitField';
+import { resolveChatNotice } from '../../../agent-core/chatNotice.ts';
+import type { ChatNotice, Settings } from '../../shared/settings';
+
+type TelegramSettings = NonNullable<Settings['telegram']>;
 
 // Telegram integration. Everything happens on the companion (it owns the bot,
 // registers the webhook, and runs the turns) — this page just triggers those
 // actions. A message to the bot runs the agent on the bot's workspace (picked
 // below, or /workspace in the bot) and streams the reply back to Telegram.
-export default function TelegramSection({ workspaces, transcription, onTranscriptionChange }: {
+export default function TelegramSection({
+  workspaces, transcription, onTranscriptionChange, telegram, onTelegramChange,
+}: {
   workspaces?: any[];
   transcription?: any;
   onTranscriptionChange?: (next: any) => void;
+  telegram?: TelegramSettings;
+  onTelegramChange?: (next: TelegramSettings) => void;
 }) {
   const [status, setStatus] = useState<any>(null);
   const [botToken, setBotToken] = useState('');
@@ -26,6 +35,29 @@ export default function TelegramSection({ workspaces, transcription, onTranscrip
 
   const refresh = () => window.api.settings.telegramStatus().then(setStatus).catch(() => {});
   useEffect(() => { refresh(); }, []);
+
+  // The stored value keeps its unset fields unset; `effective` is what the bot
+  // will actually do, which is what the boxes have to show — an empty box next
+  // to "over ___ hours old" describes nothing.
+  const notice = telegram?.chatNotice;
+  const effective = resolveChatNotice(notice);
+  // Spread both levels: this setter REPLACES the whole `telegram` object, same
+  // as onTranscriptionChange, so a sibling key added later must survive a
+  // checkbox click here.
+  const setNotice = (patch: Partial<ChatNotice>) => onTelegramChange?.({
+    ...(telegram ?? {}),
+    chatNotice: { ...(notice ?? {}), ...patch },
+  });
+  // Blur-commit like every other Settings box. Out-of-range input is clamped by
+  // `resolveChatNotice` on the way in, so the number stored is one the bot can use.
+  const hours = useCommitField(String(effective.afterHours), (v) => {
+    const n = Number(v.trim());
+    if (Number.isFinite(n)) setNotice({ afterHours: resolveChatNotice({ afterHours: n }).afterHours });
+  });
+  const limit = useCommitField(String(effective.limit), (v) => {
+    const n = Number(v.trim());
+    if (Number.isFinite(n)) setNotice({ limit: resolveChatNotice({ limit: n }).limit });
+  });
 
   const connect = async () => {
     setBusy(true); setMsg(null);
@@ -145,6 +177,50 @@ export default function TelegramSection({ workspaces, transcription, onTranscrip
           <FieldDescription>
             Posts what was heard as 🎤 “…” before the agent runs, so a misheard word
             is distinguishable from a misunderstood instruction.
+          </FieldDescription>
+        </Field>
+      </SettingsGroup>
+
+      {/* The bot answers in whichever chat it was last left in, and that chat is
+          sticky forever — so a message sent after a week away lands in a week-old
+          conversation with no sign that it did. This lists what moved in the
+          meantime, numbered to match /chats so /chat <n> works straight off it.
+          One setting with two parameters, not three settings: the numbers live in
+          the sentence that explains them. */}
+      <SettingsGroup title="Catching up">
+        <Field>
+          <Label className="gap-2.5 text-[13px] font-normal">
+            <Checkbox
+              checked={effective.enabled}
+              onCheckedChange={(v) => setNotice({ enabled: v === true })}
+            />
+            List new chats when you pick one back up
+          </Label>
+          {/* Inline-block inputs in flowing text, not flex items: at this measure
+              a wrapping flex row breaks after every fragment, so the sentence
+              arrives as four stacked lines instead of a sentence. */}
+          <FieldDescription className="leading-7">
+            Shows up to
+            <Input
+              type="number" min={1} max={10} inputMode="numeric"
+              className="mx-1.5 inline-block h-6 w-12 px-1 text-center align-baseline text-[13px]"
+              aria-label="How many chats to list"
+              disabled={!effective.enabled}
+              value={limit.value}
+              onChange={(e) => limit.onChange(e.target.value)}
+              onBlur={limit.onBlur}
+            />
+            newer chats when the one you&apos;re returning to is over
+            <Input
+              type="number" min={0} max={8760} inputMode="numeric"
+              className="mx-1.5 inline-block h-6 w-14 px-1 text-center align-baseline text-[13px]"
+              aria-label="How old the chat has to be, in hours"
+              disabled={!effective.enabled}
+              value={hours.value}
+              onChange={(e) => hours.onChange(e.target.value)}
+              onBlur={hours.onBlur}
+            />
+            hours old. The numbers match /chats.
           </FieldDescription>
         </Field>
       </SettingsGroup>

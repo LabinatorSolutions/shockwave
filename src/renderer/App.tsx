@@ -274,14 +274,14 @@ export default function App() {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     chatSources,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
-    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, timezone,
+    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, telegram, timezone,
     settingsRef,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
-    onSpeechChange, onVoiceKeyChange, onVoiceReplyChange,
+    onSpeechChange, onVoiceKeyChange, onVoiceReplyChange, onTelegramChange,
     onSyncChange, onTimezoneChange,
   } = useSettings({
     activeWorkspacePath: workspacePath,
@@ -2282,7 +2282,7 @@ export default function App() {
             className="absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize"
             onMouseDown={onChatSidebarResizeStart}
           />
-          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} onOpenSecrets={() => openSettings(SETTINGS_SECTIONS.AGENT_SECRETS)} chatSources={chatSources} onChatSourcesChange={onChatSourcesChange} />
+          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} onOpenSecrets={() => openSettings(SETTINGS_SECTIONS.AGENT_SECRETS)} onOpenVoiceSettings={() => openSettings(SETTINGS_SECTIONS.VOICE)} chatSources={chatSources} onChatSourcesChange={onChatSourcesChange} />
         </aside>
       ) : (
         <button
@@ -2491,6 +2491,8 @@ export default function App() {
         onReloadSecrets={reloadAgentSecrets}
         transcription={transcription}
         onTranscriptionChange={onTranscriptionChange}
+        telegram={telegram}
+        onTelegramChange={onTelegramChange}
         speech={speech}
         onSpeechChange={onSpeechChange}
         hasVoiceKey={hasVoiceKey}

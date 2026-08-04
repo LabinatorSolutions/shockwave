@@ -17,7 +17,7 @@ import { prepareCheckout, landed, type GitAuth } from '../git.js';
 import { checkInAndStamp } from '../gitFixer.js';
 import { TelegramClient, ALLOWED_UPDATES } from './client.js';
 import { makeTelegramSink } from './stream.js';
-import { BOT_COMMANDS, handleCommand, activeWorkspace } from './commands.js';
+import { BOT_COMMANDS, handleCommand, activeWorkspace, chatNotice } from './commands.js';
 import { transcribeAudio, warmTranscription, listenProviderOf, voiceLabel } from './transcribe.js';
 import { voiceConfigOf } from '../../../agent-core/voiceProviders.js';
 import { normalizeVoiceReply, sendsText, speaks, type VoiceReply } from '../../../agent-core/voiceReply.js';
@@ -395,6 +395,25 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
       ? null
       : settle(prepareRun(db, key, runtime, dm, getChatId));
 
+    // Picking a chat back up after a gap: say what moved while you were away,
+    // before answering in a conversation you may not have meant. Started here so
+    // the settings read and the Telegram round-trip overlap the checkout, and
+    // awaited below so it can never land after the reply it is meant to precede.
+    //
+    // Not on a reply-switch: that path already announced which chat this is, and
+    // saying it twice, two different ways, is worse than not saying it. Not on a
+    // freshly minted chat either — `chatId` is null until getChatId() runs, and a
+    // chat that does not exist yet has nothing to have drifted from.
+    // Bound to a const rather than read inside the .then(): `chatId` is a let that
+    // getChatId() can still assign, and the id this notice is about is the one
+    // that was already active when we asked, not whatever it becomes.
+    const resumed = chatId;
+    const notice = isCommand || alreadyRunning || replySwitch || !resumed
+      ? null
+      : store.readSettings(db, key)
+        .then((s) => chatNotice(db, resumed, s.telegram?.chatNotice))
+        .catch(() => null);
+
     const input = await resolveInput(db, key, client, dm, getChatId, msgs);
     if (input === null) { await prep; return; } // nothing usable (already told the user why)
 
@@ -413,6 +432,9 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
       await relayToRunningTurn(db, runtime, client, dm, ready.value.chatId, input, msg);
       return;
     }
+
+    const catchUp = await notice;
+    if (catchUp) await client.sendMessage(dm, catchUp).catch(() => { /* cosmetic; the turn is what matters */ });
 
     await runTurnInner(db, key, runtime, acc, client, dm, input, msg, ready.value, typing);
   } catch (err: any) {

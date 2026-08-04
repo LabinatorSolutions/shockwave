@@ -14,6 +14,12 @@
 // Credentials are never stored here in the clear: the companion encrypts them in
 // its `secret_value` table (see api/CLAUDE.md), keyed by owner + field.
 
+// Declared in agent-core because the companion reads the same shape and applies
+// the same defaults — see the file for why one copy matters here.
+import type { ChatNotice } from '../../agent-core/chatNotice.ts';
+
+export type { ChatNotice };
+
 export type ThemeMode = 'system' | 'light' | 'dark';
 // What the quick-access panel pinned below the file tree shows (Explorer and
 // Bookmarks views alike). 'both' lists Recent Files and Daily Notes as two
@@ -267,6 +273,16 @@ export interface Settings {
   hasVoiceKey?: Record<string, boolean>;
   // `pat` is present in MAIN only; the renderer gets `hasPat`.
   sync: { pat?: string; hasPat?: boolean; pullIntervalSeconds: number };
+  /** How the Telegram bot behaves. Identity and runtime state (bot token, active
+   *  chat, active workspace, last update id) are NOT here — they live in the
+   *  companion's `telegram_account` row. This is preference, which is why it
+   *  rides the ordinary settings path and needs no endpoint of its own.
+   *
+   *  `chatNotice`: after a gap, list the chats that moved while you were away
+   *  before answering. Every field is optional and unset means unset — the
+   *  defaults live in `agent-core/chatNotice.ts` and are applied at the point of
+   *  use (the companion's `telegram/commands.ts`, and this page for display). */
+  telegram?: { chatNotice?: ChatNotice };
   // The one unified system timezone (synced). The companion uses it for cron
   // schedules and the agent's "current date"; the desktop uses it for display.
   // IANA name, e.g. "America/New_York"; default "UTC".

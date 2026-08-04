@@ -11,6 +11,7 @@ import { askAboutChat } from './btw.js';
 import {
   isVoiceReply, VOICE_REPLY_LABELS, VOICE_REPLY_MODES, type VoiceReply,
 } from '../../../agent-core/voiceReply.js';
+import { resolveChatNotice, type ChatNotice } from '../../../agent-core/chatNotice.js';
 
 // The popup menu is a picker, not documentation — every description is verb-first,
 // never repeats its own command name, and never cross-references another one. The
@@ -71,7 +72,91 @@ function ago(ts: number | null | undefined): string {
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}
+
+// How many of each kind `/chat <number>` can reach. Pinned sit BELOW recent so
+// the recent ones keep 1..10 — the catching-up notice only ever lists recent
+// chats, and numbering it from 1 is worth more than numbering pinned from 1.
+const RECENT_LIMIT = 10;
+const PINNED_LIMIT = 3;
+
+/**
+ * The one numbered list. `index + 1` IS the `/chat <number>` argument, so
+ * `/chats`, `/chat n` and the catching-up notice all read positions off this
+ * and cannot disagree about them.
+ *
+ * The active chat is excluded: it is printed above the list as "Current chat",
+ * and a number that switches you to where you already are is a broken row, not
+ * a harmless one. `listChats` already filters pinned out, so the two halves
+ * never contain the same chat twice.
+ */
+export async function switchableChats(db: Db, workspaceId: string, activeChatId: string | null | undefined) {
+  const [recent, pinned] = await Promise.all([
+    store.listChats(db, workspaceId, { limit: LIST_LIMIT }),
+    store.listPinned(db, workspaceId),
+  ]);
+  const notActive = (c: { chatId: string }) => c.chatId !== activeChatId;
+  return [
+    ...recent.filter(notActive).slice(0, RECENT_LIMIT).map((c) => ({ ...c, isPinned: false })),
+    ...pinned.filter(notActive).slice(0, PINNED_LIMIT).map((c) => ({ ...c, isPinned: true })),
+  ];
+}
+
+/**
+ * "3 new chats since we last talked" — sent before the turn when a chat is
+ * picked back up after a gap.
+ *
+ * The bot answers in whichever chat it was last left in, and that chat is sticky
+ * forever, so a message sent after a week away lands in a week-old conversation
+ * with nothing on screen to say so. This is the only thing that says so.
+ *
+ * Null whenever there is nothing worth interrupting for — switched off, the chat
+ * isn't actually stale, or nothing moved while you were away. Every number in it
+ * is a real `/chat` argument (see `switchableChats`), and the count is the count
+ * of rows printed, so there is nothing for the reader to reconcile.
+ */
+export async function chatNotice(
+  db: Db, activeChatId: string, cfg: ChatNotice | undefined,
+): Promise<string | null> {
+  const { enabled, afterHours, limit } = resolveChatNotice(cfg);
+  if (!enabled) return null;
+
+  const chat = await store.getChat(db, activeChatId);
+  if (!chat?.updatedAt) return null;
+  if (Date.now() - chat.updatedAt < afterHours * 3_600_000) return null;
+
+  // The chat's OWN workspace, not the active one: they are the same in the
+  // ordinary case, and where they differ the numbers have to match the /chats
+  // this chat would print, not some other repo's.
+  //
+  // Pinned chats are deliberate and long-lived — they are not what you drifted
+  // away from — so they never appear here, even though they hold numbers.
+  // **Created** since, not updated since. A chat is "new" when it came into
+  // existence — an old conversation someone replied to is recent, not new, and
+  // listing it as one sends you looking for something you have already seen.
+  // What is worth interrupting for is a thread you started somewhere else and
+  // haven't laid eyes on from here.
+  //
+  // The anchor stays `updatedAt` on both sides of the comparison: "since we last
+  // talked" is when THIS chat was last active, not when it was opened.
+  const list = await switchableChats(db, chat.workspaceId, activeChatId);
+  const newer = list.filter((c) => !c.isPinned && (c.createdAt ?? 0) > chat.updatedAt!);
+  if (!newer.length) return null;
+
+  // The age shown is LAST ACTIVITY, not age since creation — these are the same
+  // rows, with the same numbers, that /chats prints, and a timestamp meaning one
+  // thing there and another here is the confusion this whole message exists to
+  // avoid. It is also the more useful of the two: it says which of them is live.
+  const shown = newer.slice(0, limit);
+  return [
+    `${shown.length} new chat${shown.length === 1 ? '' : 's'} since we last talked:`,
+    ...shown.map((c) => `${list.indexOf(c) + 1}. ${c.title ?? 'Untitled'} (${ago(c.updatedAt)})`),
+    '',
+    '/chat <number> if you want to switch',
+  ].join('\n');
 }
 
 /**
@@ -157,23 +242,32 @@ export async function handleCommand(
     case 'chats': {
       const ws = await activeWorkspace(db);
       if (!ws) { await reply('No workspace is set. Try /workspaces.'); return true; }
-      const chats = await store.listChats(db, ws.id, { limit: LIST_LIMIT });
-      if (!chats.length) { await reply('No chats yet in this workspace. Send a message to start one.'); return true; }
-      const current = chats.find((c) => c.chatId === acc?.activeChatId);
-      const others = chats.filter((c) => c.chatId !== acc?.activeChatId).slice(0, 10);
-      const lines = others.map((c, i) => `${i + 1}. ${c.title ?? 'Untitled'}  (${ago(c.updatedAt)})`);
-      await reply(['Current chat:', `${current?.title ?? '(none)'}`, '', 'Other chats:', ...lines, '', 'Switch with "/chat <number>"'].join('\n'));
+      const list = await switchableChats(db, ws.id, acc?.activeChatId);
+      // Read the current chat directly rather than looking it up in the list —
+      // it was filtered out of it, and a pinned one was never in it to begin with.
+      const current = acc?.activeChatId ? await store.getChat(db, acc.activeChatId) : null;
+      if (!list.length && !current) { await reply('No chats yet in this workspace. Send a message to start one.'); return true; }
+      // Numbers run continuously across both sections, so a section is only a
+      // heading — dropping an empty one changes nothing about the numbering.
+      const row = (c: (typeof list)[number]) => `${list.indexOf(c) + 1}. ${c.title ?? 'Untitled'}  (${ago(c.updatedAt)})`;
+      const recent = list.filter((c) => !c.isPinned);
+      const pinned = list.filter((c) => c.isPinned);
+      await reply([
+        'Current chat:', `${current?.title ?? '(none)'}`,
+        ...(recent.length ? ['', 'Recent:', ...recent.map(row)] : []),
+        ...(pinned.length ? ['', '📌 Pinned:', ...pinned.map(row)] : []),
+        ...(list.length ? ['', 'Switch with "/chat <number>"'] : []),
+      ].join('\n'));
       return true;
     }
 
     case 'chat': {
       const ws = await activeWorkspace(db);
       if (!ws) { await reply('No workspace is set. Try /workspaces.'); return true; }
-      const chats = await store.listChats(db, ws.id, { limit: LIST_LIMIT });
-      const others = chats.filter((c) => c.chatId !== acc?.activeChatId).slice(0, 10);
-      const idx = parseIndex(rest[0], others.length);
+      const list = await switchableChats(db, ws.id, acc?.activeChatId);
+      const idx = parseIndex(rest[0], list.length);
       if (idx == null) { await reply('Usage: /chat <number> — see /chats for the list.'); return true; }
-      const target = others[idx];
+      const target = list[idx];
       await store.setTelegramActiveChat(db, target.chatId);
       await reply(`Switched to: ${target.title ?? 'Untitled'}  (${ws.name})\nCarry on — I have the whole conversation.`);
       return true;

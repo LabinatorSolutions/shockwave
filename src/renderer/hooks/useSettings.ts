@@ -11,6 +11,7 @@ type Templates = WorkspaceData['templates'];
 type Transcription = Settings['transcription'];
 type Speech = NonNullable<Settings['speech']>;
 type SyncSettings = Settings['sync'];
+type TelegramSettings = NonNullable<Settings['telegram']>;
 
 // Empty-shaped placeholder to satisfy the Settings type before hydrate() seeds
 // the real values from the companion. DB settings start UNSET here — no provider,
@@ -29,6 +30,10 @@ const DEFAULT_CANONICAL: Settings = {
   speech: {},
   hasVoiceKey: {},
   sync: { hasPat: false, pullIntervalSeconds: 10 },
+  // Empty, not seeded: every field inside is optional and the numbers that
+  // actually apply come from agent-core/chatNotice.ts at the point of use. A
+  // seeded 24 here would be written back on the next save as if you had chosen it.
+  telegram: {},
   timezone: 'UTC',
   chatSidebarOpen: true,
   chatSidebarWidth: 360,
@@ -85,6 +90,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   const [hasVoiceKey, setHasVoiceKey] = useState<Record<string, boolean>>({});
   const [sync, setSync] = useState<SyncSettings>({ hasPat: false, pullIntervalSeconds: 10 });
   const syncRef = useSyncRef(sync);
+  const [telegram, setTelegram] = useState<TelegramSettings>({});
   const [timezone, setTimezone] = useState('UTC');
 
   // Local cache of everything persisted, for rendering and for building whole
@@ -305,6 +311,13 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     await persistSettings({ speech: next });
   }, [persistSettings]);
 
+  // Whole slice, same as transcription: this REPLACES the stored object, so a
+  // caller changing one knob has to hand back the siblings it isn't touching.
+  const onTelegramChange = useCallback(async (next: TelegramSettings) => {
+    setTelegram(next);
+    await persistSettings({ telegram: next });
+  }, [persistSettings]);
+
   /**
    * Store one vendor's API key.
    *
@@ -366,6 +379,9 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       hasPat: !!disk.sync?.hasPat,
       pullIntervalSeconds: typeof disk.sync?.pullIntervalSeconds === 'number' && disk.sync.pullIntervalSeconds > 0 ? disk.sync.pullIntervalSeconds : 10,
     };
+    // Carried through raw — unset fields stay unset, so the page can tell "you
+    // chose 24" from "nobody has chosen anything", and only the display fills in.
+    const tg: TelegramSettings = disk.telegram ?? {};
     const tm: ThemeMode = disk.appearance?.themeMode || THEME_MODES.SYSTEM;
     const hln = !!disk.appearance?.hideLineNumbers;
     // Migrate the retired `dailyNotesInBookmarks` checkbox: on ⇒ daily notes panel.
@@ -393,6 +409,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       speech: sp,
       hasVoiceKey: vk,
       sync: sy,
+      telegram: tg,
       timezone: typeof disk.timezone === 'string' ? disk.timezone : 'UTC',
       chatSidebarOpen: typeof disk.chatSidebarOpen === 'boolean' ? disk.chatSidebarOpen : true,
       chatSidebarWidth: typeof disk.chatSidebarWidth === 'number' ? disk.chatSidebarWidth : 360,
@@ -419,6 +436,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     // and gating on presence would leave the dots from a previous workspace up.
     setHasVoiceKey(vk);
     if (disk.sync) { setSync(sy); syncRef.current = sy; }
+    setTelegram(tg);
     if (typeof disk.timezone === 'string') setTimezone(disk.timezone);
   }, [dailyNoteRef, syncRef]);
   hydrateRef.current = hydrateSettings;
@@ -427,13 +445,13 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     chatSources,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
-    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, timezone,
+    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, telegram, timezone,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onVoiceReplyChange, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
-    onSpeechChange, onVoiceKeyChange,
+    onSpeechChange, onVoiceKeyChange, onTelegramChange,
     onSyncChange, onTimezoneChange,
   };
 }
