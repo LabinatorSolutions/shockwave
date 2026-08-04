@@ -34,6 +34,8 @@ const HELP = [
   'Send me anything and the agent works on it: reading and editing your files, running commands, answering questions. Its changes are committed and pushed when it finishes.',
   'You can also send a voice note instead of typing.',
   '',
+  'Reply to any message of mine to carry on in the chat it came from — I switch to it, and to its workspace, before answering.',
+  '',
   'Commands:',
   '/new — start a fresh chat in the same workspace',
   '/chats — list recent chats',

@@ -285,6 +285,9 @@ app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, m
 app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''), {
   output: ['text', 'voice', 'both'].includes(req.body?.output) ? req.body.output : undefined,
   workspaceId: typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : null,
+  // Which chat is speaking, so a reply to the message resumes it. Absent from an
+  // older desktop — a reply to one of those simply doesn't switch.
+  chatId: typeof req.body?.chatId === 'string' ? req.body.chatId : null,
 })));
 app.get('/telegram/status', handle(() => tgStatus(pool)));
 // Set the workspace Telegram runs against (same semantics as /workspace in the

@@ -29,10 +29,14 @@ import { OPEN_FILE_TOOL } from './openFileExtension.js';
 // resolves nothing — it forwards the workspace id and lets the server read the
 // preference it already owns. Delivery and synthesis are over there too: the bot
 // token and ffmpeg are both companion-only.
-function makeDesktopSendTool(workspaceId: string) {
+//
+// The CHAT id goes with it so the companion can record which conversation each
+// bubble came from: replying to it on Telegram then continues THIS chat, rather
+// than whichever one the bot was last pointed at.
+function makeDesktopSendTool(workspaceId: string, chatId: string) {
   return makeSendMessageTool(async (text, opts) => {
     try {
-      const res = await api.post('/telegram/send', { text, output: opts.output, workspaceId });
+      const res = await api.post('/telegram/send', { text, output: opts.output, workspaceId, chatId });
       if (!res?.ok) return { ok: false, error: res?.error || 'Could not send the message.' };
       return { ok: true };
     } catch (e: any) {
@@ -92,7 +96,7 @@ export function initDesktopAgent(deps: {
   const host: AgentHost = {
     builtinDir: deps.builtinDir,
     machine: os.hostname(),
-    extraTools: ({ workspaceId }) => [OPEN_FILE_TOOL, makeDesktopSendTool(workspaceId)],
+    extraTools: ({ chatId, workspaceId }) => [OPEN_FILE_TOOL, makeDesktopSendTool(workspaceId, chatId)],
     dataDir: () => app.getPath('userData'), // one global pi scratch dir on the desktop
     scratchDir: (chatId) => chatScratchDir(chatId),
     getVoiceConfig: deps.getVoiceConfig,

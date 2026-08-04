@@ -122,14 +122,22 @@ export const telegramAccount = pgTable('telegram_account', {
   updatedAt: epochMs('updated_at').notNull(),
 });
 
-// What each bot message SAID, keyed by Telegram's own message number. A reaction
-// update carries only that number — never the content — so speaking a reacted
-// message back needs this lookup. Written when a reply lands (final chunks, not
-// mid-stream edits); rows expire after TELEGRAM_SENT_TTL_MS (pruned on insert).
+// What each bot message SAID and WHICH CHAT SAID IT, keyed by Telegram's own
+// message number. Both a reaction update and a reply carry only that number —
+// never the content, never the conversation — so speaking a reacted message back
+// (content) and switching into a replied-to message's chat (origin_chat_id) are
+// the same lookup. Written when a reply lands (final chunks, not mid-stream
+// edits). Rows never expire — see recordTelegramSent.
+//
+// `chat_id` is TELEGRAM's chat (the DM); `origin_chat_id` is one of ours. It is
+// nullable because rows written before it existed have no answer, and a sender
+// that doesn't know its chat (the desktop's `send_message`, pre-1.0.63) passes
+// none — a reply to one of those simply doesn't switch.
 export const telegramSent = pgTable('telegram_sent', {
   chatId: bigint('chat_id', { mode: 'number' }).notNull(),
   messageId: bigint('message_id', { mode: 'number' }).notNull(),
   content: text('content').notNull(),
+  originChatId: text('origin_chat_id'),
   createdAt: epochMs('created_at').notNull(),
 }, (t) => [primaryKey({ columns: [t.chatId, t.messageId] })]);
 

@@ -58,7 +58,7 @@ export function makeTelegramSink(
   opts: {
     speak?: (text: string) => Promise<boolean>; textToo?: boolean; onSpeakStart?: () => void;
     /** Remember what a sent bubble said, keyed by its Telegram message number —
-     *  what lets a 🎉 reaction on it be answered with audio later. Injected like
+     *  what lets a 🤬 reaction on it be answered with audio later. Injected like
      *  `speak`, so this file stays a renderer with no store. Called only for the
      *  FINAL text (mid-stream edits are superseded; tool lines aren't worth
      *  speaking). Best-effort — a lost record costs a reaction, not a reply. */

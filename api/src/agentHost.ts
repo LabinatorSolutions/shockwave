@@ -44,10 +44,13 @@ export function makeCompanionRuntime(pool: PgPool, key: Buffer) {
     // Built per session rather than once, because the reply mode is per WORKSPACE
     // and the host is built once per process — so the tool has to be told which
     // workspace this turn belongs to in order to read that preference. It cannot
-    // write it; that is `/voice`.
-    extraTools: ({ workspaceId, workspacePath }) => [
+    // write it; that is `/voice`. The chat travels with it for the same reason in
+    // reverse: each bubble is recorded against the conversation that sent it, so
+    // replying to one comes back HERE rather than to whatever chat the bot was
+    // last pointed at.
+    extraTools: ({ chatId, workspaceId, workspacePath }) => [
       makeSendMessageTool((text, opts) => sendTelegramMessage(pool, key, text, {
-        ...opts, workspaceId, workDir: workspacePath,
+        ...opts, chatId, workspaceId, workDir: workspacePath,
       })),
       // Registered so the catalog the prompt lists and the tools pi holds are the
       // same set. It cannot work here and says so; the gate refuses the call

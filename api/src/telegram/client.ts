@@ -32,7 +32,7 @@ const KIND_METHOD: Record<SendKind, { method: string; field: string }> = {
 // What the webhook subscribes to. Telegram sends ONLY the listed kinds and keeps
 // the list until the next setWebhook — so adding a kind here does nothing for an
 // already-connected bot until it re-registers (syncWebhookConfig at boot handles
-// that). `message_reaction` is what makes the 🎉-to-audio reply possible.
+// that). `message_reaction` is what makes the 🤬-to-audio reply possible.
 export const ALLOWED_UPDATES = ['message', 'message_reaction'];
 
 type TgResponse = {

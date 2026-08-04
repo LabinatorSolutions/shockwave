@@ -853,27 +853,39 @@ export async function markTelegramUpdate(db: Db, updateId: number): Promise<bool
   return (res.rowCount ?? 0) > 0;
 }
 
-// ── Sent-message lookup (🎉 reaction → speak it back) ────────────────────────
-
-// How long a bot message stays speakable. Past this, reacting does nothing —
-// same as reacting to a message sent before the table existed.
-const TELEGRAM_SENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// ── Sent-message lookup (🤬 → speak it back, reply → switch into its chat) ────
 
 // Upsert, because the streamed bubble is EDITED into its final text — the same
-// message number can be recorded again with better content. Pruning rides on the
-// insert: one user's message volume makes a scheduled sweep more machinery than
-// the table is worth.
-export async function recordTelegramSent(db: Db, chatId: number, messageId: number, content: string) {
+// message number can be recorded again with better content.
+//
+// `originChatId` is OUR chat, not Telegram's, and is written on every record: a
+// given Telegram message number belongs to exactly one bubble, so a re-record is
+// the same conversation and can only carry the same answer.
+//
+// NOTHING EXPIRES THESE ROWS, deliberately. A row is the only link between a
+// message sitting in the user's Telegram history and the chat that produced it,
+// and Telegram keeps that message forever — so an expiry can only make a gesture
+// stop working on a bubble that is still on screen, silently, which is the one
+// failure mode neither gesture can report. A row is one bot message: tens of MB
+// a year at heavy use, less than a single chat transcript.
+export async function recordTelegramSent(
+  db: Db, chatId: number, messageId: number, content: string, originChatId: string | null,
+) {
   await db.insert(telegramSent)
-    .values({ chatId, messageId, content, createdAt: now() })
-    .onConflictDoUpdate({ target: [telegramSent.chatId, telegramSent.messageId], set: { content, createdAt: now() } });
-  await db.delete(telegramSent).where(lt(telegramSent.createdAt, now() - TELEGRAM_SENT_TTL_MS));
+    .values({ chatId, messageId, content, originChatId, createdAt: now() })
+    .onConflictDoUpdate({
+      target: [telegramSent.chatId, telegramSent.messageId],
+      set: { content, originChatId, createdAt: now() },
+    });
 }
 
-export async function getTelegramSent(db: Db, chatId: number, messageId: number): Promise<string | null> {
+export async function getTelegramSent(
+  db: Db, chatId: number, messageId: number,
+): Promise<{ content: string; originChatId: string | null } | null> {
   const rows = await db.select().from(telegramSent)
     .where(and(eq(telegramSent.chatId, chatId), eq(telegramSent.messageId, messageId)));
-  return rows[0]?.content ?? null;
+  const row = rows[0];
+  return row ? { content: row.content, originChatId: row.originChatId ?? null } : null;
 }
 
 // ── Chat search (the agent's `search_chats` tool) ────────────────────────────

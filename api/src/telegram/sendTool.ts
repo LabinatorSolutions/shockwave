@@ -31,6 +31,12 @@ export async function sendTelegramMessage(
     /** Where to write the audio file, when there is a run directory to put it
      *  beside. Purely a scratch location — nothing is read from it. */
     workDir?: string | null;
+    /** Which chat is speaking — recorded against each bubble so a REPLY to it
+     *  resumes this conversation (switchChatForReply). This is the case the
+     *  feature is worth most in: a cron job or a desktop turn reaches out, and
+     *  answering it should land where the work is, not in whatever chat Telegram
+     *  happened to be pointed at. Unset ⇒ a reply just doesn't switch. */
+    chatId?: string | null;
   } = {},
 ): Promise<SendResult> {
   try {
@@ -48,13 +54,16 @@ export async function sendTelegramMessage(
     // is never also a settings write.
     const mode = opts.output ?? await store.getVoiceReply(db, opts.workspaceId);
 
-    // Each sent bubble is remembered by its message number, so a 🎉 reaction on
-    // it can be answered with audio later. Best-effort — losing the record costs
-    // a reaction, not the message.
+    // Each sent bubble is remembered by its message number and its chat, so a
+    // reaction on it can be answered with audio and a reply to it can resume the
+    // conversation that sent it. Best-effort — losing the record costs a
+    // reaction and a shortcut, not the message.
     const sendChunks = async () => {
       for (const c of splitMessage(String(text ?? ''))) {
         const m = await client.sendMessage(acc.dmChatId!, c);
-        if (m?.message_id != null) await store.recordTelegramSent(db, acc.dmChatId!, m.message_id, c).catch(() => {});
+        if (m?.message_id != null) {
+          await store.recordTelegramSent(db, acc.dmChatId!, m.message_id, c, opts.chatId ?? null).catch(() => {});
+        }
       }
     };
 
@@ -64,7 +73,8 @@ export async function sendTelegramMessage(
     if (sendsText(mode)) await sendChunks();
 
     if (speaks(mode)) {
-      const spoke = await speakInto(db, key, client, acc.dmChatId, text, opts.workDir ?? null);
+      const spoke = await speakInto(db, key, client, acc.dmChatId, text, opts.workDir ?? null,
+        { originChatId: opts.chatId ?? null });
       // Voice-only withheld the text, so a synthesis failure would deliver
       // NOTHING. Fall back to sending it rather than losing the message — the
       // mode is a preference, and an undelivered answer is not a way to honour it.
@@ -89,9 +99,16 @@ export async function speakInto(
   chatId: number,
   text: string,
   workDir: string | null,
-  /** Send the voice note as a reply to this message — how a 🎉-triggered reading
-   *  points back at the bubble it reads. Absent for ordinary voice replies. */
-  opts: { replyToMessageId?: number } = {},
+  opts: {
+    /** Send the voice note as a reply to this message — how a reaction-triggered
+     *  reading points back at the bubble it reads. Absent for ordinary voice
+     *  replies. */
+    replyToMessageId?: number;
+    /** Which chat is speaking, recorded against the voice bubble. Without it a
+     *  VOICE-ONLY workspace has nothing to reply to: it writes no text bubble at
+     *  all, so the audio is the only thing on screen to point at. */
+    originChatId?: string | null;
+  } = {},
 ): Promise<boolean> {
   let file: string | null = null;
   try {
@@ -107,7 +124,13 @@ export async function speakInto(
       (message) => tlog.warn({ err: message }, 'speaking the reply failed'),
     );
     if (!file) return false;
-    await client.sendFile('voice', chatId, file, undefined, { replyToMessageId: opts.replyToMessageId });
+    const m = await client.sendFile('voice', chatId, file, undefined, { replyToMessageId: opts.replyToMessageId });
+    // The spoken text is stored against the audio bubble for the same reason a
+    // written one is: a reply to it should reach the conversation that said it,
+    // and in voice-only mode this bubble is the only thing there is to reply to.
+    if (m?.message_id != null) {
+      await store.recordTelegramSent(db, chatId, m.message_id, text, opts.originChatId ?? null).catch(() => {});
+    }
     return true;
   } catch (e: any) {
     tlog.warn({ err: e?.message ?? String(e) }, 'sending the voice reply failed');

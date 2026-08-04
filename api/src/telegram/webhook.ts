@@ -49,10 +49,10 @@ const REACT_TRANSCRIBING = '\u{270D}';  // ✍ writing hand, no U+FE0F
 const REACT_HEARD = '\u{1F44D}';        // 👍 thumbs up
 
 // The USER's reaction that asks for a bot message read back as a voice note.
-// 🎉 because the trigger must come from Telegram's default quick-reaction row —
+// 🤬 because the trigger must come from Telegram's default quick-reaction row —
 // picking a non-default emoji means expanding the picker every single time — and
 // the defaults offer nothing audio-shaped, so the least ambiguous leftover wins.
-const REACT_SPEAK = '\u{1F389}';        // 🎉 party popper
+const REACT_SPEAK = '\u{1F92C}';        // 🤬 face with symbols on mouth
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   const ab = Buffer.from(a); const bb = Buffer.from(b);
@@ -166,7 +166,7 @@ export async function handleWebhook(pool: PgPool, key: Buffer, runtime: any, req
 
   const update = req.body || {};
 
-  // A reaction, not a message. Only the 🎉 being ADDED fires (present in the new
+  // A reaction, not a message. Only the 🤬 being ADDED fires (present in the new
   // list, absent from the old — so taking it off does nothing), and only from
   // the authorized user. The bot's own progress reactions (✍/👍) can't loop this:
   // Telegram never reports reactions set by bots.
@@ -212,7 +212,7 @@ function hasEmoji(list: any, emoji: string): boolean {
 }
 
 /**
- * 🎉 on a bot message → the same message as a voice note, replying to the bubble
+ * 🤬 on a bot message → the same message as a voice note, replying to the bubble
  * it reads. No agent run — a stored-text lookup and the SAME synthesis path as
  * voice replies (`speakInto`), with the same "recording" indicator while the
  * audio is made.
@@ -236,8 +236,11 @@ async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
   try {
     // A long reply arrives split into numbered bubbles, and the trailing "(2/3)"
     // is chunk bookkeeping, not something to read aloud.
-    const text = stored.replace(/\n\n\(\d+\/\d+\)$/, '');
-    const spoke = await speakInto(db, key, client, tgChatId, text, null, { replyToMessageId: messageId });
+    const text = stored.content.replace(/\n\n\(\d+\/\d+\)$/, '');
+    // The reading carries the SAME chat as the bubble it read, so replying to the
+    // audio lands where replying to the text would have.
+    const spoke = await speakInto(db, key, client, tgChatId, text, null,
+      { replyToMessageId: messageId, originChatId: stored.originChatId });
     if (!spoke) {
       await client.sendMessage(tgChatId,
         '⚠️ I couldn\'t turn that into audio — check the speech voice in Settings.',
@@ -246,6 +249,65 @@ async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
   } finally {
     typing.stop();
   }
+}
+
+/**
+ * Replying to one of my bubbles means "carry on in THAT conversation".
+ *
+ * A reply update names only the message number, never what was said or which
+ * chat said it — the same blindness a reaction update has — so this is the same
+ * `telegram_sent` lookup, reading `originChatId` instead of the text. Nothing is
+ * inferred from the message: a bubble is either recorded with its chat or it
+ * isn't, and a miss (older than the TTL, sent before this existed, or a reply to
+ * the user's OWN message) just runs the turn where it would have run anyway.
+ *
+ * A chat belongs to one workspace, so switching chat can mean switching
+ * workspace too — otherwise the turn resumes a conversation about one repo
+ * inside a checkout of another. When that workspace is GONE the switch is
+ * refused outright rather than half-made: `activeWorkspace` would fall back to
+ * the first workspace, and running someone's chat against the wrong repo is
+ * worse than not switching. Same for a deleted chat.
+ *
+ * Returns the chat now active, or null when nothing changed. It is awaited
+ * before the turn's fan-out because everything downstream — the busy check, the
+ * checkout, the session boot — is keyed on which chat this is.
+ */
+async function switchChatForReply(db: Db, client: TelegramClient, acc: any, msgs: any[]): Promise<string | null> {
+  const dm = acc.dmChatId as number;
+  // Telegram puts the reply on whichever album item carried it, like the caption.
+  const replied = msgs.map((m) => m?.reply_to_message).find(Boolean);
+  if (!replied?.message_id) return null;
+
+  const stored = await store.getTelegramSent(db, Number(replied.chat?.id ?? dm), Number(replied.message_id));
+  const target = stored?.originChatId;
+  // Not one of mine, too old to know, or already where we are.
+  if (!target || target === acc.activeChatId) return null;
+
+  const chat = await store.getChat(db, target);
+  if (!chat) {
+    await client.sendMessage(dm, 'That chat no longer exists.').catch(() => {});
+    return null;
+  }
+  const ws = await store.getWorkspace(db, chat.workspaceId);
+  if (!ws) {
+    await client.sendMessage(dm, "That chat's workspace no longer exists.").catch(() => {});
+    return null;
+  }
+
+  // Workspace FIRST: setTelegramActiveWorkspace clears the active chat, so doing
+  // it second would undo the switch it is supposed to be part of.
+  const current = await activeWorkspace(db);
+  const movedWorkspace = ws.id !== current?.id;
+  if (movedWorkspace) await store.setTelegramActiveWorkspace(db, ws.id);
+  await store.setTelegramActiveChat(db, target);
+
+  // Said before the turn starts, not after it: the reply that follows is about to
+  // arrive with a different conversation behind it, and which one is only
+  // obvious to the person who knows it moved.
+  await client.sendMessage(dm,
+    `🔀 Switched to: ${chat.title ?? 'Untitled'}${movedWorkspace ? `  (${ws.name})` : ''}`,
+  ).catch(() => { /* cosmetic; the switch itself already landed */ });
+  return target;
 }
 
 // Telegram sends album items back-to-back, so a short wait that restarts on each
@@ -285,10 +347,15 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
     // clone and a session boot, with nothing to say whether the bot had even
     // received it.
     typing = startTyping(client, dm);
+    // A reply to one of my bubbles moves the conversation before anything else
+    // reads which chat this is — the busy check, the checkout and the session
+    // boot below are all keyed on it. Commands included: replying to a bubble
+    // and typing /status means asking about THAT chat.
+    const replySwitch = await switchChatForReply(db, client, acc, msgs);
     // Attachments land in the chat's own staging dir, so saving one needs the chat
     // to exist. Minting it lazily keeps `/help` and friends from creating a chat
     // just by being typed — they never carry a file.
-    let chatId: string | null = acc.activeChatId ?? null;
+    let chatId: string | null = replySwitch ?? acc.activeChatId ?? null;
     const getChatId = async () => {
       if (!chatId) { chatId = crypto.randomUUID(); await store.setTelegramActiveChat(db, chatId); }
       return chatId;
@@ -659,16 +726,17 @@ async function runTurnInner(
   // is running in. Absent `speak` is what `text` means — see makeTelegramSink.
   const sink = makeTelegramSink(client, dm, [dir, chatFilesDir(chatId)], {
     speak: speaks(voiceReply)
-      ? (text: string) => speakInto(db, key, client, dm, text, dir)
+      ? (text: string) => speakInto(db, key, client, dm, text, dir, { originChatId: chatId })
       : undefined,
     textToo: sendsText(voiceReply),
     // Swap the indicator while the audio is being made. It has to go through the
     // typing loop rather than be sent once: Telegram expires an action after ~5s,
     // so the loop's next `typing` tick would paint over a one-off.
     onSpeakStart: () => typing.set('record_voice'),
-    // Remember what each final bubble said, so a 🎉 reaction on it later can be
-    // answered with a voice note (speakReactedMessage).
-    record: (messageId, text) => { store.recordTelegramSent(db, dm, messageId, text).catch(() => {}); },
+    // Remember what each final bubble said AND which chat said it, so a reaction
+    // on it can be answered with a voice note (speakReactedMessage) and a reply
+    // to it resumes this conversation (switchChatForReply).
+    record: (messageId, text) => { store.recordTelegramSent(db, dm, messageId, text, chatId).catch(() => {}); },
   });
   let finalMessages: any[] | undefined;
   const emit = (e: any) => {

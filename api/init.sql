@@ -222,16 +222,22 @@ CREATE TABLE IF NOT EXISTS telegram_account (
 
 ALTER TABLE telegram_account ADD COLUMN IF NOT EXISTS active_workspace_id text;
 
--- What each bot message said, keyed by Telegram's message number — a reaction
--- update names only the number, so speaking a reacted message back needs this.
--- Rows are pruned on insert after a fixed TTL (store.ts).
+-- What each bot message said and which chat said it, keyed by Telegram's message
+-- number — a reaction update and a reply both name only that number, so speaking
+-- a reacted message back and switching into a replied-to message's chat are the
+-- same lookup. `chat_id` is Telegram's (the DM); `origin_chat_id` is one of ours,
+-- nullable for rows written before it existed. Nothing expires these rows: the
+-- message they describe stays in Telegram forever (store.ts).
 CREATE TABLE IF NOT EXISTS telegram_sent (
-  chat_id     bigint NOT NULL,
-  message_id  bigint NOT NULL,
-  content     text NOT NULL,
-  created_at  bigint NOT NULL,
+  chat_id         bigint NOT NULL,
+  message_id      bigint NOT NULL,
+  content         text NOT NULL,
+  origin_chat_id  text,
+  created_at      bigint NOT NULL,
   PRIMARY KEY (chat_id, message_id)
 );
+
+ALTER TABLE telegram_sent ADD COLUMN IF NOT EXISTS origin_chat_id text;
 
 -- Cron run history (per workspace + job). croner computes next-run in memory, so
 -- only what the UI shows is persisted: last run / error / chat.
