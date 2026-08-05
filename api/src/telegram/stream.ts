@@ -58,7 +58,12 @@ export function makeTelegramSink(
   chatId: number,
   deliverRoots: string[] = [],
   opts: {
-    speak?: (text: string) => Promise<boolean>; textToo?: boolean; onSpeakStart?: () => void;
+    /** `onFirstSent` is handed in so the speaker can take the waiting bubble down
+     *  the moment the first piece of audio lands — a long reply is spoken in
+     *  pieces and shows its own dots between them, and two waiting displays at
+     *  once is one too many. */
+    speak?: (text: string, onFirstSent: () => Promise<void>) => Promise<boolean>;
+    textToo?: boolean; onSpeakStart?: () => void;
   } = {},
 ) {
   let text = '';            // current assistant text segment
@@ -260,7 +265,7 @@ export function makeTelegramSink(
       let spoke = false;
       if (opts.speak) {
         opts.onSpeakStart?.();
-        spoke = await opts.speak(final);
+        spoke = await opts.speak(final, dropPlaceholder);
       }
 
       // Write the answer unless the mode said not to — and write it ANYWAY when

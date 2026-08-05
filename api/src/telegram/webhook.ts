@@ -261,16 +261,21 @@ async function speakReactedMessage(db: Db, key: Buffer, reaction: any) {
     const text = stored.content.replace(/\n\n\(\d+\/\d+\)$/, '');
     // The reading carries the SAME chat as the bubble it read, so replying to the
     // audio lands where replying to the text would have.
+    // A long message is read in pieces, with the dots back between them —
+    // `speakInto` owns that. This bubble covers the first piece only, and comes
+    // down as soon as there is audio to replace it.
     const spoke = await speakInto(db, key, client, tgChatId, text, null,
-      { replyToMessageId: messageId, originChatId: stored.originChatId });
-    if (!spoke) {
+      { replyToMessageId: messageId, originChatId: stored.originChatId, onFirstSent: () => bubble.remove() });
+    // 'partial' says its own piece — `speakInto` already reported that it stopped
+    // partway, and repeating it here would name a cause that isn't the one.
+    if (spoke === 'none') {
       await client.sendMessage(tgChatId,
         '⚠️ I couldn\'t turn that into audio — check the speech voice in Settings.',
         { replyToMessageId: messageId }).catch(() => {});
     }
-    // Whatever went out went out FIRST, then the dots go. Deleting before the
-    // answer is sent leaves a moment with nothing on screen at all, which is the
-    // gap the bubble exists to fill.
+    // Nothing was ever sent, so the first piece never took it down. Removing an
+    // already-removed bubble is a no-op, which is what makes this safe to call
+    // on every path rather than only the ones that need it.
     await bubble.remove();
   } finally {
     typing.stop();
@@ -794,7 +799,11 @@ async function runTurnInner(
   // is running in. Absent `speak` is what `text` means — see makeTelegramSink.
   const sink = makeTelegramSink(client, dm, [dir, chatFilesDir(chatId)], {
     speak: speaks(voiceReply)
-      ? (text: string) => speakInto(db, key, client, dm, text, dir, { originChatId: chatId })
+      // A PARTIAL reading reports false, so the sink writes the words after all:
+      // the part that was never spoken exists nowhere else.
+      ? (text: string, onFirstSent: () => Promise<void>) =>
+        speakInto(db, key, client, dm, text, dir, { originChatId: chatId, onFirstSent })
+          .then((extent) => extent === 'all')
       : undefined,
     textToo: sendsText(voiceReply),
     // Swap the indicator while the audio is being made. It has to go through the

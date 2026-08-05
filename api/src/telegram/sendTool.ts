@@ -11,7 +11,9 @@ import * as store from '../store.js';
 import type { PgPool } from '../db.js';
 import { getDb } from '../db.js';
 import { voiceConfigOf } from '../../../agent-core/voiceProviders.js';
-import { speakToFile } from '../../../agent-core/speak.js';
+import { speakToFile, speakLimitFor } from '../../../agent-core/speak.js';
+import { splitForSpeech } from '../../../agent-core/speechChunks.js';
+import { startWaitingBubble } from './waitingBubble.js';
 import { sendsText, speaks } from '../../../agent-core/voiceReply.js';
 import type { SendOptions, SendResult } from '../../../agent-core/sendMessage.js';
 import { logger } from '../log.js';
@@ -76,7 +78,9 @@ export async function sendTelegramMessage(
       // Voice-only withheld the text, so a synthesis failure would deliver
       // NOTHING. Fall back to sending it rather than losing the message — the
       // mode is a preference, and an undelivered answer is not a way to honour it.
-      if (!spoke && !sendsText(mode)) await sendChunks();
+      // A PARTIAL reading counts as a failure here for the same reason: the part
+      // that was never spoken exists nowhere else.
+      if (spoke !== 'all' && !sendsText(mode)) await sendChunks();
     }
 
     return { ok: true };
@@ -86,9 +90,29 @@ export async function sendTelegramMessage(
 }
 
 /**
- * Speak `text` and send it as a voice bubble. Returns whether a voice note
- * actually went out, which the voice-ONLY path needs: it withheld the text, so a
- * silent failure there would deliver nothing at all.
+ * How much of `text` was spoken. The voice-ONLY path withheld the words, so it
+ * needs more than a boolean: `none` means write them after all, and so does
+ * `partial` — some audio arrived, but the rest of the answer exists nowhere.
+ */
+export type SpokenExtent = 'none' | 'partial' | 'all';
+
+/**
+ * Speak `text` and send it as voice bubbles.
+ *
+ * **A long script goes out in PIECES, not one file** (`splitForSpeech`), because
+ * every byte of a voice note is synthesised before any of it is sent: one long
+ * answer means a long silence and then everything at once. Split, the first sound
+ * arrives in a second or two and each later piece is made while you are listening
+ * to the one before it. Short scripts are unchanged — one piece, one bubble.
+ *
+ * **The dots come back between pieces**, so a gap reads as "more is coming"
+ * rather than as the answer having stopped. There are deliberately none after the
+ * last piece: their ABSENCE is how you know it has finished.
+ *
+ * The first piece's wait belongs to the caller, which already has something on
+ * screen — a waiting bubble for a reaction, the turn's placeholder for a reply.
+ * `onFirstSent` is how that gets taken down once there is audio to replace it, so
+ * two different waiting displays are never up at once.
  */
 export async function speakInto(
   db: ReturnType<typeof getDb>,
@@ -98,7 +122,7 @@ export async function speakInto(
   text: string,
   workDir: string | null,
   opts: {
-    /** Send the voice note as a reply to this message — how a reaction-triggered
+    /** Send the voice notes as replies to this message — how a reaction-triggered
      *  reading points back at the bubble it reads. Absent for ordinary voice
      *  replies. */
     replyToMessageId?: number;
@@ -106,36 +130,68 @@ export async function speakInto(
      *  VOICE-ONLY workspace has nothing to reply to: it writes no text bubble at
      *  all, so the audio is the only thing on screen to point at. */
     originChatId?: string | null;
+    /** Called once the FIRST piece has landed, so the caller can take down
+     *  whatever it was showing while that piece was made. */
+    onFirstSent?: () => Promise<void> | void;
   } = {},
-): Promise<boolean> {
-  let file: string | null = null;
-  try {
-    const settings = await store.readSettings(db, key);
-    const config = voiceConfigOf(settings);
-    // Write beside the run rather than into the checkout: the audio is a delivery
-    // artifact, not the user's content, and everything in a checkout is committed.
-    const dir = workDir ? path.join(workDir, '..') : '/tmp';
-    file = await speakToFile(
-      text,
-      config,
-      path.join(dir, `reply-${Date.now()}.ogg`),
-      (message) => tlog.warn({ err: message }, 'speaking the reply failed'),
-    );
-    if (!file) return false;
-    const m = await client.sendFile('voice', chatId, file, undefined, { replyToMessageId: opts.replyToMessageId });
-    // The spoken text is stored against the audio bubble for the same reason a
-    // written one is: a reply to it should reach the conversation that said it,
-    // and in voice-only mode this bubble is the only thing there is to reply to.
-    if (m?.message_id != null) {
-      await store.recordTelegramSent(db, chatId, m.message_id, text, opts.originChatId ?? null).catch(() => {});
+): Promise<SpokenExtent> {
+  const settings = await store.readSettings(db, key);
+  const config = voiceConfigOf(settings);
+  const pieces = splitForSpeech(text, speakLimitFor(config));
+  if (!pieces.length) return 'none';
+
+  // Write beside the run rather than into the checkout: the audio is a delivery
+  // artifact, not the user's content, and everything in a checkout is committed.
+  const dir = workDir ? path.join(workDir, '..') : '/tmp';
+  const stamp = Date.now();
+  let sent = 0;
+
+  for (let i = 0; i < pieces.length; i++) {
+    // Nobody is covering the wait for a piece after the first — the caller's
+    // display came down with the first one — so this puts the dots back up.
+    const bubble = i === 0 ? null : startWaitingBubble(client, chatId);
+    let file: string | null = null;
+    try {
+      file = await speakToFile(
+        pieces[i], config, path.join(dir, `reply-${stamp}-${i}.ogg`),
+        (message) => tlog.warn({ err: message, piece: i }, 'speaking the reply failed'),
+      );
+      if (!file) break;
+      // ONLY the first piece points back at the message being answered. The rest
+      // follow it in sequence and are obviously part of the same reading — five
+      // voice notes all pointing at one message is noise, and it would put a
+      // quoted copy of that message above every one of them.
+      const m = await client.sendFile('voice', chatId, file, undefined,
+        { replyToMessageId: i === 0 ? opts.replyToMessageId : undefined });
+      // The spoken text is stored against the audio bubble for the same reason a
+      // written one is: a reply to it should reach the conversation that said it,
+      // and in voice-only mode this bubble is the only thing there is to reply to.
+      if (m?.message_id != null) {
+        await store.recordTelegramSent(db, chatId, m.message_id, pieces[i], opts.originChatId ?? null).catch(() => {});
+      }
+      sent++;
+    } catch (e: any) {
+      tlog.warn({ err: e?.message ?? String(e), piece: i }, 'sending the voice reply failed');
+      break;
+    } finally {
+      // The dots go AFTER the audio they were standing in for, never before —
+      // the other order leaves a moment with nothing on screen at all.
+      await bubble?.remove();
+      if (file) await fs.rm(file, { force: true }).catch(() => { /* best-effort */ });
+      if (sent === 1 && i === 0) await Promise.resolve(opts.onFirstSent?.()).catch(() => {});
     }
-    return true;
-  } catch (e: any) {
-    tlog.warn({ err: e?.message ?? String(e) }, 'sending the voice reply failed');
-    return false;
-  } finally {
-    if (file) await fs.rm(file, { force: true }).catch(() => { /* best-effort */ });
   }
+
+  if (sent === 0) return 'none';
+  if (sent < pieces.length) {
+    // Stopping halfway with no word about it reads as the answer simply ending
+    // there. The caller writes the full text on a partial, so this only has to
+    // say that the reading is what stopped. Not a reply, for the same reason the
+    // later pieces aren't: it lands directly under the audio it is about.
+    await client.sendMessage(chatId, '⚠️ I couldn\'t finish reading that one aloud.').catch(() => {});
+    return 'partial';
+  }
+  return 'all';
 }
 
 /**
