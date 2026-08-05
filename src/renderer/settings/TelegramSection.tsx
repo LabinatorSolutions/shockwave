@@ -41,11 +41,9 @@ export default function TelegramSection({
   // to "over ___ hours old" describes nothing.
   const notice = telegram?.chatNotice;
   const effective = resolveChatNotice(notice);
-  // Spread both levels: this setter REPLACES the whole `telegram` object, same
-  // as onTranscriptionChange, so a sibling key added later must survive a
-  // checkbox click here.
+  // The setter merges the `telegram` siblings back in, but only one level deep —
+  // `chatNotice` is a nested object, so its own fields are still rebuilt here.
   const setNotice = (patch: Partial<ChatNotice>) => onTelegramChange?.({
-    ...(telegram ?? {}),
     chatNotice: { ...(notice ?? {}), ...patch },
   });
   // Blur-commit like every other Settings box. Out-of-range input is clamped by
@@ -159,18 +157,16 @@ export default function TelegramSection({
           same key the desktop mic uses) because the agent takes
           text only — so there is a transcript here that the desktop mic path never
           produces, and this decides whether the bot says it out loud before acting.
-          Spread the whole slice: `onTranscriptionChange` REPLACES the renderer's
-          copy, so a bare `{echoTelegramTranscript}` would drop the sibling fields and make
-          the Voice page read as if nothing were configured until the next push. */}
+          Only this leaf is sent: the setter merges the voice-provider siblings back
+          in, so a checkbox on the Telegram page cannot blank the Voice page. It used
+          to spread by hand, with a `?? {provider:'assemblyai'}` fallback that would
+          have written a vendor nobody chose. */}
       <SettingsGroup title="Voice notes">
         <Field>
           <Label className="gap-2.5 text-[13px] font-normal">
             <Checkbox
               checked={!!transcription?.echoTelegramTranscript}
-              onCheckedChange={(v) => onTranscriptionChange?.({
-                ...(transcription ?? { provider: 'assemblyai' }),
-                echoTelegramTranscript: v === true,
-              })}
+              onCheckedChange={(v) => onTranscriptionChange?.({ echoTelegramTranscript: v === true })}
             />
             Echo the transcript back in the chat
           </Label>

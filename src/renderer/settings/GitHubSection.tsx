@@ -74,8 +74,12 @@ export default function GitHubSection({ sync, onSyncChange }) {
     return () => { cancelled = true; };
   }, []);
 
-  // No `pat` here — main strips it, so including it would send '' and delete it.
-  const updateSync = (patch) => onSyncChange?.({ pullIntervalSeconds: interval, ...patch });
+  // Only the leaf being changed — the setter merges the rest of the slice back
+  // in. This used to rebuild the object as `{pullIntervalSeconds, ...patch}`,
+  // which quietly dropped `hasPat`: saving a token hid its own dots until the
+  // next server push. (There is still no `pat` key here, for the separate reason
+  // that main strips it — sending '' would read as a delete.)
+  const updateSync = (patch) => onSyncChange?.(patch);
 
   // Verifying a token the user hasn't saved yet: pass the current form value
   // (not the persisted one) so they can verify before committing.

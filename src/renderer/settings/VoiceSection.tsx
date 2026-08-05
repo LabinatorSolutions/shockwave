@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useVoiceInput, notifyVoiceConfigChanged } from '../voice/useVoiceInput.js';
 import { useCredentialField } from './useCommitField';
 import { VoiceBars } from '../voice/VoiceBars.jsx';
@@ -182,11 +182,11 @@ export default function VoiceSection({
   const speak = speakSlug ? voiceProvider(speakSlug)! : null;
   const micSlug = assigned('mic');
 
-  // Spread the whole slice: these setters REPLACE the renderer's copy, so a bare
-  // patch would drop sibling fields until main's next `settings:changed` push.
-  // The diff in settingsDiff.ts is what stops unchanged fields being written.
-  const updateListen = (patch: any) => onTranscriptionChange?.({ ...(transcription ?? {}), ...patch });
-  const updateSpeak = (patch: any) => onSpeechChange?.({ ...(speech ?? {}), ...patch });
+  // Just the leaves being changed — the setters merge the siblings back in
+  // (see `useSettings`). The diff in settingsDiff.ts is what stops the untouched
+  // ones being written.
+  const updateListen = (patch: any) => onTranscriptionChange?.(patch);
+  const updateSpeak = (patch: any) => onSpeechChange?.(patch);
 
   // ── Verify ─────────────────────────────────────────────────────────────────
   //
@@ -280,6 +280,24 @@ export default function VoiceSection({
     loadVoices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speakSlug, hasVoiceKey?.[speakSlug]]);
+
+  // A STORED VOICE MUST DESCRIBE ITSELF WHILE THE VENDOR'S LIST IS STILL IN
+  // FLIGHT. Radix renders the matching ITEM's label, never the value — so with
+  // no items fetched yet, a configured voice had nothing to match and fell
+  // through to the placeholder. The field read as unset, and then changed under
+  // the user a second or two later when the fetch landed, which is a far worse
+  // thing for a settings page to do than simply take a moment: nothing had
+  // changed, and the page said otherwise twice.
+  //
+  // Carrying the id as its own option means the trigger always shows what is
+  // stored; the friendly name replaces it when the list arrives. The list is a
+  // live call to the vendor (`voice:listVoices`), so this window is every open
+  // of the page, not an edge case.
+  const voiceOptions = useMemo(() => {
+    const id = speech?.voiceId;
+    if (!id || voices.some((v) => v.id === id)) return voices;
+    return [{ id, name: id }, ...voices];
+  }, [voices, speech?.voiceId]);
 
   const previewRef = useRef<HTMLAudioElement | null>(null);
   const selectedVoice = voices.find((v) => v.id === speech?.voiceId);
@@ -477,7 +495,7 @@ export default function VoiceSection({
                   } />
                 </SelectTrigger>
                 <SelectContent>
-                  {voices.map((v) => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+                  {voiceOptions.map((v) => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
                 </SelectContent>
               </Select>
               {/* Only ElevenLabs ships a sample per voice; Deepgram's voices are

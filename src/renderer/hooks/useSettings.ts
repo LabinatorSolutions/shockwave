@@ -270,7 +270,33 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     await persistSettings({ treeSortOrder: next });
   }, [persistSettings]);
 
-  const onCodingAgentChange = useCallback(async (next: CodingAgentSettings) => {
+  // ── Slice setters MERGE; they do not replace ────────────────────────────────
+  //
+  // Each of these owns one sub-object of settings, and a caller passes only the
+  // leaves it changed. The siblings are filled in HERE, from the canonical ref.
+  //
+  // They used to replace, which made every caller responsible for spreading the
+  // rest of the slice back in — a rule that is invisible at the call site, since
+  // `onTranscriptionChange({echoTelegramTranscript})` is a perfectly ordinary
+  // looking line. Miss the spread and the SERVER stays correct (the diff only
+  // sends the leaves present) while the renderer's copy silently loses the
+  // siblings, so an unrelated page reads as unconfigured until the next
+  // `settings:changed` push repairs it. It was got wrong three times: Telegram's
+  // echo checkbox blanked both voice providers, `micProvider` was dropped by
+  // hydrate, and GitHub's `updateSync` rebuilt the slice without `hasPat` so
+  // saving a token hid its own dots.
+  //
+  // Merging here is strictly safer than the old contract, never weaker: a caller
+  // that still passes a whole slice gets the identical result, and omitting a key
+  // could never have deleted it anyway — the patch simply wouldn't mention it, so
+  // the stored value survived regardless. The only thing that changed is whether
+  // the RENDERER agrees with the store about what it didn't touch.
+  //
+  // Merge from `settingsRef`, not React state: `persistSettings` updates the ref
+  // synchronously, so two commits in the same tick both see the first one's work.
+  // Reading state would make the second overwrite the first with a stale sibling.
+  const onCodingAgentChange = useCallback(async (patch: Partial<CodingAgentSettings>) => {
+    const next = { ...settingsRef.current.codingAgent, ...patch } as CodingAgentSettings;
     setCodingAgentSettings(next);
     await persistSettings({ codingAgent: next });
   }, [persistSettings]);
@@ -317,19 +343,26 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     return off;
   }, [onWorkspacesPushed]);
 
-  const onTranscriptionChange = useCallback(async (next: Transcription) => {
+  // Merges, like every slice setter — see the note above `onCodingAgentChange`.
+  const onTranscriptionChange = useCallback(async (patch: Partial<Transcription>) => {
+    const next = { ...settingsRef.current.transcription, ...patch } as Transcription;
     setTranscription(next);
     await persistSettings({ transcription: next });
   }, [persistSettings]);
 
-  const onSpeechChange = useCallback(async (next: Speech) => {
+  const onSpeechChange = useCallback(async (patch: Partial<Speech>) => {
+    const next = { ...(settingsRef.current.speech ?? {}), ...patch } as Speech;
     setSpeech(next);
     await persistSettings({ speech: next });
   }, [persistSettings]);
 
-  // Whole slice, same as transcription: this REPLACES the stored object, so a
-  // caller changing one knob has to hand back the siblings it isn't touching.
-  const onTelegramChange = useCallback(async (next: TelegramSettings) => {
+  // Merges at the TOP level only. `telegram.chatNotice` is a nested object, so a
+  // caller changing one of its fields still rebuilds that inner object itself —
+  // one level of merging is what a spread does, and pretending otherwise here
+  // would be a deep-merge nobody asked for (it would also make clearing a nested
+  // field impossible).
+  const onTelegramChange = useCallback(async (patch: Partial<TelegramSettings>) => {
+    const next = { ...(settingsRef.current.telegram ?? {}), ...patch } as TelegramSettings;
     setTelegram(next);
     await persistSettings({ telegram: next });
   }, [persistSettings]);
@@ -361,7 +394,8 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     await persistSettings({ timezone: next });
   }, [persistSettings]);
 
-  const onSyncChange = useCallback(async (next: SyncSettings) => {
+  const onSyncChange = useCallback(async (patch: Partial<SyncSettings>) => {
+    const next = { ...settingsRef.current.sync, ...patch } as SyncSettings;
     setSync(next);
     syncRef.current = next;
     await persistSettings({ sync: next });

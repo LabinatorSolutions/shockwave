@@ -335,11 +335,13 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   // slice, so siblings have to travel — but they must travel exactly as the
   // server sent them, unset keys included. Rebuilding the object out of the
   // defaulted locals is what turned every display fallback into a write:
-  // `buildPatch` compares leaf by leaf, `'' !== undefined`, so changing the
-  // reasoning level also wrote an invented empty `codingAgent.baseUrl` row that
-  // nobody had typed. Spreading the prop leaves unset leaves equal to prev, so
-  // the diff emits only the key that actually changed.
-  const updateCa = (patch) => onCodingAgentChange?.({ ...codingAgent, ...patch });
+  // Only the leaves being changed. The setter merges the siblings back in from
+  // the canonical ref, which is what keeps unset leaves EQUAL to prev — without
+  // that, `buildPatch` compares leaf by leaf (`'' !== undefined`) and changing
+  // the reasoning level also wrote an invented empty `codingAgent.baseUrl` row
+  // nobody had typed. This spread the prop by hand before; the ref is the better
+  // source, since it is current within the same tick and React state is not.
+  const updateCa = (patch) => onCodingAgentChange?.(patch);
 
   // Blank clears the value rather than storing 0 — unset is a real state here,
   // and the consumers fall back at the point of use.
