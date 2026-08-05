@@ -207,7 +207,13 @@ export default function TabStrip({
   const pickTab = (id) => { setListOpen(false); onSwitch(id); };
 
   return (
-    <div className="flex shrink-0 items-stretch border-b border-border bg-background pl-3 pr-2">
+    // min-h is the height of a strip WITH tabs (scroller's pt-2 + a tab +
+    // the bottom border). Without it the strip is sized by its contents, and
+    // with no tabs open the only content left is the 26px right rail — so the
+    // seam under the strip jumped ~17px down the moment you opened the first
+    // tab. Floor, not a fixed height: a taller tab should still grow the strip
+    // rather than be clipped, and the empty case is the only one below it.
+    <div className="flex min-h-[44px] shrink-0 items-stretch border-b border-border bg-background pl-3 pr-2">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
