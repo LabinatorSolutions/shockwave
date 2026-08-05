@@ -140,6 +140,7 @@ export default function TabStrip({
   const activeRef = useRef<HTMLElement | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [overflowing, setOverflowing] = useState(false);
 
   const sensors = useSensors(
     // 4px of travel before a drag starts, so a plain click still switches tabs
@@ -160,6 +161,20 @@ export default function TabStrip({
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeTabId]);
+
+  // Does the strip actually overflow? Drives whether the list button is shown
+  // at all. Re-measured whenever the tabs change and whenever the strip is
+  // resized — both side panels are drag-resizable, so width moves without the
+  // tabs changing at all.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const measure = () => setOverflowing(el.scrollWidth > el.clientWidth + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tabs]);
 
   const labelFor = (tab) => (
     tab.id === activeTabId && activeOverrideLabel ? activeOverrideLabel : shortLabel(tab.path)
@@ -228,18 +243,23 @@ export default function TabStrip({
 
       {/* Pinned right rail — outside the scroller, so "+" is always reachable. */}
       <div className="flex shrink-0 items-center gap-1 pl-1.5">
-        {/* Mounted unconditionally, hidden with `invisible` rather than removed
-            when there's nothing to list. Closing the LAST tab from inside this
-            popover would otherwise unmount an open Radix layer, which is the
-            `pointer-events: none` stuck-body bug described in this folder's
-            CLAUDE.md — the app renders and ignores every click. */}
+        {/* Shown only while the strip overflows — with everything visible there
+            is nothing the list can tell you that the strip isn't already
+            showing.
+            HIDDEN, never unmounted. Both conditions that hide it (the last tab
+            closing, the strip ceasing to overflow) can be reached from INSIDE
+            the open popover by closing tabs, and unmounting an open Radix layer
+            is the `pointer-events: none` stuck-body bug described in this
+            folder's CLAUDE.md — the app renders, animates and logs perfectly
+            while ignoring every click. `listOpen` keeps it visible while it's
+            open so the popover never anchors to something invisible. */}
         <Popover open={listOpen} onOpenChange={(o) => { setListOpen(o); if (!o) setQuery(''); }}>
           <PopoverTrigger asChild>
             <button
               type="button"
               className={cn(
                 'flex h-[26px] items-center gap-1 rounded-[7px] px-1.5 text-[11.5px] text-muted-foreground hover:bg-accent hover:text-foreground data-[state=open]:bg-selected data-[state=open]:text-primary',
-                tabs.length === 0 && 'invisible pointer-events-none',
+                !listOpen && (tabs.length === 0 || !overflowing) && 'invisible pointer-events-none',
               )}
               title="Search open tabs"
               aria-label="Search open tabs"
