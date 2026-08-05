@@ -20,7 +20,7 @@ Get it out all out of your head, ideas, projects, due dates. The agent keeps it 
 
 Everything the power tools give you (like Hermes) — memory, self-improvement — without the complicated setup that comes with them.
 
-### Close the laptop. It keeps working.
+### 🛰 Close the laptop. It keeps working.
 
 Create work for the agent, then close the laptop and the work keeps getting done without you. And you can also pick up where you left off on any other device, even on your phone.
 
