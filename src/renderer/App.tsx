@@ -7,6 +7,7 @@ import MediaView, { mediaKind, isOpenable, isDrawing, isMarkdown, isTextFile } f
 import DrawingView from './DrawingView';
 import type { DrawingViewHandle } from './DrawingView';
 import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from './renameOps.js';
+import { decideLoad } from './loadDecision.js';
 import TabStrip from './TabStrip.jsx';
 import EditorTitle from './EditorTitle.jsx';
 import EditorNav from './EditorNav.jsx';
@@ -551,6 +552,12 @@ export default function App() {
 
   // ---- editor ref ----
   const editorRef = useRef<any>(null);
+  // Bumped every time the Editor hands us a NEW, empty view — on mount, and on the
+  // dark-toggle rebuild. The load effect below watches the active FILE, and the file
+  // doesn't change when the editor is torn down and rebuilt under it (graph view unmounts
+  // the whole subtree), so nothing else would ever ask for the content to be read back in.
+  const [editorEpoch, setEditorEpoch] = useState(0);
+  const onEditorViewCreated = useCallback(() => setEditorEpoch((n) => n + 1), []);
   // ---- file tree ref (imperative API: editNode(id)) ----
   const fileTreeRef = useRef<any>(null);
   // ---- chat sidebar ref (imperative API: setComposerText, getComposerText, focusComposer) ----
@@ -563,6 +570,18 @@ export default function App() {
   // createFile and leave an orphan disambiguated file behind.
   const dirtyTabIdRef = useRef<any>(null);
   const saveTimerRef = useRef<any>(null);
+  // What a draft was just saved as: { tabId, path }, set by writeNow at the moment it
+  // creates the file, consumed by the load effect on the next render.
+  //
+  // The load effect can't work this out for itself. A draft tab's path goes from null to
+  // a real path for TWO different reasons — the draft got saved, or the tab navigated
+  // somewhere else (clicking a file in the tree reuses the active tab) — and React 18
+  // batches state updates made after an `await`, so when a save and a navigation happen
+  // together they land in ONE render and the before/after comparison sees a single jump.
+  // Only the code that did the saving knows which file it wrote, so it says so here
+  // instead of leaving the effect to guess (React: "if this logic is caused by a
+  // particular interaction, keep it in the event handler").
+  const promotedRef = useRef<{ tabId: any; path: string } | null>(null);
   // Per-path mtime of our own last write to a non-.md text file — the self-echo
   // guard for the watcher's text-reload branch (drawings have drawingMtimesRef;
   // .md files use the link index). Declared here so writeNow can populate it.
@@ -620,6 +639,25 @@ export default function App() {
       if (!editor) return null;
       const tab = tabsRef.current.find((t) => t.id === tabId);
       if (!tab) return null;
+      // Never write a buffer into a file it didn't come from. `text` below is whatever the
+      // one shared editor view happens to be showing, while the write goes to the tab that
+      // was marked dirty. Those are normally the same document — every path that changes
+      // the active file flushes through here FIRST, while the outgoing document is still on
+      // screen — but nothing enforced it, which is why a view that had been swapped or
+      // rebuilt under us could put an empty buffer over a real file on the next keystroke.
+      // Ask the editor what it is actually holding rather than assuming.
+      //
+      // If this ever refuses, the buffer isn't that tab's content, so there is nothing of
+      // the user's to lose by not writing it. Leave the tab dirty so a later flush retries.
+      const expectedDocKey = tab.isDraft ? `draft:${tabId}` : tab.path;
+      const onScreenDocKey = editor.currentDocKey?.();
+      if (onScreenDocKey !== expectedDocKey) {
+        dirtyTabIdRef.current = tabId;
+        console.warn(
+          `[save] refused: editor is holding ${onScreenDocKey}, but the dirty tab is ${expectedDocKey}`,
+        );
+        return null;
+      }
       const text = editor.getText();
       try {
         let path;
@@ -636,6 +674,9 @@ export default function App() {
           const res = await window.api.createFile(targetDir, name, text);
           path = res.path;
           mtime = res.mtime;
+          // Tell the load effect WHICH file this draft became, before the state update that
+          // makes it look like the tab simply changed path. See promotedRef's declaration.
+          promotedRef.current = { tabId, path };
           (promoteTabPathRef.current as any)(tabId, path);
         } else {
           path = tab.path;
@@ -1777,17 +1818,24 @@ export default function App() {
       lastLoadRef.current = { tabId: activeTabId, path: null, isDark };
       return;
     }
-    // Promotion: same tab, previously had no path. Buffer is authoritative.
-    if (last.tabId === activeTabId && last.path === null && last.isDark === isDark) {
-      // Same document, new identity: the draft just got a file on disk. Re-key its undo
-      // history from the draft key to the path, or switching away and back would look
-      // the history up under a key nothing is stored against and start from empty.
-      editor.renameDocument(draftKey, activeFile);
+    // Whether the content is already on screen is one rule with a nasty history, so it
+    // lives in one pure, tested place — see loadDecision.ts for what each input is for.
+    // `promoted` is consumed here: it describes one render, and a stale one would let a
+    // later navigation skip its read.
+    const promoted = promotedRef.current;
+    promotedRef.current = null;
+    const decision = decideLoad({
+      lastLoad: last,
+      activeTabId,
+      activeFile,
+      isDark,
+      promoted,
+      currentDocKey: editor.currentDocKey?.() ?? null,
+      draftKey,
+    });
+    if (decision.rekeyDraftTo) editor.renameDocument(draftKey, decision.rekeyDraftTo);
+    if (!decision.read) {
       lastLoadRef.current = { tabId: activeTabId, path: activeFile, isDark };
-      return;
-    }
-    // Already loaded.
-    if (last.tabId === activeTabId && last.path === activeFile && last.isDark === isDark) {
       return;
     }
     let cancelled = false;
@@ -1805,7 +1853,7 @@ export default function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeFile, activeIsDraft, activeTabId, workspacePath, isDark, tabsApi.viewStateByPath, showError, activeMediaKind, activeDrawing]);
+  }, [activeFile, activeIsDraft, activeTabId, workspacePath, isDark, editorEpoch, tabsApi.viewStateByPath, showError, activeMediaKind, activeDrawing]);
 
   // ---- backlinks for active file ----
   const activeBacklinks = useMemo(
@@ -2211,6 +2259,7 @@ export default function App() {
                   flushDraftToDiskRef={flushDraftToDiskRef}
                   onStats={setEditorStats}
                   onHistory={setEditorHistory}
+                  onViewCreated={onEditorViewCreated}
                   dark={isDark}
                   viewMode={viewMode}
                   isMarkdown={activeIsMarkdown}

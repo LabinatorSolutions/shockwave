@@ -58,6 +58,13 @@ function computeStats(state) {
  * Props:
  *   onLinkClick(name)              — wiki-link clicks
  *   onChange()                     — fired when the user changes the doc (not for programmatic load)
+ *   onViewCreated()                — fired whenever a NEW, EMPTY EditorView exists: on mount,
+ *                                    and on the dark-toggle rebuild. The parent loads content
+ *                                    by watching the active FILE, which doesn't change when the
+ *                                    component is torn down and rebuilt under it (graph view
+ *                                    unmounts this whole subtree) — so without this signal
+ *                                    nothing asks for the file to be read back in, and the
+ *                                    rebuilt view sits there empty over a file that isn't.
  *   getPageIndexRef                — ref whose .current is the latest pageIndex Map (autocomplete reads it live)
  *   getVaultPathRef                — ref whose .current is the active workspace path
  *   dark                           — boolean; when changed, the editor is recreated with the light/dark syntax highlight style
@@ -71,6 +78,10 @@ function computeStats(state) {
  *                                    KEEPING its undo history (external-change reload)
  *   getText()                      — current doc text
  *   getViewState()                 — { cursor, scrollTop } snapshot
+ *   currentDocKey()                — which document is ON SCREEN right now, or null for a
+ *                                    view that has never been loaded into. The parent's
+ *                                    "did I already load this?" bookkeeping is a COPY of
+ *                                    this fact and can drift from it; this is the original.
  *   clear()                        — empties the doc, resets cursor
  *   evictDocument(key)             — forget a document's parked state (file closed/deleted)
  *   renameDocument(oldKey, newKey) — re-key a parked state (file renamed/moved)
@@ -98,7 +109,7 @@ function computeStats(state) {
 // used is evicted first; losing a parked state only costs that file's undo history.
 const MAX_DOC_STATES = 24;
 const Editor = forwardRef<any, any>(function Editor(
-  { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, isMarkdown, filePath, hideLineNumbers },
+  { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, onViewCreated, dark, viewMode, isMarkdown, filePath, hideLineNumbers },
   ref,
 ) {
   const hostRef = useRef<any>(null);
@@ -115,6 +126,7 @@ const Editor = forwardRef<any, any>(function Editor(
   const imageErrorRef = useRef(onImageError);
   const statsRef = useRef(onStats);
   const historyRef = useRef(onHistory);
+  const viewCreatedRef = useRef(onViewCreated);
   const statsRafRef = useRef(0);
   const isProgrammaticRef = useRef(false);
   const langGenerationRef = useRef(0);
@@ -213,6 +225,7 @@ const Editor = forwardRef<any, any>(function Editor(
   useEffect(() => { imageErrorRef.current = onImageError; }, [onImageError]);
   useEffect(() => { statsRef.current = onStats; }, [onStats]);
   useEffect(() => { historyRef.current = onHistory; }, [onHistory]);
+  useEffect(() => { viewCreatedRef.current = onViewCreated; }, [onViewCreated]);
 
   // Toggle the live-preview decoration bundle and the language grammar without
   // rebuilding the editor. Cursor, history, scroll all survive a reconfigure.
@@ -395,6 +408,10 @@ const Editor = forwardRef<any, any>(function Editor(
         canRedo: redoDepth(view.state) > 0,
       });
     },
+    // Which document is actually on screen. Callers use this to check their own record of
+    // what they loaded before acting on it — a rebuilt view answers null, and a view that
+    // was swapped by some other path answers with what it really holds.
+    currentDocKey: () => currentDocKeyRef.current,
     evictDocument: (docKey) => {
       if (docKey == null) return;
       docStatesRef.current.delete(docKey);
@@ -667,6 +684,9 @@ const Editor = forwardRef<any, any>(function Editor(
     applyCompartments(view);
     statsRef.current?.({ words: 0, chars: 0 });
     historyRef.current?.({ canUndo: false, canRedo: false });
+    // This view is empty and holds no document. Tell the parent, whose loader watches the
+    // active file — which a rebuild doesn't change — so it can put the content back.
+    viewCreatedRef.current?.();
     return () => {
       if (statsRafRef.current) {
         cancelAnimationFrame(statsRafRef.current);
