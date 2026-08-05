@@ -32,15 +32,18 @@ import AdvancedSection from './settings/AdvancedSection.jsx';
 // holds per-(active-)workspace pages and is labeled with the active workspace's
 // name so it reads as scoped to it. `workspaceLabel` is passed in at render.
 //
-// "APIs" is last and holds every page that is really credentials for a third
-// party we talk to over the network (our own companion included). Companion
-// sitting at the bottom is fine for the offline gate — that pins `active` by id,
-// not by position, and the rail doesn't scroll at this height.
+// There is no separate "APIs" group any more. Pages that are really a
+// third-party credential now sit with what they're FOR: Companion and GitHub
+// Sync under Shockwave, Agent Voice under AI Agent beside Telegram — the two
+// places the agent speaks. Companion's position doesn't matter to the offline
+// gate: that pins `active` by id, not by position.
 function buildNav(workspaceLabel) {
   return [
     { kind: 'header', label: 'Shockwave' },
     { kind: 'item', id: SETTINGS_SECTIONS.GENERAL, label: 'General' },
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
+    { kind: 'item', id: SETTINGS_SECTIONS.COMPANION, label: 'Companion' },
+    { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
     { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
     { kind: 'header', label: workspaceLabel },
     { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
@@ -53,9 +56,6 @@ function buildNav(workspaceLabel) {
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
     { kind: 'item', id: SETTINGS_SECTIONS.TELEGRAM, label: 'Telegram' },
-    { kind: 'header', label: 'APIs' },
-    { kind: 'item', id: SETTINGS_SECTIONS.COMPANION, label: 'Companion' },
-    { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
     { kind: 'item', id: SETTINGS_SECTIONS.VOICE, label: 'Agent Voice' },
   ];
 }
