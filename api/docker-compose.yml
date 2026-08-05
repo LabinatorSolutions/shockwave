@@ -20,7 +20,7 @@ services:
       retries: 10
 
   api:
-    # Published by .github/workflows/companion-image.yml on every release tag.
+    # Published by the `image` job in .github/workflows/release.yml on every release tag.
     # pull_policy `missing` makes plain `docker compose up -d` PULL this image
     # (the install-script path — no repo checkout on the box); dev overrides
     # with `docker compose up -d --build`, which always builds from source.

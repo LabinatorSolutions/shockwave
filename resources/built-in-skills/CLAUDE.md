@@ -9,7 +9,7 @@ A skill is a folder with a `SKILL.md` — YAML frontmatter plus instructions the
 This directory is the `builtinDir` for the desktop **and** the companion, so the agent behaves the same whether a turn runs in the app, from Telegram, or on a cron schedule. Two different mechanisms get it there and both have to be kept in mind when adding a skill:
 
 - **Desktop** — `extraResources` in `package.json` copies it to `<resources>/built-in-skills`. `builtinSkillsDir()` in `src/main/main.ts` reads `process.resourcesPath` when packaged and the repo path in dev, so a skill added here is live in `npm run dev` with no build step.
-- **Companion** — `api/Dockerfile` does `COPY resources/built-in-skills/ ./built-in-skills/` and sets `BUILTIN_SKILLS_DIR`. That copy is why `companion-image.yml` builds from the **repo root** rather than `api/`.
+- **Companion** — `api/Dockerfile` does `COPY resources/built-in-skills/ ./built-in-skills/` and sets `BUILTIN_SKILLS_DIR`. That copy is why the `image` job in `.github/workflows/release.yml` builds from the **repo root** rather than `api/`.
 
 A skill that works in dev but not in a packaged app is almost always a missing `extraResources` entry; one that works on the desktop but not from Telegram is the Dockerfile half.
 

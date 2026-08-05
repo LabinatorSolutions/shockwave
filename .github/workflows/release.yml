@@ -1,15 +1,25 @@
 name: Release
 
 # Fires when you push a version tag, e.g.  git tag v1.0.1 && git push --tags
-# Builds on all three OSes and publishes the installers directly to a public
-# GitHub Release (package.json build.publish.releaseType = "release"). Keep
-# package.json "version" in sync with the tag you push.
+#
+# One tag, one workflow run, three jobs:
+#   release  — desktop installers on all three OSes, uploaded to a DRAFT release
+#   image    — the companion container, pushed to ghcr.io  (parallel with release)
+#   publish  — flips the draft public, only after BOTH of the above succeed
+#
+# `release` and `image` declare no dependency on each other, so they start
+# together and the run takes as long as the slower one, not their sum.
+#
+# Keep package.json "version" in sync with the tag you push — electron-builder
+# names artifacts from the manifest, not the tag.
 on:
   push:
     tags:
       - 'v*'
 
-# Required so the auto-provided GITHUB_TOKEN can create/upload the release.
+# Default for the jobs that touch the GitHub Release. The `image` job overrides
+# this with its own (narrower) block — a job-level `permissions` replaces the
+# workflow-level one outright rather than merging with it.
 permissions:
   contents: write
 
@@ -60,7 +70,73 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Flip the draft to public ONLY after all three platforms have uploaded.
+  # The companion container the desktop talks to, built from the SAME tag so the
+  # two version numbers come from one commit — that's what makes the desktop's
+  # "your companion is behind" check (versionCompare.ts) meaningful.
+  #
+  # Publishes ghcr.io/stephengpope/shockwave-companion:<tag> AND :latest. Both
+  # matter: fresh installs pull :latest, while a remote upgrade pins
+  # SHOCKWAVE_TAG to an exact tag so the compose files and the image are always
+  # the same release. See "Remote upgrade" in api/CLAUDE.md.
+  image:
+    runs-on: ubuntu-latest
+    # Narrower than the workflow default: this job writes to the package
+    # registry and only reads the repo.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 emulation for the multi-arch build (amd64 VPSes + arm boxes).
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A PRERELEASE TAG MUST NOT MOVE :latest. Fresh companion installs pull
+      # :latest, so tagging an rc build with it would hand every new install a
+      # test image. A tag is a prerelease iff it contains a hyphen — semver's
+      # own rule, and the same test the publish job uses:
+      #   v1.0.70      -> release     -> :v1.0.70 + :latest
+      #   v1.0.70-rc1  -> prerelease  -> :v1.0.70-rc1 only
+      - name: Work out the image tags
+        id: imagetags
+        run: |
+          # printf builds the two-line list rather than an embedded literal
+          # newline: inside a YAML block scalar a column-0 continuation line
+          # would end the block.
+          IMAGE=ghcr.io/stephengpope/shockwave-companion
+          TAGS="${IMAGE}:${GITHUB_REF_NAME}"
+          case "$GITHUB_REF_NAME" in
+            *-*) echo "prerelease $GITHUB_REF_NAME — leaving :latest alone" ;;
+              *) TAGS="$(printf '%s\n%s' "$TAGS" "${IMAGE}:latest")" ;;
+          esac
+          {
+            echo 'value<<TAGS_EOF'
+            echo "$TAGS"
+            echo 'TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          # Repo root — the Dockerfile pulls in agent-core/ and resources/.
+          context: .
+          file: api/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          tags: ${{ steps.imagetags.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Flip the draft to public ONLY after every installer AND the companion image
+  # are up.
   #
   # Why: package.json build.publish.releaseType is "draft", so electron-builder
   # uploads every artifact into a draft release. electron-updater only reads
@@ -71,11 +147,14 @@ jobs:
   # still missing; Mac clients polling in that window got a 404 for the update
   # feed.
   #
-  # `needs: release` requires EVERY matrix job to succeed, so a failed platform
-  # leaves an unpublished draft to inspect/delete rather than a half-published
-  # public release.
+  # `needs: [release, image]` requires EVERY matrix job and the container build
+  # to succeed, so a failure anywhere leaves an unpublished draft to inspect or
+  # delete rather than a half-published release. Gating on `image` too is the
+  # point of merging the two workflows: a desktop release that goes public
+  # without its matching companion image tells users to upgrade to a companion
+  # version that ghcr.io doesn't have.
   publish:
-    needs: release
+    needs: [release, image]
     runs-on: ubuntu-latest
     steps:
       # Full history + tags: the notes below are built from the commit range
@@ -121,14 +200,25 @@ jobs:
             } > notes.md || true
           fi
 
+      # A PRERELEASE TAG MUST NOT BECOME "latest". electron-updater reads the
+      # latest PUBLISHED release, so marking an rc as latest would offer it to
+      # every desktop client. Same hyphen test as the image job above.
       - name: Publish the draft release
         run: |
+          # An array, not a string: `gh release edit ... $FLAGS` would rely on
+          # word splitting, which shellcheck flags (SC2086) and actionlint
+          # surfaces as a workflow error.
+          FLAGS=(--draft=false)
+          case "$GITHUB_REF_NAME" in
+            *-*) FLAGS+=(--prerelease --latest=false) ;;
+              *) FLAGS+=(--latest) ;;
+          esac
           if [ -s notes.md ]; then
             gh release edit "$GITHUB_REF_NAME" --notes-file notes.md \
-              --draft=false --latest --repo "$GITHUB_REPOSITORY"
+              "${FLAGS[@]}" --repo "$GITHUB_REPOSITORY"
           else
             gh release edit "$GITHUB_REF_NAME" \
-              --draft=false --latest --repo "$GITHUB_REPOSITORY"
+              "${FLAGS[@]}" --repo "$GITHUB_REPOSITORY"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
