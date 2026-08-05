@@ -282,8 +282,11 @@ app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, m
 // server reads that preference off the workspace row. There is deliberately no
 // way to CHANGE it here — that is `/voice`, so no message-sending path is also a
 // settings write.
+// `output` is deliberately NOT read off the body. The desktop's copy of
+// send_message no longer offers it, and an older desktop still would — honouring
+// that would leave the agent able to overrule the workspace's voice setting from
+// one machine and not another, which is worse than either answer on its own.
 app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''), {
-  output: ['text', 'voice', 'both'].includes(req.body?.output) ? req.body.output : undefined,
   workspaceId: typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : null,
   // Which chat is speaking, so a reply to the message resumes it. Absent from an
   // older desktop — a reply to one of those simply doesn't switch.

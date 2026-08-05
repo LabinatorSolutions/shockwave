@@ -9,26 +9,40 @@
 // Same shape as the agent-token tools (agentTokens.ts): a factory closed over the
 // host's I/O, never a module-global.
 //
-// ── OUTPUT MODE ──────────────────────────────────────────────────────────────
+// ── HOW IT IS DELIVERED IS NOT THE AGENT'S CHOICE ────────────────────────────
 //
-// `output` picks how ONE message is delivered, and the meaningful fourth state is
-// ABSENT: omitted means "whatever this workspace is set to". That is what makes
-// the standing preference work at all — a flag that defaulted to text would
-// override the setting on every proactive message, so switching to voice would
-// change ordinary replies and silently not these.
+// Text or voice is decided by the WORKSPACE, set with `/voice`, and this tool
+// takes no say in it. There is no per-message override and there is deliberately
+// no argument for one.
 //
-// **It cannot CHANGE that preference, deliberately.** This is a tool for sending
-// a message; a tool that also mutates configuration is a category error, and it
-// put a settings write on the end of a path reachable from any Telegram message
-// or repo file. Changing the mode is `/voice` — a slash command, answered from
-// the database with no turn and no agent involved, which is where a preference
-// about how the bot talks to you belongs. hermes reached the same place with its
-// own `/voice`.
+// It had one. The agent passed `both` on a workspace set to `text`, and the user
+// got a voice note they had switched off — which is the whole failure: a standing
+// preference that anything else can overrule is not a preference, it is a
+// default, and the person who set it has no way to tell which they have. An
+// override is also unfalsifiable from the outside: the setting says one thing,
+// the messages do another, and nothing in between is wrong enough to look at.
+//
+// The argument existed on the theory that the agent knows when a message carries
+// something worth re-reading. It might — but the user already answered that
+// question for every message when they chose the mode, and a model weighing it
+// per message can only diverge from the answer they gave.
+//
+// It cannot CHANGE the preference either, for a separate reason: a tool that
+// sends a message and also mutates configuration is a category error, and it put
+// a settings write on the end of a path reachable from any Telegram message or
+// repo file. Changing the mode is `/voice` — a slash command, answered from the
+// database with no turn and no agent involved. hermes reached the same place.
 
 export type SendOutput = 'text' | 'voice' | 'both';
 
 export interface SendOptions {
-  /** Unset ⇒ follow the workspace's stored preference. */
+  /**
+   * How this message is delivered, for the callers that legitimately know: the
+   * reaction read-back speaks, and cron delivers what the job asked for.
+   *
+   * **Never set from the tool.** The agent has no argument for it — see above.
+   * Unset ⇒ the workspace's stored preference, which is the normal path.
+   */
   output?: SendOutput;
 }
 
@@ -43,33 +57,24 @@ export function makeSendMessageTool(
     description:
       'Send a message to the user on Telegram. Use this to reach the user proactively — e.g. when a '
       + 'scheduled job finishes or something needs their attention. They receive it as a Telegram DM.\n\n'
-      + 'Leave `output` unset to follow whatever the user has chosen for this workspace. Otherwise: '
-      + '`text` sends writing only, `voice` sends a voice note only, `both` sends the voice note AND '
-      + 'the text. Prefer `both` when the message carries anything worth re-reading — a path, a number, '
-      + 'a list — since a voice note cannot be skimmed or searched.\n\n'
-      + 'This affects ONE message. If the user asks for a lasting change ("talk to me from now on", '
-      + '"stop sending voice notes"), tell them to send /voice text, /voice voice or /voice both — you '
-      + 'cannot set it yourself.',
+      + 'Whether they get it as writing, as a voice note, or both is THEIR setting for this workspace, '
+      + 'and you have no say in it — write the message and it is delivered the way they asked. If they '
+      + 'want that changed ("talk to me from now on", "stop sending voice notes"), tell them to send '
+      + '/voice text, /voice voice or /voice both; you cannot set it yourself.',
     promptSnippet: 'Message the user on Telegram (a result or an alert), spoken aloud if they want that.',
     parameters: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'The message to send.' },
-        output: {
-          type: 'string',
-          enum: ['text', 'voice', 'both'],
-          description:
-            'How this message is delivered. Omit to follow the workspace setting. '
-            + '`voice` is audio only; `both` is audio plus the written text.',
-        },
       },
       required: ['text'],
       additionalProperties: false,
     },
     async execute(_id: string, params: any) {
       try {
-        const output = ['text', 'voice', 'both'].includes(params?.output) ? params.output as SendOutput : undefined;
-        const res = await send(String(params?.text ?? ''), { output });
+        // No `output`: the workspace's preference is read at the delivery end, so
+        // there is nothing here to pass and nothing to get wrong.
+        const res = await send(String(params?.text ?? ''), {});
         if (!res?.ok) return { content: [{ type: 'text', text: res?.error || 'Could not send the message.' }], isError: true };
         return { content: [{ type: 'text', text: 'Message sent to the user on Telegram.' }] };
       } catch (e: any) {

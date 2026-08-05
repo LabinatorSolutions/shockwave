@@ -84,10 +84,18 @@ export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string
     ],
     reason: 'this is a memory run — it looks over the conversation above for facts worth keeping and holds only the `memory` tool. Everything you need is already in front of you: the conversation, and the current memory in your prompt.',
   },
-  // Opens a tab in the app UI, and only a desktop chat has one.
+  // `open_file` opens a tab in the app UI, and only a desktop chat has one.
+  //
+  // `send_message` is the interesting one, and it is denied here for the reason
+  // it exists at all: it is for reaching a user who is NOT in the conversation —
+  // a scheduled job that finished, a desktop turn with something urgent. On a
+  // Telegram run the user is right there and the reply is already going to them
+  // over Telegram. Calling it delivers the same words a second time, by a second
+  // route, and that is exactly what it did: a message sent as text and then read
+  // aloud again as a voice note, with nothing in the conversation explaining why.
   telegram: {
-    tools: ['open_file'],
-    reason: 'there is no app window on a Telegram run. Use `send_message` to deliver the file instead, or describe what is in it.',
+    tools: ['open_file', 'send_message'],
+    reason: 'there is no app window on a Telegram run, and no need to send a Telegram message from one — you are already talking to the user there, so your reply reaches them. Just say it. To hand over a file, name its path in your reply.',
   },
   cron: {
     tools: ['open_file'],

@@ -34,9 +34,11 @@ import { OPEN_FILE_TOOL } from './openFileExtension.js';
 // bubble came from: replying to it on Telegram then continues THIS chat, rather
 // than whichever one the bot was last pointed at.
 function makeDesktopSendTool(workspaceId: string, chatId: string) {
-  return makeSendMessageTool(async (text, opts) => {
+  return makeSendMessageTool(async (text) => {
     try {
-      const res = await api.post('/telegram/send', { text, output: opts.output, workspaceId, chatId });
+      // No `output`: text or voice is the workspace's setting, read at the
+      // delivery end. The agent has no say in it and nothing here can pass one.
+      const res = await api.post('/telegram/send', { text, workspaceId, chatId });
       if (!res?.ok) return { ok: false, error: res?.error || 'Could not send the message.' };
       return { ok: true };
     } catch (e: any) {
