@@ -56,12 +56,20 @@ export async function sendTelegramMessage(
     // reaction and a shortcut, not the message.
     const client = new TelegramClient(token, (messageId, sent) => {
       store.recordTelegramSent(db, acc.dmChatId!, messageId, sent, opts.chatId ?? null).catch(() => {});
+    }, (messageId) => {
+      store.deleteTelegramSent(db, acc.dmChatId!, messageId).catch(() => {});
     });
 
     // Explicit beats stored; stored beats the default. Nothing here WRITES the
     // preference — that is `/voice`, a slash command, so a message-sending path
     // is never also a settings write.
     const mode = opts.output ?? await store.getVoiceReply(db, opts.workspaceId);
+
+    // This is a BOUNDARY — the one door out to Telegram — and it had no line, so
+    // "who sent this?" was unanswerable. That matters most for the case it just
+    // failed to answer: a message arriving twice is one caller too many, and with
+    // nothing logged there is no way to tell a double call from a double send.
+    tlog.info({ chars: String(text ?? '').length, mode, chatId: opts.chatId ?? null }, 'sending a telegram message');
 
     const sendChunks = async () => {
       for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId!, c);
@@ -146,16 +154,41 @@ export async function speakInto(
   const stamp = Date.now();
   let sent = 0;
 
+  // TWO IN FLIGHT, never more. That number is the vendors' and not ours:
+  // Deepgram's REST text-to-speech allows 2 concurrent requests and ElevenLabs
+  // allows 2 on its free plan, so firing every piece at once takes 429s on the
+  // ones it hurts most to lose — the later pieces, which is to say the end of the
+  // answer. Two is the most that is safe everywhere.
+  //
+  // It is also the whole difference between a fast opening and a slow one. One at
+  // a time, the second piece cannot even START until the first has gone out, so
+  // its entire budget is the first piece's playing time and the opener has to be
+  // long enough to cover it. With one always cooking, the second is made ALONGSIDE
+  // the first and is waiting before it is wanted — which is what lets the opener
+  // be short, and short is the only thing that makes the first sound arrive
+  // quickly (synthesis is linear in length; there is no fixed cost to amortise).
+  //
+  // Sending stays strictly in order — `queue[i]` is awaited in sequence, never
+  // raced — so a later piece finishing early can never overtake the one before it.
+  const queue: (Promise<string | null> | undefined)[] = [];
+  const start = (i: number) => {
+    if (i >= pieces.length || queue[i]) return;
+    queue[i] = speakToFile(
+      pieces[i], config, path.join(dir, `reply-${stamp}-${i}.ogg`),
+      (message) => tlog.warn({ err: message, piece: i }, 'speaking the reply failed'),
+    ).catch(() => null);
+  };
+  start(0); start(1);
+
   for (let i = 0; i < pieces.length; i++) {
     // Nobody is covering the wait for a piece after the first — the caller's
     // display came down with the first one — so this puts the dots back up.
     const bubble = i === 0 ? null : startWaitingBubble(client, chatId);
     let file: string | null = null;
     try {
-      file = await speakToFile(
-        pieces[i], config, path.join(dir, `reply-${stamp}-${i}.ogg`),
-        (message) => tlog.warn({ err: message, piece: i }, 'speaking the reply failed'),
-      );
+      file = await queue[i]!;
+      // Refill the moment a slot frees, so there is always one being made ahead.
+      start(i + 2);
       if (!file) break;
       // ONLY the first piece points back at the message being answered. The rest
       // follow it in sequence and are obviously part of the same reading — five
@@ -181,6 +214,15 @@ export async function speakInto(
       if (sent === 1 && i === 0) await Promise.resolve(opts.onFirstSent?.()).catch(() => {});
     }
   }
+
+  // A piece is always being made ahead, so stopping early leaves a file behind for
+  // one that will never be sent. Draining is idempotent — the ones already removed
+  // above simply aren't there — so this covers every exit without the loop having
+  // to know which one it took.
+  await Promise.all(queue.map(async (job) => {
+    const file = job ? await job : null;
+    if (file) await fs.rm(file, { force: true }).catch(() => { /* best-effort */ });
+  }));
 
   if (sent === 0) return 'none';
   if (sent < pieces.length) {

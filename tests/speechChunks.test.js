@@ -43,24 +43,99 @@ test('the first piece is the short one, and the pieces grow', () => {
   // the third is being made there is audio playing to cover it.
   const pieces = splitForSpeech(sentences(40), null);
   assert.ok(pieces.length >= 3, `expected several pieces, got ${pieces.length}`);
-  assert.ok(pieces[0].length < pieces[1].length, 'the first piece should be the shortest');
-  assert.ok(pieces[1].length < pieces[2].length, 'pieces should grow');
-  assert.ok(pieces[0].length <= seconds(12), `first piece too long: ${pieces[0].length} chars`);
+  // Not a strict step at every rung — a break only lands where the text allows,
+  // so two neighbours can tie. What must hold is the shape: small at the front,
+  // much larger by the end.
+  assert.ok(pieces[0].length <= pieces[1].length, 'the first piece should not be the largest');
+  assert.ok(pieces[pieces.length - 1].length > pieces[0].length * 2, 'pieces should grow');
+  // Measured: synthesis costs ~1s per 46 characters, so this bounds the wait
+  // before the first sound to a couple of seconds. It is not smaller because it
+  // is also the buffer every later piece is made inside — see the ladder test.
+  assert.ok(pieces[0].length <= seconds(7), `first piece too long: ${pieces[0].length} chars`);
 });
 
 test('breaks land at the end of a sentence, never mid-word', () => {
-  for (const piece of splitForSpeech(sentences(40), null)) {
+  // The FIRST piece is allowed a clause break — see the next test — so it is
+  // exempt. Everywhere else a whole sentence is worth the wait.
+  for (const piece of splitForSpeech(sentences(40), null).slice(1)) {
     assert.match(piece, /[.!?]$/, `piece does not end a sentence: ${JSON.stringify(piece.slice(-40))}`);
   }
 });
 
-test('one very long sentence is not chopped in half — it overshoots to the end', () => {
-  // Nothing to break on inside the first budget. Running long beats cutting a
-  // sentence in two, so the whole sentence travels as one piece.
-  const long = `${'word '.repeat(120).trim()}. ${sentences(10)}`;
+test('the first piece may break at a clause, because that wait is the only uncovered one', () => {
+  // Synthesis costs about a second per 46 characters, so reaching for the next
+  // sentence end is paid in silence before anything is heard at all. Here the
+  // opening clause ends at a colon and the next sentence end is far past it.
+  const opening = 'Here is the plan for this evening:';
+  const pieces = splitForSpeech(`${opening} ${sentences(30)}`, null);
+  assert.ok(pieces[0].endsWith(':'), `expected a clause break, got ${JSON.stringify(pieces[0])}`);
+  // And the floor still applies to it: a clause ending after a handful of
+  // characters is skipped, because an opener that grabs the first comma it sees
+  // starves every piece sized from how long it plays.
+  const tiny = splitForSpeech(`So: ${sentences(30)}`, null);
+  assert.ok(!tiny[0].endsWith(':'), `took a runt clause break: ${JSON.stringify(tiny[0])}`);
+});
+
+test('no piece is shorter than about two seconds of speech', () => {
+  // A clip much below this is barely longer than the sound announcing it.
+  for (const piece of splitForSpeech(`Hi. ${sentences(30)}`, null)) {
+    assert.ok(piece.length >= 20, `runt piece: ${JSON.stringify(piece)}`);
+  }
+});
+
+test('every piece can be made while the ones before it are still playing', () => {
+  // THE property the ladder exists for. Delivery is sequential, so each piece is
+  // synthesised only after the previous one has gone out — and it has to be ready
+  // before the audio already sent runs out, or the listener hits silence.
+  //
+  // Measured constants, kept in step with the module: ~650ms + 21.8ms per
+  // character to make, 200ms to upload, ~17 characters a second to play.
+  const make = (c) => 650 + 21.8 * c + 200;
+  const play = (c) => (c / CHARS_PER_SECOND) * 1000;
+
+  for (const script of [sentences(20), sentences(60), sentences(200)]) {
+    const pieces = splitForSpeech(script, 2000);
+    let slack = play(pieces[0].length);   // nothing is playing while the first is made
+    let prev = pieces[0].length;
+    for (const piece of pieces.slice(1)) {
+      const cost = make(piece.length);
+      // Delivery keeps TWO in flight, so this piece began while the previous one
+      // was still being made — that overlap is real time and part of the window.
+      const window = slack + make(prev);
+      assert.ok(cost <= window, `piece needs ${Math.round(cost)}ms, window is ${Math.round(window)}ms`);
+      slack += play(piece.length) - cost;
+      prev = piece.length;
+    }
+  }
+});
+
+test('the ladder grows — a long answer is a handful of pieces, not a column of them', () => {
+  // Buffered audio accumulates, so each piece can be much larger than the last.
+  // Sizing off the previous piece alone instead makes it crawl.
+  const script = sentences(200);
+  const pieces = splitForSpeech(script, 2000);
+  // Sized off the previous piece alone this needed roughly twice as many. The
+  // ceiling here is the vendor's input limit, not the ladder: once a piece is
+  // 2000 characters it cannot grow further, so a very long answer is however many
+  // 2000s it takes.
+  assert.ok(pieces.length <= Math.ceil(script.length / 2000) + 6, `too many pieces: ${pieces.length}`);
+  assert.ok(pieces[5].length > pieces[1].length * 4, 'the ladder should climb quickly');
+});
+
+test('a sentence longer than the budget overshoots — but only so far', () => {
+  // Running long beats cutting a sentence in two. Running UNBOUNDED does not:
+  // text with no punctuation for hundreds of characters is exactly how a
+  // "five second" piece once came out over a minute long, so the reach is capped
+  // at twice the budget and falls back to a word boundary past that.
+  const long = `${'word '.repeat(200).trim()}. ${sentences(10)}`;
   const pieces = splitForSpeech(long, null);
-  assert.ok(pieces[0].endsWith('.'), 'the long sentence should have been kept whole');
-  assert.ok(pieces[0].length > seconds(5), 'it should have overshot the first budget');
+  assert.ok(pieces[0].length <= seconds(3) * 2 + 1, `overshot too far: ${pieces[0].length} chars`);
+  assert.equal(pieces.join(' ').replace(/\s+/g, ' '), long.replace(/\s+/g, ' '));
+});
+
+test('a sentence that fits inside the reach is kept whole', () => {
+  const long = `${'word '.repeat(9).trim()}. ${sentences(10)}`;
+  assert.ok(splitForSpeech(long, null)[0].endsWith('.'), 'the sentence should have been kept whole');
 });
 
 test('a very short opening sentence does not become its own voice note', () => {
