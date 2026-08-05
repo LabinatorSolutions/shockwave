@@ -1284,7 +1284,13 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               type="button"
               className={cn(
                 'flex h-[26px] min-w-[26px] items-center justify-center rounded-[7px] px-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40',
-                voiceRecording && 'bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive',
+                // Recording is an ACTIVE state, so it takes the app's active
+                // look (`bg-selected text-primary`) — indigo meter on the
+                // accent-soft chip — not `destructive`. Red is for removing
+                // something; a mic that's listening destroys nothing, and the
+                // one red control in the composer should stay Stop. Hover is
+                // pinned or the base rule would repaint it mid-recording.
+                voiceRecording && 'bg-selected text-primary hover:bg-selected hover:text-primary',
                 !voiceAvailable && !voiceRecording && 'opacity-40',
               )}
               onClick={voiceRecording ? stopVoice : voiceAvailable ? startVoice : onOpenVoiceSettings}

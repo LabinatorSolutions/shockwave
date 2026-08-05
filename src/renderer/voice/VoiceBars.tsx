@@ -37,7 +37,11 @@ export function VoiceBars({ volumeRef, isRecording }) {
     <div ref={barsRef} className="inline-flex size-4 items-center justify-center gap-0.5" aria-hidden="true">
       {Array.from({ length: BAR_COUNT }, (_, i) => (
         // Heights are driven imperatively (style.height) from the RMS loop.
-        <span key={i} className="block h-[3px] w-0.5 rounded-[1px] bg-current transition-[height] duration-75 ease-out" />
+        // The meter is brand-colored (`bg-primary`, the one indigo accent) rather
+        // than `bg-current`, which made it whatever its host button happened to
+        // be — red inside the composer's recording state, muted grey inside
+        // Settings' Test microphone. It's the same meter in both places.
+        <span key={i} className="block h-[3px] w-0.5 rounded-[1px] bg-primary transition-[height] duration-75 ease-out" />
       ))}
     </div>
   );
