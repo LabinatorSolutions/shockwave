@@ -143,7 +143,12 @@ export async function chatNotice(
   // The anchor stays `updatedAt` on both sides of the comparison: "since we last
   // talked" is when THIS chat was last active, not when it was opened.
   const list = await switchableChats(db, chat.workspaceId, activeChatId);
-  const newer = list.filter((c) => !c.isPinned && (c.createdAt ?? 0) > chat.updatedAt!);
+  // Desktop chats only. "A thread you started somewhere else" is the desktop —
+  // cron jobs and the companion's own review/memory runs also create chat rows,
+  // and those are background work, not something you drifted away from. They
+  // keep their numbers in `list` (and still appear in /chats), so the indexes
+  // printed here stay valid /chat arguments.
+  const newer = list.filter((c) => !c.isPinned && c.source === 'desktop' && (c.createdAt ?? 0) > chat.updatedAt!);
   if (!newer.length) return null;
 
   // The age shown is LAST ACTIVITY, not age since creation — these are the same
