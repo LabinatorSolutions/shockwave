@@ -320,6 +320,10 @@ export interface ShockwaveApi {
      *  empty field can't mean "delete this" — every credential it holds reads as
      *  empty and is stripped from saves on purpose. Deleting is explicit. */
     deleteCredential(path: string): Promise<{ ok: boolean; error?: string }>;
+    /** Remove an agent secret and every credential filed under its name. Its own
+     *  call because a name absent from a saved list is no longer a delete — this
+     *  window's copy of the list is legitimately stale. */
+    deleteAgentSecret(name: string): Promise<{ ok: boolean; error?: string }>;
     /** Whether the companion is reachable right now. Asked on load — the push
      *  below can fire before the window is listening. */
     companionState(): Promise<{ online: boolean }>;

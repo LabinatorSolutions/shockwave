@@ -25,6 +25,15 @@ function isOAuth(s) {
   return !!(s && s.oauth);
 }
 
+// The rename marker, or nothing. A secret's stored credentials are filed under
+// its NAME, and this window holds no copy of them to resend — so a save that
+// changes the name has to say what the name was, or the companion cannot tell a
+// rename from a new entry and the credential is orphaned. Exact comparison, not
+// `nameKey`: a case-only change IS a rename to the database.
+function renamedFrom(before, after) {
+  return before && before !== after ? { previousName: before } : {};
+}
+
 // ── Static-token dialog (Add / Edit) — unchanged behavior ────────────────────
 function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
   const [name, setName] = useState('');
@@ -403,7 +412,14 @@ export default function AgentSecretsSection({ secrets, onChange, onReload }) {
     let next;
     if (tokenEditing) {
       next = list.map((s) =>
-        nameKey(s.name) === nameKey(tokenEditing.name) ? { ...s, name, description, token, updatedAt: now } : s,
+        nameKey(s.name) === nameKey(tokenEditing.name)
+          // `previousName` is what makes a rename a rename. The stored credential
+          // is filed under the OLD name, and this window does not hold a copy to
+          // resend — so without telling the companion what this entry used to be
+          // called, renaming it loses the key. Only set when the name moved,
+          // including a change of case (the box upper-cases what you type).
+          ? { ...s, ...renamedFrom(s.name, name), name, description, token, updatedAt: now }
+          : s,
       );
     } else {
       next = [...list, { name, description, token, kind: 'static', createdAt: now, updatedAt: now }];
@@ -424,6 +440,7 @@ export default function AgentSecretsSection({ secrets, onChange, onReload }) {
         if (nameKey(s.name) !== nameKey(oauthEditing.name)) return s;
         return {
           ...s,
+          ...renamedFrom(s.name, form.name),
           name: form.name,
           description: form.description,
           updatedAt: now,
@@ -488,9 +505,21 @@ export default function AgentSecretsSection({ secrets, onChange, onReload }) {
     }
   };
 
-  const onDelete = (n) => {
-    onChange((secrets ?? []).filter((s) => s.name !== n));
+  // Deleting is its own request, not a shorter list. Filtering the entry out and
+  // saving used to work because the companion deleted whatever the list didn't
+  // mention — which also meant a STALE list (another machine, a dropped feed) took
+  // real secrets with it. Absence means nothing now; this says it.
+  const onDelete = async (n) => {
+    setConnectError(null);
     setConfirmDelete(null);
+    try {
+      const res = await window.api.settings.deleteAgentSecret(n);
+      if (!res?.ok) setConnectError(res?.error || 'Could not remove that secret.');
+    } catch (e: any) {
+      setConnectError(e?.message ?? 'Could not remove that secret.');
+    } finally {
+      await onReload?.();
+    }
   };
 
   // Grouped for display: OAuth connections and static tokens in separate lists.

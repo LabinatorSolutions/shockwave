@@ -169,6 +169,26 @@ export async function writeSettings(patch: any, opts: { notify?: boolean } = {})
   if (opts.notify !== false) await emitChanged();
 }
 
+/**
+ * Remove one stored credential. Its own call, on both sides of the boundary.
+ *
+ * It used to be `writeSettings({ [path]: '' })` — an empty value meaning delete —
+ * which made every save that could produce an empty value a delete too. The
+ * companion ignores empties now, so this is the only route left and the intent is
+ * unambiguous at both ends.
+ */
+export async function deleteCredential(path: string): Promise<void> {
+  await api.del(`/settings/credential/${encodeURIComponent(path)}`);
+  await emitChanged();
+}
+
+/** Remove an agent secret and every credential filed under its name. Absence
+ *  from a settings save no longer deletes one, so this is how it happens. */
+export async function deleteAgentSecret(name: string): Promise<void> {
+  await api.del(`/agent-secret/${encodeURIComponent(name)}`);
+  await emitChanged();
+}
+
 export async function patchAgentSecretOAuth(name: string, patch: Record<string, any>): Promise<void> {
   await api.post(`/oauth/${encodeURIComponent(name)}`, patch);
   await emitChanged();

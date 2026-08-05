@@ -16,6 +16,9 @@ import { makeCompanionRuntime } from './agentHost.js';
 import { runCronJob } from './cronRun.js';
 import { initScheduler, nextRuns } from './scheduler.js';
 import { mintToken } from './oauth.js';
+// The one declaration of which settings paths are credentials — see
+// agent-core/credentials.ts. Also gates the desktop's delete IPC.
+import { isDeletableCredential } from '../../agent-core/credentials.js';
 import { initSweeper } from './sweeper.js';
 import { initCheckoutPool } from './checkoutPool.js';
 import { initBackgroundSweeper } from './backgroundSweeper.js';
@@ -114,8 +117,21 @@ const handle = (fn: (req: express.Request) => Promise<any>) =>
 app.get('/settings', handle(() => store.readSettings(db, masterKey)));
 app.patch('/settings', handle((req) => store.writeSettings(db, masterKey, req.body)));
 
+// Destroying a credential is a REQUEST, never an inference. A save carrying an
+// empty value no longer deletes (see `putSecret`), so this is the only way — and
+// the path is re-checked against the one credential declaration here as well as
+// in the desktop, since this route is reachable with the bearer key alone.
+app.delete('/settings/credential/:path', handle((req) => {
+  const path = req.params.path;
+  if (!isDeletableCredential(path)) throw new Error(`not a deletable credential: ${path}`);
+  return store.deleteSettingsCredential(db, path);
+}));
+
 // ── Secrets / agent tools ────────────────────────────────────────────────────
 app.get('/agent-secrets', handle(() => store.listAgentSecretMeta(db)));
+// Removing an agent secret, and the only thing that does. A name merely missing
+// from a settings save is left alone — the caller's list is not authoritative.
+app.delete('/agent-secret/:name', handle((req) => store.deleteAgentSecret(db, req.params.name)));
 // A usable credential for one secret: static → the stored token; oauth → a fresh
 // access token (refreshed server-side). Both the desktop agent and cron use this.
 app.get('/agent-secret/:name/token', handle((req) => mintToken(db, masterKey, req.params.name)));

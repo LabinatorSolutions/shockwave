@@ -36,7 +36,7 @@ import { resolveGitBinary } from './gitBinary.js';
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
 // encryption were replaced wholesale; the signatures here are unchanged, so
 // every call site below (and in oauth.ts / cron.ts) is untouched.
-import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged, notifySettingsResync } from './settingsStore.js';
+import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings, deleteCredential, deleteAgentSecret, importLegacySettingsIfNeeded, notifyWorkspacesChanged, notifySettingsResync } from './settingsStore.js';
 import { readApiConfig, writeApiConfig } from './api/config.js';
 // The one declaration of which settings paths are credentials — shared with the
 // companion and the renderer. Gates settings:deleteCredential.
@@ -179,9 +179,13 @@ async function ensureBuiltinSecretSlots() {
         additions.push({ name, description: `Used by the ${sk.name} skill`, token: '', createdAt: now, updatedAt: now });
       }
     }
-    if (additions.length) {
-      await writeSettings({ agentSecrets: [...(settings.agentSecrets ?? []), ...additions] });
-    }
+    // Send ONLY the additions. This used to re-send the whole list — which meant
+    // every launch that provisioned a slot round-tripped every credential the user
+    // has through this process and back into storage. Harmless while they all
+    // decrypt; a slow-motion disaster when one doesn't, since an unreadable secret
+    // reads as empty and empty used to mean delete. Absence is no longer a delete
+    // (see writeAgentSecrets), so the whole list never has to travel.
+    if (additions.length) await writeSettings({ agentSecrets: additions });
   } catch (err: any) {
     console.warn('[secrets] built-in slot provisioning failed:', err?.message ?? err);
   }
@@ -984,8 +988,19 @@ ipcMain.handle('settings:write', async (_evt, obj) => {
 // this can't be pointed at an arbitrary settings key.
 ipcMain.handle('settings:deleteCredential', async (_evt, { path: credPath }) => {
   if (!isDeletableCredential(credPath)) return { ok: false, error: 'Not a credential.' };
-  // Empty string = delete on the companion (putSecret drops the row).
-  await writeSettings({ [credPath]: '' }, { notify: true });
+  // Its own route on the companion. It used to be a settings write of `''`, back
+  // when an empty value meant delete — which is exactly what made an ordinary
+  // save able to destroy a key it never held.
+  await deleteCredential(credPath);
+  return { ok: true };
+});
+
+// Remove an agent secret. Also its own channel, for the matching reason: a name
+// missing from a saved list is no longer a delete, because the renderer's list is
+// legitimately stale (another machine, a dropped feed, an offline boot).
+ipcMain.handle('settings:deleteAgentSecret', async (_evt, { name }) => {
+  if (typeof name !== 'string' || !name.trim()) return { ok: false, error: 'A name is required.' };
+  await deleteAgentSecret(name);
   return { ok: true };
 });
 

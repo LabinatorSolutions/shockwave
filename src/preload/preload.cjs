@@ -244,6 +244,11 @@ contextBridge.exposeInMainWorld('api', {
      *  field cannot mean 'delete this' any more.
      *  @param {string} path @returns {Promise<{ok: boolean, error?: string}>} */
     deleteCredential: (path) => ipcRenderer.invoke('settings:deleteCredential', { path }),
+    /** Remove an agent secret and every credential filed under its name. Its own
+     *  channel for the same reason: dropping a name from a saved list no longer
+     *  deletes it, because this window's copy of the list can be stale.
+     *  @param {string} name @returns {Promise<{ok: boolean, error?: string}>} */
+    deleteAgentSecret: (name) => ipcRenderer.invoke('settings:deleteAgentSecret', { name }),
     apiCheckVersion: () => ipcRenderer.invoke('api:checkVersion'),
     apiUpgradeCompanion: () => ipcRenderer.invoke('api:upgradeCompanion'),
     /** Fires when an upgrade this session requested has landed (main sees the

@@ -194,6 +194,11 @@ export interface AgentSecretOAuth {
 //                freshly-refreshed access token (see oauth.ts / the bridge).
 export interface AgentSecret {
   name: string;
+  /** Set ONLY on the save that renames an entry, and read only by the companion's
+   *  `writeAgentSecrets`, which re-files the stored credentials under the new
+   *  name. Without it a rename looks like a new entity and the key is left behind
+   *  under a name nothing points at. Never stored. */
+  previousName?: string;
   description: string;
   kind?: 'static' | 'oauth';
   /** Present in MAIN only; stripped before the renderer (see `hasToken`). */

@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import type { Db } from './db.js';
 import { seal, unseal } from './crypto.js';
 import { publishSettingsChanged } from './feed.js';
+import { logger } from './log.js';
 import {
   normalizeVoiceReply, DEFAULT_VOICE_REPLY, type VoiceReply,
 } from '../../agent-core/voiceReply.js';
@@ -39,6 +40,10 @@ function announce(): void {
   try { publishSettingsChanged(); } catch { /* a lost notification is not worth failing a write over */ }
 }
 
+// Named to avoid shadowing: `migrateLegacyVoiceKeys` takes a `log` parameter of
+// its own, and a module-level `log` beside it reads as the same thing.
+const secretLog = logger('secrets');
+
 const KEY_VERSION = 1;
 const now = () => Date.now();
 
@@ -48,11 +53,27 @@ type Tx = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
 
 // ── secret_value helpers ─────────────────────────────────────────────────────
 
+/**
+ * Store one credential. **An empty value is a NO-OP, never a delete.**
+ *
+ * It used to delete, and that one line was the whole of four different ways to
+ * lose a key, because "empty" arrives constantly for reasons that have nothing
+ * to do with wanting rid of it:
+ *
+ *  - the desktop never RECEIVES credential values, so everything it holds reads
+ *    as empty (the renderer strips empties on the way out, but that guard lives
+ *    in one of the two processes that write here);
+ *  - `unseal` returns '' when it cannot decrypt, so "I couldn't read this" was
+ *    laundered into "delete it" by any read-modify-write — permanently, on the
+ *    next launch that happened to write the list back;
+ *  - a value that is simply unset is empty too.
+ *
+ * Destroying a credential is an explicit request now: `deleteSettingsCredential`
+ * / `deleteAgentSecret`, each behind its own route. Inferring destruction from
+ * the shape of a value is what made a routine save dangerous.
+ */
 async function putSecret(c: Tx, key: Buffer, owner: string, field: string, plain: string) {
-  if (!plain) {
-    await c.delete(secretValue).where(and(eq(secretValue.owner, owner), eq(secretValue.field, field)));
-    return;
-  }
+  if (!plain) return;
   const s = seal(key, plain);
   await c.insert(secretValue)
     .values({ owner, field, ciphertext: s.value, iv: s.iv, tag: s.tag, keyVersion: KEY_VERSION, updatedAt: now() })
@@ -62,13 +83,27 @@ async function putSecret(c: Tx, key: Buffer, owner: string, field: string, plain
     });
 }
 
+/** Remove one stored credential. Callers are the two explicit delete paths below
+ *  and the OAuth flow clearing its own tokens — nothing else may delete. */
+async function dropSecret(c: Tx, owner: string, field: string) {
+  await c.delete(secretValue).where(and(eq(secretValue.owner, owner), eq(secretValue.field, field)));
+}
+
 // owner -> { field: plaintext }
+//
+// An empty result means the row would not decrypt, NOT that an empty value was
+// stored — `putSecret` refuses to store one, so the two are no longer
+// ambiguous. That distinction is worth a line in the log: a wrong or replaced
+// MASTER_KEY otherwise presents as every key on the machine quietly reading as
+// unset, which looks like the desktop's problem and is not.
 async function loadSecrets(db: Db, key: Buffer): Promise<Map<string, Record<string, string>>> {
   const rows = await db.select().from(secretValue);
   const out = new Map<string, Record<string, string>>();
   for (const r of rows) {
     const bucket = out.get(r.owner) ?? {};
-    bucket[r.field] = unseal(key, { value: r.ciphertext, iv: r.iv, tag: r.tag });
+    const plain = unseal(key, { value: r.ciphertext, iv: r.iv, tag: r.tag });
+    if (!plain) secretLog.warn({ owner: r.owner, field: r.field }, 'stored credential could not be decrypted — it is kept, not deleted');
+    bucket[r.field] = plain;
     out.set(r.owner, bucket);
   }
   return out;
@@ -244,18 +279,35 @@ async function reconcileCredentialMap(c: Tx, key: Buffer, path: string, map: Rec
 }
 
 async function writeAgentSecrets(c: Tx, key: Buffer, list: any[]) {
-  const keep = list.filter((s) => s?.name).map((s) => s.name as string);
-  // Delete ONLY the agent secrets that are gone from the list, and only their
-  // own encrypted rows (owner = the agent-secret name). Never a table-wide wipe:
-  // secret_value is shared with the `settings` and `telegram` owners, and a
-  // "delete everything not in this list" reconcile clobbered the telegram token
-  // on every save.
-  const existing = (await c.select({ name: agentSecret.name }).from(agentSecret)).map((r) => r.name);
-  const removed = existing.filter((n) => !keep.includes(n));
-  if (removed.length) {
-    await c.delete(agentSecret).where(inArray(agentSecret.name, removed));
-    await c.delete(secretValue).where(inArray(secretValue.owner, removed));
+  // A RENAME IS A RE-FILE, not a delete and a create.
+  //
+  // `secret_value.owner` IS the secret's name, so treating a new name as a new
+  // entity left the credential filed under the old one — and the old one was
+  // then deleted for being absent from the list. Renaming an entry destroyed its
+  // key, silently, and nothing the caller sends can put it back: the desktop
+  // never receives credential values, so the empty token box means "keep what is
+  // stored" and there is nothing left to keep it in. The row has to MOVE.
+  //
+  // This also covers a case-only change (`firecrawl` -> `FIRECRAWL`), which the
+  // name box can produce on its own by upper-casing what it is handed.
+  for (const entry of list) {
+    const from = typeof entry?.previousName === 'string' ? entry.previousName.trim() : '';
+    const to = typeof entry?.name === 'string' ? entry.name : '';
+    if (!from || !to || from === to) continue;
+    const [src] = await c.select({ name: agentSecret.name }).from(agentSecret).where(eq(agentSecret.name, from));
+    if (!src) continue; // already renamed (a re-sent list), or never existed
+    const [dst] = await c.select({ name: agentSecret.name }).from(agentSecret).where(eq(agentSecret.name, to));
+    if (dst) continue; // the target is a real entry of its own; the upsert below owns it
+    await c.update(agentSecret).set({ name: to, updatedAt: now() }).where(eq(agentSecret.name, from));
+    await c.update(secretValue).set({ owner: to, updatedAt: now() }).where(eq(secretValue.owner, from));
+    secretLog.info({ from, to }, 'renamed an agent secret — credentials re-filed');
   }
+
+  // NOTHING IS DELETED HERE. A name absent from this list used to be deleted
+  // along with every credential filed under it, which made the caller's copy of
+  // the list authoritative by omission — and that copy is legitimately stale
+  // (another machine added one, the live feed was down, an offline boot seeded
+  // an empty list). Removing a secret is its own request: `deleteAgentSecret`.
   for (const entry of list) {
     if (!entry?.name) continue;
     const { row, secrets } = splitAgentSecret(entry);
@@ -283,6 +335,37 @@ async function writeAgentSecrets(c: Tx, key: Buffer, list: any[]) {
   }
 }
 
+/**
+ * Remove one stored settings credential (`sync.pat`, `voiceKeys.<vendor>`,
+ * `codingAgent.providerKeys.<slug>`).
+ *
+ * Its own function behind its own route, because an empty value in a save no
+ * longer deletes anything — see `putSecret`. The intent travels as the request
+ * rather than as the shape of a value, which is the only way a client that holds
+ * no credential values can express it without every ordinary save meaning it too.
+ */
+export async function deleteSettingsCredential(db: Db, path: string): Promise<void> {
+  await dropSecret(db, SETTINGS_SECRET_OWNER, path);
+  secretLog.info({ field: path }, 'deleted a settings credential');
+  announce();
+}
+
+/**
+ * Remove an agent secret and every credential filed under its name.
+ *
+ * Scoped to this one owner — `secret_value` is shared with the `settings` and
+ * `telegram` owners, so a reconcile that deletes "everything not in this list"
+ * clobbers the bot token. That is not a hypothetical; it shipped once.
+ */
+export async function deleteAgentSecret(db: Db, name: string): Promise<void> {
+  await db.transaction(async (c) => {
+    await c.delete(agentSecret).where(eq(agentSecret.name, name));
+    await c.delete(secretValue).where(eq(secretValue.owner, name));
+  });
+  secretLog.info({ name }, 'deleted an agent secret');
+  announce();
+}
+
 // ── Targeted OAuth write (token exchange/refresh persist through here) ────────
 
 export async function patchOAuth(db: Db, key: Buffer, name: string, patch: Record<string, any>): Promise<void> {
@@ -295,8 +378,15 @@ export async function patchOAuth(db: Db, key: Buffer, name: string, patch: Recor
     if ('clientId' in patch) set.oauthClientId = patch.clientId ?? null;
     if ('scopes' in patch) set.oauthScopes = patch.scopes ? JSON.stringify(patch.scopes) : null;
     await c.update(agentSecret).set(set).where(eq(agentSecret.name, name));
+    // The one write that may still clear a credential from an empty value, and it
+    // is not a bulk save: disconnecting sends `accessToken: ''` / `refreshToken:
+    // ''` and means it. Named explicitly so the exception is visible rather than
+    // inherited from `putSecret`.
     for (const [k, field] of [['accessToken', 'oauth.accessToken'], ['refreshToken', 'oauth.refreshToken'], ['clientSecret', 'oauth.clientSecret']] as const) {
-      if (k in patch) await putSecret(c, key, name, field, patch[k] ?? '');
+      if (!(k in patch)) continue;
+      const v = patch[k] ?? '';
+      if (v) await putSecret(c, key, name, field, v);
+      else await dropSecret(c, name, field);
     }
   });
   announce();

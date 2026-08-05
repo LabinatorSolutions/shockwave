@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPatch, changedLeaves } from '../src/renderer/settingsDiff.ts';
+import { buildPatch, changedLeaves, dropEmptyCredentials } from '../src/renderer/settingsDiff.ts';
 
 test('a changed leaf is sent alone, siblings are not', () => {
   const prev = { sync: { pat: 'ghp_secret', pullIntervalSeconds: 10, disabledWorkspaceIds: [] } };
@@ -124,4 +124,41 @@ test('clearing the last provider key sends an empty map, not nothing', () => {
   const prev = { codingAgent: { providerKeys: { anthropic: 'sk-1' } } };
   assert.deepEqual(buildPatch({ codingAgent: { providerKeys: {} } }, prev),
     { 'codingAgent.providerKeys': {} });
+});
+
+// ── Renaming an agent secret ─────────────────────────────────────────────────
+
+test('a rename marker survives the send guard that drops the empty token', () => {
+  // THIS COMBINATION IS THE BUG. Renaming an entry with the token box left blank
+  // wiped the key: the stored credential is filed under the secret's NAME, so the
+  // companion read a new name as a new entity and deleted the old one — and this
+  // window holds no copy of the token to resend, so the guard below (correctly)
+  // strips the empty one and there was nothing left to carry it across.
+  //
+  // `previousName` is what turns that into a re-file. If it were ever dropped here
+  // the failure would look exactly like the original bug, so it is pinned next to
+  // the strip that made the bug possible rather than on its own.
+  const patch = dropEmptyCredentials({
+    agentSecrets: [{ name: 'FIRECRAWL', previousName: 'FIRECRAWL_API_KEY', description: 'x', token: '' }],
+  });
+  assert.deepEqual(patch.agentSecrets, [
+    { name: 'FIRECRAWL', previousName: 'FIRECRAWL_API_KEY', description: 'x' },
+  ]);
+});
+
+test('a typed token still travels alongside the rename', () => {
+  const patch = dropEmptyCredentials({
+    agentSecrets: [{ name: 'B', previousName: 'A', description: '', token: 'sk-live' }],
+  });
+  assert.equal(patch.agentSecrets[0].token, 'sk-live');
+  assert.equal(patch.agentSecrets[0].previousName, 'A');
+});
+
+test('agentSecrets travels whole and undiffed, so a rename is never diffed away', () => {
+  // Collections pass through as a unit (COLLECTION_KEYS). A per-leaf diff would
+  // compare `previousName` against a cache that has never held one and could drop
+  // it as unchanged — the marker only exists on the save that performs the rename.
+  const prev = { agentSecrets: [{ name: 'A', description: '' }] };
+  const next = { agentSecrets: [{ name: 'B', previousName: 'A', description: '' }] };
+  assert.deepEqual(buildPatch(next, prev), next);
 });
