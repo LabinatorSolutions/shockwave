@@ -2,7 +2,7 @@
 
 <h1><img src="build/icon.png" width="40" align="top" alt="" />&nbsp;Shockwave</h1>
 
-**An Obsidian-style markdown editor with a built-in AI agent — and free sync.**
+**Shockwave is a second brain and knowledge graph with a built-in AI assistant.** A notes app that organizes itself — and does the work for you (and syncs for free across your devices).
 
 A local, file-based notes app where your work stays as plain `.md` files in a folder you own.
 It ships with a real coding agent baked right in (no separate Claude Code), and syncs through
@@ -20,43 +20,21 @@ Want to learn to build apps like this? Join the **[AI Architects](https://skool.
 
 ## Why Shockwave
 
-### 🛰 Close the laptop. It keeps working.
+### 🧠 Get it out of your head. It stays organized on its own.
 
-Every agent you've used dies when the window closes. This one lives on a box you own.
+Get it out all out of your head, ideas, projects, due dates. The agent keeps it in order for you, so you never sit down to a pile of notes that needs processing. And because everything's in one place, the agent can use it and even work to complete your work.
 
-- **It works while you're gone** — scheduled jobs fire, Telegram gets answered, the lid stays shut.
-- **Every machine is the same machine** — settings, secrets and every chat, wherever you sign in.
-- **One line to install** — any $5 VPS. No account, no company in the middle.
+### 🧬 It learns you — nothing complicated to install
 
-### 🤖 It edits the files, not a chat window
+Everything the power tools give you (like Hermes) — memory, self-improvement — without the complicated setup that comes with them.
 
-You stop being the copy-paste layer between two apps.
+### Close the laptop. It keeps working.
 
-- **Your key, your model** — Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint.
-- **Teach it with skills** — drop a `SKILL.md` folder into the workspace.
-- **Hand it your tokens** — named secrets, encrypted, so it can work in your accounts.
-
-### 🧬 It only needs telling once
-
-You've explained how you work to this thing a hundred times.
-
-- **Stop re-explaining yourself** — `MEMORY.md` and `USER.md`, read at the start of every turn.
-- **Corrections stick** — after enough work it rewrites its own skills, between your sessions.
-- **Not a black box** — they're markdown. Wrong line, delete it.
+Create work for the agent, then close the laptop and the work keeps getting done without you. And you can also pick up where you left off on any other device, even on your phone.
 
 ### 🔄 Sync that costs nothing
 
-Most notes apps rent you sync. Yours is a GitHub repo you already own.
-
-- **One token, once** — set it, and every workspace uses it.
-- **Conflicts settled in the app** — keep yours or take theirs. No terminal, no git.
-- **Any folder becomes a workspace** — clone a repo, create one, or adopt one you already have.
-
----
-
-## Why not Obsidian and Claude Code?
-
-You can. Two apps, two windows, and you paste between them. But the agent stops when you close the terminal — it can't fire at 6 a.m., can't answer a text, and can't work on a repo you aren't sitting in front of.
+Most notes apps charge you to sync across device we use github instead. Also helps manage file sync conflicts automatically.
 
 ---
 
