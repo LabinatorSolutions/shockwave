@@ -77,7 +77,7 @@ export const TREE_SORT_LABELS = Object.freeze({
 //
 // `desktop` is also the fallback for a row with no source: `agent-core` writes
 // `source ?? 'desktop'`, so a null is a pre-provenance chat rather than an unknown
-// kind, and filtering it out of "App" would hide history for a reason the user
+// kind, and filtering it out of "Desktop" would hide history for a reason the user
 // can't see.
 // **Every `chat.source` the companion can write must be listed here.** A missing
 // one is not a missing checkbox: chats of that kind stay visible while the filter
@@ -88,7 +88,7 @@ export const TREE_SORT_LABELS = Object.freeze({
 export const CHAT_SOURCES = Object.freeze(['desktop', 'telegram', 'cron', 'review', 'memory']);
 
 export const CHAT_SOURCE_LABELS = Object.freeze({
-  desktop: 'App',
+  desktop: 'Desktop',
   telegram: 'Telegram',
   cron: 'Scheduled',
   review: 'Reviews',

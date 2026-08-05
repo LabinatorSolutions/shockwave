@@ -574,7 +574,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   // source added later visible instead of silently missing from a saved list.
   // A row with no source is treated as `desktop`: agent-core writes
   // `source ?? 'desktop'`, so a null is a pre-provenance chat, not an unknown
-  // kind, and hiding it under "App" unchecked would lose history invisibly.
+  // kind, and hiding it under "Desktop" unchecked would lose history invisibly.
   const sourceOf = (it: any) => it?.source || 'desktop';
   const allowed: Set<string> | null = useMemo(
     () => (Array.isArray(chatSources) ? new Set(chatSources) : null),
