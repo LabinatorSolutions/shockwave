@@ -364,18 +364,23 @@ export default function VoiceSection({
         title="Providers"
         description="Your accounts. A key is stored once and can do any job that provider supports."
       >
-        {VOICE_PROVIDERS.map((p) => (
-          <ProviderRow
-            key={p.slug}
-            provider={p}
-            saved={keyStored(p.slug)}
-            verifyState={verifyStates[p.slug] ?? { status: 'idle' }}
-            removing={removing === p.slug}
-            onSave={(next) => saveKey(p.slug, next)}
-            onVerify={() => runVerify(p.slug)}
-            onRemove={() => removeKey(p.slug)}
-            onEdited={() => invalidateVerify(p.slug)}
-          />
+        {/* A hairline between vendors: each row is a label, a box, a pair of
+            buttons and up to three result lines, so on a page where every row
+            looks alike the gap alone doesn't say where one key ends. */}
+        {VOICE_PROVIDERS.map((p, i) => (
+          <React.Fragment key={p.slug}>
+            {i > 0 && <SettingsDivider />}
+            <ProviderRow
+              provider={p}
+              saved={keyStored(p.slug)}
+              verifyState={verifyStates[p.slug] ?? { status: 'idle' }}
+              removing={removing === p.slug}
+              onSave={(next) => saveKey(p.slug, next)}
+              onVerify={() => runVerify(p.slug)}
+              onRemove={() => removeKey(p.slug)}
+              onEdited={() => invalidateVerify(p.slug)}
+            />
+          </React.Fragment>
         ))}
       </SettingsGroup>
 
