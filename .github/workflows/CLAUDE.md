@@ -16,6 +16,30 @@ Cutting a release is therefore: bump `package.json` `version`, commit, `git tag 
 
 > **This was two workflows** (`release.yml` + `companion-image.yml`) until v1.0.69. They shared the `v*` trigger, so every tag produced two runs that the Actions list titled identically — both take their title from the tag commit's message — which read as an accidental double-trigger. Merging them also let `publish` gate on the image, which two separate workflows structurally could not do.
 
+## Prereleases — how to rehearse without shipping
+
+**A tag containing a hyphen is a prerelease** (semver's own rule). That single test appears twice, and both spots exist so the pipeline can be exercised end to end without any user seeing it:
+
+| | release tag `v1.0.70` | prerelease tag `v1.0.70-rc1` |
+|---|---|---|
+| `image` job pushes | `:v1.0.70` **and** `:latest` | `:v1.0.70-rc1` only |
+| `publish` job flags | `--draft=false --latest` | `--draft=false --prerelease --latest=false` |
+
+Both halves are load-bearing. Fresh companion installs pull `:latest`, so an rc that moved it would hand every new install a test image; electron-updater reads the latest *published* release, so an rc marked latest would be offered to every desktop client as an update.
+
+**`package.json` version must carry the prerelease suffix too** (`1.0.70-rc1`), not just the tag. electron-builder derives its target release from the manifest version rather than `GITHUB_REF` — tag `v1.0.70-rc1` against version `1.0.70` uploads into a stray `v1.0.70` release, and the rc tag you pushed ends up testing nothing.
+
+Two implementation details that bit during the merge and will bite again:
+
+- **The image tag list is built with `printf`, not an embedded newline.** A literal newline inside a YAML block scalar has to start at the block's indentation; written at column 0 it terminates the block and the file stops parsing.
+- **`publish` builds its flags as a bash array**, not a string. `gh release edit … $FLAGS` would depend on word splitting, which shellcheck flags (SC2086) and actionlint surfaces as a workflow error.
+
+`actionlint` is the local gate for all of this — there is no dry run for a tag push:
+
+```
+docker run --rm -v "$PWD":/repo --workdir /repo rhysd/actionlint:latest -verbose
+```
+
 ## The `release` job — desktop installers
 
 - **`npm run cli-tools` is its own top-level step**, not a postinstall inside `npm ci`. Nested, it dies with EPERM on the Windows runner. It provisions the bundled CLIs (`cli-tools/`, see `resources/built-in-skills/CLAUDE.md`) and removes npm's recursive self-link, which Windows' 7za can't resolve during NSIS packaging.
