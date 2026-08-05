@@ -412,7 +412,7 @@ The actual WebSocket + audio pipeline lives in the renderer; see `src/renderer/C
 | Dialogs | `dialog:openFolder` |
 | FS | `fs:readTree`, `fs:readAllMarkdown`, `fs:readFile`, `fs:writeFile`, `fs:createFile`, `fs:renameFileLiteral`, `fs:duplicateFile`, `fs:trashFolder`, `fs:trashFile`, `fs:trashFiles`, `fs:createFolder`, `fs:ensureDir`, `fs:moveItem`, `fs:renameFolder`, `fs:writeImage`, `fs:pathExists`, `fs:importFiles`, `fs:rebuildLinkCache`, `fs:watchStart`, `fs:watchStop` |
 | Shell | `shell:revealInFolder`, `shell:openExternal` |
-| Context menus | `context:fileMenu` (`conflictMode` → Conflict resolved / Keep our file / Reset to remote), `context:conflictCloudMenu` (whole-tree keep/reset), `context:folderMenu`, `context:editorMenu` |
+| Context menus | `context:fileMenu` (`conflictMode` → Conflict resolved / Keep our file / Reset to remote), `context:conflictCloudMenu` (whole-tree keep/reset), `context:folderMenu`, `context:editorMenu`, `context:fallbackMenu` (cut/copy/paste roles for surfaces with no menu of their own — invoked by `main.tsx`'s document-level listener when no component preventDefaulted the right-click) |
 | Settings | `settings:read`, `settings:write` (writes only the keys present), `settings:deleteCredential` (the only way to *remove* a stored credential — gated on `isDeletableCredential` from `agent-core/credentials.ts`, then writes `''` so the companion's `putSecret` drops the row; clearing the input box deliberately cannot do this, see `settings/CLAUDE.md`); plus push event `settings:changed` (`{keys, settings}`, main-initiated writes only) |
 | OAuth | `oauth:listPresets`, `oauth:startConnect`, `oauth:disconnect` |
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |

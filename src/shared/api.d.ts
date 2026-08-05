@@ -242,6 +242,7 @@ export interface ShockwaveApi {
   showConflictCloudMenu(): Promise<'keep' | 'reset' | null>;
   showFolderContextMenu(opts?: { isRoot?: boolean }): Promise<FolderAction | null>;
   showEditorContextMenu(opts: { hasSelection?: boolean; hasFilePath?: boolean; hasLink?: boolean }): Promise<EditorAction | null>;
+  showFallbackContextMenu(opts: { isEditable?: boolean; hasSelection?: boolean }): Promise<null>;
 
   // File watcher (push)
   watchStart(dirPath: string): Promise<void>;

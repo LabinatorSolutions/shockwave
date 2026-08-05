@@ -184,6 +184,13 @@ contextBridge.exposeInMainWorld('api', {
    * @returns {Promise<string|null>} The chosen EDITOR_ACTIONS value, or null.
    */
   showEditorContextMenu: (opts) => ipcRenderer.invoke('context:editorMenu', opts),
+  /**
+   * Fallback cut/copy/paste menu for surfaces with no menu of their own
+   * (chat sidebar, settings fields). Shows nothing when neither flag is set.
+   * @param {{ isEditable?: boolean, hasSelection?: boolean }} opts
+   * @returns {Promise<null>} Roles act in main; there is no chosen value.
+   */
+  showFallbackContextMenu: (opts) => ipcRenderer.invoke('context:fallbackMenu', opts),
 
   // ---- File watcher (push) ------------------------------------------------
 

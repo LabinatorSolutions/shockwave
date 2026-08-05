@@ -939,6 +939,23 @@ ipcMain.handle('context:editorMenu', async (evt, { hasSelection, hasFilePath, ha
   return popupContextMenu(win, template);
 });
 
+// Fallback edit menu for surfaces without their own context menu (chat
+// sidebar, settings fields). Roles are Electron built-ins — the clipboard
+// work happens here, so popupContextMenu resolves null and that's fine.
+ipcMain.handle('context:fallbackMenu', async (evt, { isEditable, hasSelection } = {}) => {
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  if (!isEditable && !hasSelection) return null;
+  const template: any[] = [
+    { role: 'cut',   enabled: isEditable && hasSelection },
+    { role: 'copy',  enabled: hasSelection },
+    { role: 'paste', enabled: isEditable },
+  ];
+  if (isEditable) {
+    template.push({ type: 'separator' }, { role: 'selectAll' });
+  }
+  return popupContextMenu(win, template);
+});
+
 ipcMain.handle('settings:read', async () => {
   // Boot-safe: an unconfigured/offline server yields defaults (+ machine-local)
   // rather than throwing, so the app still boots and can show a connect prompt.
