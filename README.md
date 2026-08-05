@@ -2,11 +2,7 @@
 
 <h1><img src="build/icon.png" width="40" align="top" alt="" />&nbsp;Shockwave</h1>
 
-**Shockwave is a second brain and knowledge graph with a built-in AI assistant.** A notes app that organizes itself — and does the work for you (and syncs for free across your devices).
-
-A local, file-based notes app where your work stays as plain `.md` files in a folder you own.
-It ships with a real coding agent baked right in (no separate Claude Code), and syncs through
-your own GitHub repo for free.
+**Shockwave is a second brain and knowledge graph with a built-in AI assistant.** A notes app that organizes itself and does the work for you. It also syncs for free across your devices.
 
 [**Download ↓**](#install-the-app) · macOS · Windows · Linux
 
