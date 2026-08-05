@@ -801,9 +801,12 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
 
-  // Voice input hook. Mounts on sidebar mount (always, even while the sidebar
-  // is collapsed to a 28px strip) so the token prefetch runs early — every
-  // mic click after the first ~200ms uses the cached token, zero round-trip.
+  // Voice input hook. Its token prefetch runs on mount, so every mic click
+  // after the first ~200ms of an expanded sidebar uses the cached token with no
+  // round-trip. Collapsing the sidebar UNMOUNTS this component (App.tsx renders
+  // it conditionally), which means the hook's cleanup effect is also what stops
+  // a live mic on collapse and on a workspace switch — see the stop triggers
+  // spelled out in `useVoiceInput.ts`.
   const { voiceAvailable, voiceError, isConnecting: voiceConnecting, isRecording: voiceRecording, startRecording: startVoice, stopRecording: stopVoice } = useVoiceInput({
     getToken: () => window.api.voice.getToken(),
     onTranscript: (finalText) => {
@@ -829,6 +832,14 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
       typed = (input + sep + partialText).trim();
       setPartialText('');
     }
+    // Sending ends the utterance, so it ends the recording. An agent turn runs
+    // for minutes; a mic left hot across one transcribes the room into the next
+    // prompt. `discardPending` is what makes this safe rather than merely tidy —
+    // the socket lingers to hear the vendor's flush, and those words would land
+    // in the composer AFTER the draft cleared, opening the next message with the
+    // tail of this one (and on AssemblyAI, whose final is the whole turn, with a
+    // duplicate of the partial committed just above).
+    if (voiceRecording) stopVoice({ discardPending: true });
     if (!typed && attachments.length === 0) return;
     if (!workspacePath) return; // composer is disabled without a workspace
     const id = chatIdRef.current ?? chatStore.ensureActiveChat(workspacePath);
@@ -848,7 +859,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
       images,
       attachments: attachments.map((a) => ({ ...a })),
     });
-  }, [input, partialText, attachments, workspacePath]);
+  }, [input, partialText, attachments, workspacePath, voiceRecording, stopVoice]);
 
   const onStop = useCallback(async () => {
     const id = chatIdRef.current;
@@ -864,6 +875,11 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     setRejected(null);
     setRenamingTitle(false);
     setPartialText('');
+    // The mic belongs to the composer you were talking into. Clearing the
+    // partial while the socket kept streaming meant the next thing you said
+    // landed in a chat you had already walked away from. The flush is kept —
+    // nothing has been sent, so those words are still yours to see arrive.
+    if (voiceRecording) stopVoice();
     // Focus the composer so you can just start typing. Deferred a frame: the
     // textarea is `disabled` while the previous chat ran elsewhere, and focus()
     // on a still-disabled element is a no-op.
@@ -874,7 +890,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
       const len = el.value.length;
       try { el.setSelectionRange(len, len); } catch { /* selection is cosmetic */ }
     });
-  }, [workspacePath]);
+  }, [workspacePath, voiceRecording, stopVoice]);
 
   // Pin / unpin the active chat (header pin button).
   const onToggleHeaderPin = useCallback(async () => {
@@ -1055,8 +1071,16 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       onSend();
+      return;
     }
-  }, [onSend]);
+    // Escape is the fast way off the mic without reaching for the button. Only
+    // while recording — otherwise the key keeps whatever meaning anything above
+    // this composer gives it.
+    if (e.key === 'Escape' && voiceRecording) {
+      e.preventDefault();
+      stopVoice();
+    }
+  }, [onSend, voiceRecording, stopVoice]);
 
   // Imperative surface for the "Send to Agent" right-click flow in App.jsx.
   // setComposerText replaces or appends; focusComposer moves caret to end and
@@ -1293,7 +1317,9 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
                 voiceRecording && 'bg-selected text-primary hover:bg-selected hover:text-primary',
                 !voiceAvailable && !voiceRecording && 'opacity-40',
               )}
-              onClick={voiceRecording ? stopVoice : voiceAvailable ? startVoice : onOpenVoiceSettings}
+              // Wrapped, not passed bare: stopVoice takes an options object and
+              // a bare handler would hand it the MouseEvent.
+              onClick={voiceRecording ? () => stopVoice() : voiceAvailable ? startVoice : onOpenVoiceSettings}
               disabled={voiceConnecting}
               title={
                 voiceRecording ? 'Stop recording'

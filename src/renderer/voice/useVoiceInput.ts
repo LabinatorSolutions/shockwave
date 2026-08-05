@@ -59,6 +59,35 @@ const KNOWN = new Set(['assemblyai', 'deepgram', 'elevenlabs']);
 const FLUSH_GRACE_MS = 1500;
 
 /**
+ * How long the mic may hear nothing before it turns itself off.
+ *
+ * The mic used to stop for exactly three reasons: a second click, a socket
+ * error, and unmount. Nothing covered the one case no explicit trigger can —
+ * you forgot. A forgotten mic is a live socket, a hot microphone, and a bill:
+ * all three vendors charge by the minute the socket is CONNECTED, not the
+ * minute you spoke into it.
+ *
+ * Generous on purpose. Cutting someone off while they think mid-sentence is a
+ * worse failure than 45 wasted seconds, and this is a backstop rather than an
+ * utterance boundary — the vendors already decide where those are.
+ */
+const SILENCE_TIMEOUT_MS = 45_000;
+
+/** How often the silence check runs. Coarse — it's measuring 45 seconds. */
+const SILENCE_CHECK_MS = 2000;
+
+/**
+ * RMS below which a chunk counts as silence.
+ *
+ * A mic's noise floor sits around 0.005–0.02 and speech runs an order of
+ * magnitude above it, so this discriminates cleanly. It is not the only
+ * activity signal — a transcript message counts too (see `markActivity`), which
+ * is what keeps a quiet-but-working microphone from being timed out by its own
+ * gain settings.
+ */
+const SILENCE_RMS_FLOOR = 0.02;
+
+/**
  * Every mounted `useVoiceInput` re-asks when the voice settings change.
  *
  * There are two instances — the chat composer's and the Settings page's — with
@@ -122,6 +151,28 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
   const sourceRef = useRef<any>(null);
   const cleaningUpRef = useRef(false);
   const connectingRef = useRef(false);
+
+  /**
+   * Drop everything the socket still has to say.
+   *
+   * Set by `stopRecording({ discardPending: true })`, which is what the
+   * composer's SEND does. The goodbye in `cleanup` asks the vendor to flush,
+   * and that flush lands up to FLUSH_GRACE_MS later — *after* the draft has
+   * been cleared for the message that was just sent. Without this, the tail of
+   * the sentence you sent opens your NEXT message.
+   *
+   * On AssemblyAI it is worse than a stray tail: its final `transcript` is the
+   * whole turn rather than the remainder, and the composer commits the partial
+   * itself at send, so the late final re-appends every word a second time.
+   *
+   * Losing that tail is the correct trade, not a compromise: hitting send is a
+   * statement that the utterance is over, and what the composer showed at that
+   * moment is what got sent.
+   */
+  const discardRef = useRef(false);
+  /** Last moment the mic heard anything — speech OR a transcript message. */
+  const lastActivityRef = useRef(0);
+  const silenceTimerRef = useRef<any>(null);
 
   const tokenRef = useRef<any>(null);
   const tokenTimeRef = useRef(0);
@@ -254,6 +305,10 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     if (cleaningUpRef.current) return;
     cleaningUpRef.current = true;
 
+    if (silenceTimerRef.current) {
+      clearInterval(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     if (workletRef.current) {
       workletRef.current.disconnect();
       workletRef.current = null;
@@ -298,6 +353,9 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     if (connectingRef.current || cleaningUpRef.current) return;
     connectingRef.current = true;
     setIsConnecting(true);
+    // A previous stop may have left this set; a new recording is never a
+    // continuation of the one that was discarded.
+    discardRef.current = false;
 
     try {
       const result = await getReadyToken();
@@ -384,18 +442,41 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
           } else {
             ws.send(int16.buffer);
           }
-          if (onVolumeChange) onVolumeChange(Math.sqrt(sum / float32.length));
+          const rms = Math.sqrt(sum / float32.length);
+          if (rms > SILENCE_RMS_FLOOR) lastActivityRef.current = Date.now();
+          if (onVolumeChange) onVolumeChange(rms);
         };
 
         source.connect(workletNode);
         workletNode.connect(audioCtx.destination);
         setIsConnecting(false);
         setIsRecording(true);
+
+        // The silence backstop starts when the audio does, not when the user
+        // clicked — connecting can take a moment and that time isn't silence.
+        lastActivityRef.current = Date.now();
+        silenceTimerRef.current = setInterval(() => {
+          if (Date.now() - lastActivityRef.current < SILENCE_TIMEOUT_MS) return;
+          // Stop quietly. The meter vanishing IS the message, and a toast for
+          // "you stopped talking" would fire in exactly the moment the user has
+          // already walked away from the screen. The pending flush is kept —
+          // after this long there is nothing in it, and discarding on a timeout
+          // would be throwing away words nobody asked us to throw away.
+          cleanup();
+        }, SILENCE_CHECK_MS);
       };
 
       ws.onmessage = (event) => {
+        // The socket outlives the recording by FLUSH_GRACE_MS. When the stop
+        // was a SEND, everything arriving in that window belongs to a message
+        // that has already gone — see discardRef.
+        if (discardRef.current) return;
         try {
           const data = JSON.parse(event.data);
+
+          // Words are activity even when the meter says otherwise: a quiet
+          // microphone that the vendor is still transcribing is being used.
+          lastActivityRef.current = Date.now();
 
           // AssemblyAI: `transcript` is the whole turn so far, so each message
           // REPLACES what came before and end_of_turn is simply the last one.
@@ -479,7 +560,15 @@ export function useVoiceInput({ getToken, onTranscript, onPartialTranscript, onE
     }
   }, [getReadyToken, onTranscript, onPartialTranscript, onError, onVolumeChange, cleanup]);
 
-  const stopRecording = useCallback(() => {
+  /**
+   * Stop the mic. `discardPending` throws away whatever the vendor still owes
+   * us — pass it when the words already went somewhere (the composer's send).
+   * Everything else (the button, Escape, a new chat) wants the flush.
+   */
+  const stopRecording = useCallback((opts?: { discardPending?: boolean }) => {
+    // Read defensively: this is wired straight to onClick in places, so the
+    // argument can be a MouseEvent rather than an options object.
+    if (opts?.discardPending === true) discardRef.current = true;
     cleanup();
   }, [cleanup]);
 

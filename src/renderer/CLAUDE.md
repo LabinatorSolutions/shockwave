@@ -254,6 +254,23 @@ It carries a request guard: without one the last response to land won rather tha
 
 **Re-asking is one fan-out, not one call site per caller.** `notifyVoiceConfigChanged()` (module-level, exported from `useVoiceInput.ts`) re-mints in *every* mounted instance. There are two — the composer's and the Settings page's — with no shared state, so the old per-caller `recheck` gave a fresh answer only to whoever remembered to ask: Verify went green on the Settings page while the composer sat on the old refusal for the life of the app, and restarting was the only way back. `VoiceSection` calls it after verifying, switching provider, and removing a key. **It has to be a renderer-side fan-out rather than the IPC push**, because `settings:changed` deliberately never fires for the renderer's own writes (main passes `notify: false`) and saving the key *is* a renderer write. The hook also subscribes to that push for changes made elsewhere — another machine, the companion, `/voice` — filtered so it doesn't mint on every unrelated save: re-ask when the `transcription.provider` + `transcription.micProvider` + `hasVoiceKey` fingerprint moves, **or whenever there is no working token**. (Both provider fields, because the mic mints against its own assignment — watching only `provider` would miss the whole point of pointing the mic somewhere else.) That second trigger is the load-bearing one — replacing a rejected key with a good one for the same vendor leaves `hasVoiceKey` true→true and moves no fingerprint the renderer can see, since it never receives key values.
 
+**The mic turns itself off, and each reason is a different kind of "done".** It used to stop for three reasons only — a second click, a socket error, and unmount — so the common case of hitting send left a live socket streaming the room into your next message for the whole length of an agent turn. The full set now:
+
+| Trigger | Where | Flush |
+|---|---|---|
+| Mic button, Escape in the composer | `ChatSidebar` | kept |
+| **Send** | `onSend` | **discarded** |
+| New chat | `onClear` | kept |
+| 45s of silence | `SILENCE_TIMEOUT_MS`, in the hook | kept |
+| Sidebar collapse, workspace switch | the hook's cleanup effect, via unmount | kept |
+
+Two things in that table are load-bearing:
+
+- **Send is the only one that discards**, and it has to. `cleanup` says goodbye and leaves the socket open `FLUSH_GRACE_MS` to hear the answer, so those words arrive *after* the draft was cleared and open the NEXT message with the tail of the one you just sent. On AssemblyAI it's a duplicate rather than a tail — its final `transcript` is the whole turn, and `onSend` already commits the partial itself. `stopRecording({ discardPending: true })` sets a ref the message handler checks first. Losing the tail is the trade and it's the right one: hitting send says the utterance is over, and what the composer showed is what went.
+- **Collapse and workspace switch need no code** — `App.tsx` mounts `ChatSidebar` conditionally and keys it on `workspacePath`, so both unmount it and the hook's `useEffect(() => cleanup, …)` does the rest. Don't add explicit stops for them; if that conditional mount ever becomes a CSS hide, these two become real gaps.
+
+The silence backstop counts a chunk above `SILENCE_RMS_FLOOR` **or** any transcript message as activity — a quiet microphone the vendor is still transcribing is one that's being used. It stops without a toast (the meter vanishing is the message, and by then nobody is looking) and it exists as much for the bill as the privacy: all three vendors charge by the minute the socket is *connected*.
+
 **Mic permission gotcha**: Electron prompts for microphone access on the first `getUserMedia` call and persistently grants it for the origin. The Settings → Agent Voice "Test microphone" button (`settings/VoiceSection.tsx`) exists primarily so users can trigger that one-time prompt in Settings, where they expect it — without it, the first click of the chat composer's mic would prompt mid-conversation. **It tests the MICROPHONE — the hardware, the permission, and the whole path through whichever vendor the mic is assigned to.** Checking a *key* is a different question and belongs to Verify, on that vendor's row. The two were one button doing both jobs badly; that is why Test microphone now sits under the Microphone assignment rather than as its own section, and why it stays `outline` while the three per-vendor Verifies are the page's primaries (see `settings/CLAUDE.md`).
 
 ## GitHub sync (renderer side)
