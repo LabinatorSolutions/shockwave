@@ -66,8 +66,14 @@ export const TOOL_SCOPES: ToolScope[] = ['desktop', 'cron', 'telegram', 'review'
  * app window. Memory denies everything but `memory`: its whole input is the
  * conversation it was handed plus the current memory, and the current memory is
  * already in its prompt.
+ *
+ * `per` overrides the shared sentence for one tool, and exists because Telegram
+ * is the one source denying two tools for two different reasons — the shared
+ * sentence there answered `open_file` and left `send_message` reading about app
+ * windows. Nothing else needs it: a review run's eleven denials really do have
+ * one reason between them.
  */
-export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string }>> = {
+export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string; per?: Record<string, string> }>> = {
   review: {
     tools: [
       'bash', 'edit', 'write',
@@ -93,9 +99,19 @@ export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string
   // over Telegram. Calling it delivers the same words a second time, by a second
   // route, and that is exactly what it did: a message sent as text and then read
   // aloud again as a voice note, with nothing in the conversation explaining why.
+  //
+  // Its sentence says the reply ROUTES there, not merely that the user is
+  // present, because the likeliest motive for reaching for the tool is wanting
+  // this one answer spoken — and the ordinary reply already goes out under the
+  // same `/voice` mode the tool would have used (`sendsText`/`speaks` in
+  // api/src/telegram/webhook.ts). Told the delivery is automatic, there is
+  // nothing left for the call to add.
   telegram: {
     tools: ['open_file', 'send_message'],
-    reason: 'there is no app window on a Telegram run, and no need to send a Telegram message from one — you are already talking to the user there, so your reply reaches them. Just say it. To hand over a file, name its path in your reply.',
+    reason: 'there is no app window on a Telegram run — nobody has the app open. To hand over a file, name its path in your reply.',
+    per: {
+      send_message: 'all your messages already route to Telegram automatically, so you do not need this tool. Just write your reply.',
+    },
   },
   cron: {
     tools: ['open_file'],
@@ -155,13 +171,14 @@ export function activeToolNames(): string[] {
  *
  * The message names the tool and then explains the RUN, because that is the only
  * thing the agent doesn't already know — it made the call, so it knows which
- * tool it reached for. One sentence per source rather than one per tool: the
- * reason a review run can't run `bash` is the same reason it can't run `edit`.
+ * tool it reached for. One sentence per source by default: the reason a review
+ * run can't run `bash` is the same reason it can't run `edit`. `per` is the
+ * exception for a source whose denials don't share a reason.
  */
 export function deniedReason(tool: string, source: string | undefined): string | null {
   const entry = DENIED[(source || 'desktop') as ToolScope];
   if (!entry || !entry.tools.includes(tool)) return null;
-  return `\`${tool}\` is not available here: ${entry.reason}`;
+  return `\`${tool}\` is not available here: ${entry.per?.[tool] ?? entry.reason}`;
 }
 
 // Render the catalog as the markdown bullet list used in the "Available tools"

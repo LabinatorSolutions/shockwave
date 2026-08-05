@@ -77,15 +77,28 @@ test('a NEW catalog tool cannot reach a background run unnoticed', () => {
 
 test('every refusal names the tool and explains the run', () => {
   // pi falls back to a generic "Tool execution was blocked" when `reason` is
-  // empty, which tells the agent nothing it can act on.
+  // empty, which tells the agent nothing it can act on. A `per` override stands
+  // in for the shared sentence, so it has to clear the same bar.
   for (const [source, entry] of Object.entries(DENIED)) {
     assert.ok(entry.reason && entry.reason.length > 20, `${source} needs a real reason`);
     for (const tool of entry.tools) {
+      const expected = entry.per?.[tool] ?? entry.reason;
+      assert.ok(expected.length > 20, `${source}/${tool} needs a real reason`);
       const msg = deniedReason(tool, source);
       assert.ok(msg.includes(tool), `${source}/${tool}: the message should name the tool`);
-      assert.ok(msg.includes(entry.reason), `${source}/${tool}: the message should explain the run`);
+      assert.ok(msg.includes(expected), `${source}/${tool}: the message should explain the run`);
     }
   }
+});
+
+test('a per-tool reason replaces the shared one rather than joining it', () => {
+  // The whole point of the override: Telegram denies two tools for two different
+  // reasons, and `send_message` used to read a sentence about app windows. If
+  // the fallback ever wins here, that regression is back and looks like nothing.
+  const msg = deniedReason('send_message', 'telegram');
+  assert.ok(msg.includes('route to Telegram automatically'), 'send_message should get its own reason');
+  assert.ok(!msg.includes('app window'), 'send_message should not be told about the app window');
+  assert.ok(deniedReason('open_file', 'telegram').includes('app window'), 'open_file keeps the shared reason');
 });
 
 test('every tool named in the deny table actually exists', () => {
