@@ -75,13 +75,13 @@ type VerifyState =
   | { status: 'error'; error: string }
   | { status: 'done'; checks: Array<{ job: VoiceJob; ok: boolean; detail?: string }> };
 
-function signupLink(p: VoiceProvider) {
+function keysLink(p: VoiceProvider) {
   return (
     <a
       href="#"
       className="text-primary underline underline-offset-2 hover:opacity-80"
-      onClick={(e) => { e.preventDefault(); window.api.openExternal(p.signupUrl); }}
-    >{p.signupHost}</a>
+      onClick={(e) => { e.preventDefault(); window.api.openExternal(p.keysUrl); }}
+    >{p.keysHost}</a>
   );
 }
 
@@ -138,7 +138,7 @@ function ProviderRow({
           </>
         ) : null}
       />
-      {!saved && <FieldDescription>Get a key from {signupLink(provider)}.</FieldDescription>}
+      {!saved && <FieldDescription>Get a key from {keysLink(provider)}.</FieldDescription>}
 
       {verifyState.status === 'error' && <ErrorMessage>{verifyState.error}</ErrorMessage>}
 

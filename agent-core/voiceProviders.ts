@@ -37,9 +37,17 @@ export interface MicSupport {
 export interface VoiceProvider {
   slug: string;
   label: string;
-  signupUrl: string;
-  /** Host part of `signupUrl`, for the "open in browser" confirmation. */
-  signupHost: string;
+  /**
+   * Where the user actually gets a key — the vendor's API-KEYS page, not its
+   * signup form. All three pointed at signup, which is a dead end for anyone
+   * who already has an account: it asks them to create a second one rather
+   * than showing them the key they came for. Vendors that sign you in first
+   * redirect there themselves, so the keys page covers both cases and the
+   * signup form covers only one.
+   */
+  keysUrl: string;
+  /** Host part of `keysUrl`, for the "open in browser" confirmation. */
+  keysHost: string;
   /** Turns speech into text — files, and Telegram voice notes. */
   listen: boolean;
   /** Turns text into speech. */
@@ -52,8 +60,8 @@ export const VOICE_PROVIDERS: VoiceProvider[] = [
   {
     slug: 'assemblyai',
     label: 'AssemblyAI',
-    signupUrl: 'https://www.assemblyai.com/dashboard/signup',
-    signupHost: 'assemblyai.com',
+    keysUrl: 'https://www.assemblyai.com/dashboard/api-keys',
+    keysHost: 'assemblyai.com',
     listen: true,
     // AssemblyAI ships no standalone speech synthesis — it exists only inside
     // their voice-agent product, which is a different thing than "read me this
@@ -64,8 +72,12 @@ export const VOICE_PROVIDERS: VoiceProvider[] = [
   {
     slug: 'deepgram',
     label: 'Deepgram',
-    signupUrl: 'https://console.deepgram.com/signup',
-    signupHost: 'deepgram.com',
+    // Deepgram's keys live under a PROJECT (`/project/<id>/settings/api-keys`),
+    // so there is no static URL that works for every account. `?jump=keys` is
+    // the one stable deep link they publish — it lands a new user on keys after
+    // signup, and bounces an existing one into the console.
+    keysUrl: 'https://console.deepgram.com/signup?jump=keys',
+    keysHost: 'deepgram.com',
     listen: true,
     speak: true,
     mic: { tokenTtlMs: 60_000, singleUse: false },
@@ -73,8 +85,8 @@ export const VOICE_PROVIDERS: VoiceProvider[] = [
   {
     slug: 'elevenlabs',
     label: 'ElevenLabs',
-    signupUrl: 'https://elevenlabs.io/app/sign-up',
-    signupHost: 'elevenlabs.io',
+    keysUrl: 'https://elevenlabs.io/app/settings/api-keys',
+    keysHost: 'elevenlabs.io',
     listen: true,
     speak: true,
     // 15 minutes, and single-use — see MicSupport.singleUse.
