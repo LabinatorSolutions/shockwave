@@ -243,6 +243,41 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
     onAfterSwitch?.();
   }, [writeNow, captureCurrentViewState, onAfterSwitch]);
 
+  // Reopen a workspace's tabs at load. Caller has already filtered `paths` to
+  // files that still exist — a path that vanished since the last run must never
+  // become a tab, because a tab with no file behind it can't be loaded and can't
+  // be told apart from a draft.
+  //
+  // Fresh ids rather than stored ones: ids are per-run and mean nothing across
+  // launches, and minting here keeps `nextTabId` the only source of them.
+  const restoreTabs = useCallback((paths: string[], activePath: string | null) => {
+    if (!paths.length) return;
+    const restored = paths.map((p) => ({
+      id: makeTabId(), path: p, isDraft: false, history: [p], historyIndex: 0,
+    }));
+    const active = restored.find((t) => t.path === activePath) ?? restored[0];
+    setTabs(restored);
+    setActiveTabId(active.id);
+  }, []);
+
+  // Drag-to-reorder. Moves one tab to another's position and changes NOTHING
+  // else — not the active tab, not any tab's path or history. Reordering is
+  // presentation; the only index-sensitive behavior in this hook is closeTab's
+  // "activate the tab to the left", which reads the array at close time and so
+  // follows the new order by itself.
+  const reorderTabs = useCallback((fromId, toId) => {
+    if (fromId === toId) return;
+    setTabs((prev) => {
+      const from = prev.findIndex((t) => t.id === fromId);
+      const to = prev.findIndex((t) => t.id === toId);
+      if (from < 0 || to < 0) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }, []);
+
   // Flip a draft tab to a real file. Caller has already created the file on disk.
   const promoteTabPath = useCallback((tabId, newPath) => {
     setTabs((prev) => prev.map((t) => (
@@ -270,6 +305,8 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
     closeTabsForPath,
     closeTabsUnderPath,
     renameTabsPath,
+    reorderTabs,
+    restoreTabs,
     captureCurrentViewState,
     resetTabs,
     promoteTabPath,

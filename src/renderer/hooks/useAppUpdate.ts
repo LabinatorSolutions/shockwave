@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import type { UpdateStatus } from '../../shared/api';
 
-// App-update state for the three places that show it: the "Update available"
-// pill (editor pane, top-right), the toast, and Settings → Updates.
+// App-update state for the two places that show it: the toast, and
+// Settings → Updates.
 //
 // **Nothing downloads or installs by itself.** Main checks on launch and daily
 // and reports a phase; leaving `available` takes a `download()` call, and
@@ -12,15 +12,17 @@ import type { UpdateStatus } from '../../shared/api';
 // "downloaded, installs on restart" about a transfer nobody had asked for.
 //
 // Toast policy: it announces EVENTS (a version appeared; a download finished),
-// while the pill carries the STATE. So a dismissed toast stays dismissed —
-// `snooze()` records the version in machine-local settings and main echoes it
-// back as `snoozedVersion` — and the pill keeps showing regardless. Same split
-// the app already draws for the companion being offline: a persistent condition
-// gets quiet chrome, a moment gets a toast.
+// and both carry the action — Download, then Restart. A dismissed toast stays
+// dismissed: `snooze()` records the version in machine-local settings and main
+// echoes it back as `snoozedVersion`. Settings → Updates is then the only place
+// that still shows it, which is what `unsnooze()` below exists to undo. There
+// used to be a persistent pill over the tab strip carrying the state alongside
+// this; the tab strip needed that space for overflow controls, and the toast's
+// action is the same one the pill led to.
 //
 // `onRequestRestart` is supplied by App (it opens the confirm dialog) and is
-// re-exposed as `requestRestart` so the pill, the toast and Settings all go
-// through the SAME confirmation. Nothing here calls `restartToUpdate` directly:
+// re-exposed as `requestRestart` so the toast and Settings both go through the
+// SAME confirmation. Nothing here calls `restartToUpdate` directly:
 // installing quits the app, which kills a running agent turn, and that is not
 // something a single click on a status pill should be able to do.
 export function useAppUpdate({ onRequestRestart }: { onRequestRestart: () => void }) {

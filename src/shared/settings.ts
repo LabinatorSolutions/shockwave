@@ -320,5 +320,14 @@ export interface Settings {
   // scheduled runs out of the way on a laptop and visible on a desktop. It hides
   // nothing else — the runs still happen and their commits still land.
   chatSources: string[] | null;
+  // Which files were open in each workspace when the app last closed, so a
+  // restart comes back to the tabs you left rather than an empty window.
+  // Keyed by workspace id; `active` is the path that was in front.
+  //
+  // Machine-local, like the checkout it describes — the same workspace on
+  // another machine has its own window and its own idea of what you were doing.
+  // Paths are re-checked against the tree on load, so a file deleted or renamed
+  // elsewhere is simply dropped rather than opening a tab onto nothing.
+  openTabs: Record<string, { paths: string[]; active: string | null }>;
   windowBounds: WindowBounds | null;
 }

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { TREE_SORT_ORDERS } from './constants.js';
 import { isOpenable } from './MediaView';
+import { segmentsFromIndexes } from './searchHighlight';
 
 const DEFAULT_LIMIT = 10;
 
@@ -45,25 +46,6 @@ function sortFiles(files, order) {
     default: sorted.sort(cmpName);
   }
   return sorted;
-}
-
-// Split a string into <strong>/plain segments based on fuzzysort's matched
-// character indexes (which are sorted ascending). Contiguous runs of matched
-// chars collapse into a single <strong>.
-function segmentsFromIndexes(text, indexes) {
-  if (!indexes || indexes.length === 0) return [{ match: false, value: text }];
-  const segs: any[] = [];
-  let cursor = 0;
-  for (let i = 0; i < indexes.length;) {
-    const start = indexes[i];
-    if (start > cursor) segs.push({ match: false, value: text.slice(cursor, start) });
-    let end = start;
-    while (i < indexes.length && indexes[i] === end) { end++; i++; }
-    segs.push({ match: true, value: text.slice(start, end) });
-    cursor = end;
-  }
-  if (cursor < text.length) segs.push({ match: false, value: text.slice(cursor) });
-  return segs;
 }
 
 // Quick-search dialog on cmdk (shadcn Command). Empty query → top 10 entries

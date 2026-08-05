@@ -34,6 +34,10 @@ export const LOCAL_SETTINGS: Record<string, any> = {
   showHiddenFiles: false,
   chatSources: null,
   activeWorkspaceId: null,
+  // workspaceId -> { paths, active }. Which files were open when you quit.
+  // Machine-local because a checkout is: the same workspace on another machine
+  // has its own window, its own screen, and its own idea of what you were doing.
+  openTabs: {},
 };
 
 export const LOCAL_KEYS = Object.keys(LOCAL_SETTINGS);
@@ -53,6 +57,7 @@ export interface LocalSettings {
   showHiddenFiles?: boolean;
   chatSources?: string[] | null;
   activeWorkspaceId?: string | null;
+  openTabs?: Record<string, { paths: string[]; active: string | null }>;
   /** Update version whose toast the user dismissed. Machine-local because
    *  installing an update is a per-machine act. Not in LOCAL_KEYS — the renderer
    *  never patches it through a settings save; app:snoozeUpdate writes it. */

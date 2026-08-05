@@ -45,6 +45,7 @@ const DEFAULT_CANONICAL: Settings = {
   bookmarkFilterActive: false,
   showHiddenFiles: false,
   chatSources: null,
+  openTabs: {},
   windowBounds: null,
 };
 
@@ -196,6 +197,18 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
   // like the rest of this group — the runs happen either way. `null` is "all",
   // and staying null rather than seeding the full list is what keeps a source
   // added later visible by default.
+  // Which files are open, per workspace. Deliberately NOT React state: nothing
+  // renders from it, and tab churn (every open, close, switch and drag) would
+  // otherwise re-render the whole app to store a value only the next launch
+  // reads. App debounces the call; settingsRef is the live copy either way.
+  const saveOpenTabs = useCallback((workspaceId: string, entry: { paths: string[]; active: string | null }) => {
+    if (!workspaceId) return;
+    const prev = settingsRef.current.openTabs ?? {};
+    const next = { ...prev, [workspaceId]: entry };
+    if (JSON.stringify(prev[workspaceId]) === JSON.stringify(entry)) return;
+    persistSettings({ openTabs: next });
+  }, [persistSettings, settingsRef]);
+
   const onChatSourcesChange = useCallback((next: string[] | null) => {
     setChatSourcesState(next);
     persistSettings({ chatSources: next });
@@ -430,6 +443,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       bookmarkFilterActive: bfa,
       showHiddenFiles: shf,
       chatSources: cs,
+      openTabs: (disk.openTabs && typeof disk.openTabs === 'object') ? disk.openTabs : {},
       windowBounds: disk.windowBounds ?? null,
     };
     setThemeMode(tm);
@@ -459,7 +473,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, telegram, timezone,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
-    onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange,
+    onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange, saveOpenTabs,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onVoiceReplyChange, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSpeechChange, onVoiceKeyChange, onTelegramChange,

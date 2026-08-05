@@ -278,7 +278,7 @@ export default function App() {
     settingsRef,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
-    onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange,
+    onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange, saveOpenTabs,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSpeechChange, onVoiceKeyChange, onVoiceReplyChange, onTelegramChange,
@@ -679,7 +679,8 @@ export default function App() {
   const tabsApi = useTabs({ editorRef, writeNow, onAfterSwitch });
   const { activeFile, activeIsDraft, activeTab, openInActiveTab, openInNewTab, addDraftTab,
           switchTab, closeTab, closeTabsForPath, closeTabsUnderPath, renameTabsPath, resetTabs,
-          promoteTabPath, tabs, activeTabId, goBack, goForward, canGoBack, canGoForward } = tabsApi;
+          reorderTabs, restoreTabs, promoteTabPath, tabs, activeTabId, goBack, goForward,
+          canGoBack, canGoForward } = tabsApi;
 
   // Keep writeNow's refs current. writeNow itself is a stable closure declared
   // above; these effects feed it the freshest tab state and helpers.
@@ -859,10 +860,14 @@ export default function App() {
   // window showing workspace B. Each await is followed by a generation check so
   // a superseded load stops writing state instead of racing the winner.
   const loadGenRef = useRef(0);
+  // Which workspace's tabs are fully restored and therefore safe to persist.
+  // Null while a load is in flight — see "remember which files are open" below.
+  const tabsReadyForWsRef = useRef<string | null>(null);
   const loadWorkspace = useCallback(async (workspace) => {
     const gen = ++loadGenRef.current;
     const current = () => loadGenRef.current === gen;
 
+    tabsReadyForWsRef.current = null;
     await writeNow();
     await window.api.watchStop();
     if (!current()) return;
@@ -898,7 +903,21 @@ export default function App() {
       workspacePath: workspace.path,
       intervalSeconds: syncRef.current?.pullIntervalSeconds,
     }).catch(() => {});
-  }, [writeNow, resetTabs, linkIndex, loadWorkspaceData, settingsRef]);
+
+    // Reopen the tabs this workspace had when it was last closed. Filtered
+    // against the tree we just read, so a file deleted or renamed while the app
+    // was shut is dropped instead of opening a tab onto nothing. settingsRef,
+    // not state, for the reason readTree above uses it: boot hydrates and loads
+    // in the same tick, before React has re-rendered.
+    const saved = settingsRef.current.openTabs?.[workspace.id];
+    if (saved?.paths?.length) {
+      const onDisk = new Set<string>();
+      const walk = (nodes) => { for (const n of nodes) { if (n.children) walk(n.children); else onDisk.add(n.id); } };
+      walk(treeData);
+      restoreTabs(saved.paths.filter((p) => onDisk.has(p)), saved.active ?? null);
+    }
+    tabsReadyForWsRef.current = workspace.id;
+  }, [writeNow, resetTabs, linkIndex, loadWorkspaceData, settingsRef, restoreTabs]);
   loadWorkspaceRef.current = loadWorkspace;
 
   // Settings → Advanced → "Rebuild link cache". Discards the persisted parse
@@ -1528,12 +1547,35 @@ export default function App() {
     return window.api.settings.onCertNeedsApproval(show);
   }, [openSettings]);
 
+  // ---- remember which files are open, per workspace ----
+  //
+  // Gated on `tabsReadyForWsRef`, which loadWorkspace clears on entry and sets
+  // once it has restored. Without it the `resetTabs()` at the top of a load
+  // races the restore that follows several awaits later, and an empty list
+  // saved in between is how "reopen my tabs" quietly becomes "forget them".
+  const saveOpenTabsRef = useSyncRef(saveOpenTabs);
+  const persistOpenTabs = useCallback(() => {
+    const wsId = activeWorkspaceIdRef.current;
+    if (!wsId || tabsReadyForWsRef.current !== wsId) return;
+    // Drafts have no file yet, so there is nothing to reopen them from.
+    const paths = tabsRef.current.filter((t) => t.path && !t.isDraft).map((t) => t.path);
+    const active = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.path ?? null;
+    saveOpenTabsRef.current(wsId, { paths, active: paths.includes(active) ? active : null });
+  }, [saveOpenTabsRef, activeWorkspaceIdRef]);
+
+  useEffect(() => {
+    const timer = setTimeout(persistOpenTabs, 600);
+    return () => clearTimeout(timer);
+  }, [tabs, activeTabId, activeWorkspaceId, persistOpenTabs]);
+
   // ---- beforeunload save ----
   useEffect(() => {
-    const flush = () => { writeNow(); };
+    // Quitting inside the debounce window would otherwise lose the last tab
+    // change — which is exactly the moment people close tabs before quitting.
+    const flush = () => { writeNow(); persistOpenTabs(); };
     window.addEventListener('beforeunload', flush);
     return () => window.removeEventListener('beforeunload', flush);
-  }, [writeNow]);
+  }, [writeNow, persistOpenTabs]);
 
   // ---- external file change subscription ----
   //
@@ -2090,39 +2132,13 @@ export default function App() {
       </aside>
 
       <main className="editor-pane relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background">
-        {(() => {
-          const u = appUpdate.status;
-          const showing = u?.phase === 'available' || u?.phase === 'downloading' || u?.phase === 'ready';
-          if (!showing) return null;
-          const label = u.phase === 'ready' ? 'Restart to update'
-            : u.phase === 'downloading' ? `Downloading ${u.percent}%`
-            : 'Update available';
-          return (
-            <button
-              type="button"
-              // Soft status pill, not a CTA (polish spec §5). Top-right of the
-              // editor pane, vertically centered IN the tab-strip row rather
-              // than hanging below it (strip 39px, pill 27px -> top-1.5 = 6px
-              // gives equal 6px gaps; measured, not guessed). The strip's tabs
-              // + "+" button are left-aligned, so this right-hand space is
-              // free. Kept absolutely positioned instead of being a TabStrip
-              // child so it still shows when no workspace is open and there is
-              // no strip to sit in.
-              //
-              // **It opens Settings → Updates and does nothing else.** It is
-              // ambient chrome the eye passes over constantly, so it must not
-              // be one click from quitting the app (it was) or from leaving for
-              // a browser (it was that too). Everything about the update —
-              // version, notes, download, install — is on that one page.
-              className="absolute right-3 top-1.5 z-20 inline-flex items-center gap-1.5 rounded-full border border-success/20 bg-success-soft px-2.5 py-1 text-[11.5px] font-medium text-success hover:brightness-95"
-              onClick={() => openSettings(SETTINGS_SECTIONS.UPDATES)}
-              title={`Version ${u.latest} — you're on ${u.current}. Click for details.`}
-            >
-              <span className="size-1.5 rounded-full bg-success" />
-              {label}
-            </button>
-          );
-        })()}
+        {/* The update pill used to live here, absolutely positioned over the
+            tab strip's right end. It's gone: the strip now owns that space (a
+            pinned "+" and the open-tab list), and the toast in `useAppUpdate`
+            already carries the same news with the same action — Download while
+            `available`, Restart once `ready`, both confirmed before anything
+            happens. Settings → Updates remains the durable copy for anyone who
+            dismissed the toast. */}
         {workspacePath && (
           <TabStrip
             tabs={tabs}
@@ -2132,6 +2148,7 @@ export default function App() {
             onSwitch={switchTab}
             onClose={closeTab}
             onAdd={addDraftTab}
+            onReorder={reorderTabs}
           />
         )}
         {errorMessage && (
