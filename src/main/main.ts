@@ -910,9 +910,17 @@ ipcMain.handle('fs:renameFolder', async (_evt, { fromPath, toName }) => {
   return candidate;
 });
 
-ipcMain.handle('context:editorMenu', async (evt, { hasSelection, hasFilePath, hasLink } = {}) => {
+ipcMain.handle('context:editorMenu', async (evt, { hasSelection, hasFilePath, hasLink, hasImagePath } = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
   const template: any[] = [];
+  // Only set for an image the renderer resolved to a file inside the workspace —
+  // remote/data URLs have nothing on disk to reveal.
+  if (hasImagePath) {
+    template.push(
+      { label: revealLabel(), value: EDITOR_ACTIONS.REVEAL_IMAGE },
+      { type: 'separator' },
+    );
+  }
   if (hasSelection) {
     template.push(
       { label: 'Add link',          value: EDITOR_ACTIONS.ADD_LINK },

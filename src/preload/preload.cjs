@@ -180,7 +180,7 @@ contextBridge.exposeInMainWorld('api', {
   showFolderContextMenu: (opts) => ipcRenderer.invoke('context:folderMenu', opts),
   /**
    * Pop up the right-click menu inside the editor.
-   * @param {{ hasSelection?: boolean, hasFilePath?: boolean, hasLink?: boolean }} opts
+   * @param {{ hasSelection?: boolean, hasFilePath?: boolean, hasLink?: boolean, hasImagePath?: boolean }} opts
    * @returns {Promise<string|null>} The chosen EDITOR_ACTIONS value, or null.
    */
   showEditorContextMenu: (opts) => ipcRenderer.invoke('context:editorMenu', opts),

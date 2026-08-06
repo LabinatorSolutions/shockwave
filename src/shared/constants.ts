@@ -31,6 +31,7 @@ export const EDITOR_ACTIONS = Object.freeze({
   EDIT_EXTERNAL_LINK: 'editExternalLink',
   REMOVE_EXTERNAL_LINK: 'removeExternalLink',
   SEND_TO_AGENT: 'sendToAgent',
+  REVEAL_IMAGE: 'revealImage',
 } as const);
 export type EditorAction = (typeof EDITOR_ACTIONS)[keyof typeof EDITOR_ACTIONS];
 

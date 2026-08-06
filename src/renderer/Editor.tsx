@@ -43,6 +43,25 @@ const markdownEnterKeymap = [
   { key: 'Backspace', run: deleteMarkupBackward },
 ];
 
+// The workspace file behind the image under a right-click, or null.
+//
+// Only `app://media/<rel>` qualifies — that's the form resolveImageUrl produces
+// for a file inside the workspace, and it's the same boundary main's protocol
+// handler enforces. Remote (`app://remote/?url=`), `data:` and `file:` images
+// have nothing on disk in the workspace to reveal.
+function imagePathAtEvent(e, vaultPath) {
+  if (!vaultPath) return null;
+  const wrap = e.target?.closest?.('.cm-image-embed');
+  const src = wrap?.querySelector('img')?.getAttribute('src');
+  if (!src || !src.startsWith('app://media/')) return null;
+  const rel = src.slice('app://media/'.length);
+  if (!rel) return null;
+  let decoded;
+  try { decoded = rel.split('/').map(decodeURIComponent).join('/'); }
+  catch { return null; }
+  return vaultPath + '/' + decoded;
+}
+
 function computeStats(state) {
   const chars = state.doc.length;
   if (chars === 0) return { words: 0, chars: 0 };
@@ -260,12 +279,22 @@ const Editor = forwardRef<any, any>(function Editor(
     // Detect a markdown link (text or image-wrapping) under the cursor/selection
     // so the context menu can offer Edit / Remove link.
     const linkAtCursor = findLinkAtPos(view.state, hasSelection ? from : head);
+    // Right-click doesn't move the selection, so the image is read off the
+    // pointer target rather than the cursor. The widget already carries the
+    // resolved src — re-deriving it from the document would be a second copy
+    // of resolveImageUrl that can disagree with what's on screen.
+    const imagePath = imagePathAtEvent(e, getVaultPathRef?.current ?? null);
     const action = await window.api.showEditorContextMenu({
       hasSelection,
       hasFilePath,
       hasLink: !!linkAtCursor,
+      hasImagePath: !!imagePath,
     });
     if (!action) return;
+    if (action === EDITOR_ACTIONS.REVEAL_IMAGE) {
+      if (imagePath) window.api.revealInFolder(imagePath);
+      return;
+    }
     if (action === EDITOR_ACTIONS.ADD_LINK) {
       const selected = view.state.sliceDoc(from, to);
       const insert = `[[${selected}]]`;

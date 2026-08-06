@@ -241,7 +241,7 @@ export interface ShockwaveApi {
   showFileContextMenu(opts: { isMd?: boolean; isOpenable?: boolean; isBookmarked?: boolean; selectionCount?: number; conflictMode?: boolean }): Promise<FileAction | null>;
   showConflictCloudMenu(): Promise<'keep' | 'reset' | null>;
   showFolderContextMenu(opts?: { isRoot?: boolean }): Promise<FolderAction | null>;
-  showEditorContextMenu(opts: { hasSelection?: boolean; hasFilePath?: boolean; hasLink?: boolean }): Promise<EditorAction | null>;
+  showEditorContextMenu(opts: { hasSelection?: boolean; hasFilePath?: boolean; hasLink?: boolean; hasImagePath?: boolean }): Promise<EditorAction | null>;
   showFallbackContextMenu(opts: { isEditable?: boolean; hasSelection?: boolean }): Promise<null>;
 
   // File watcher (push)
