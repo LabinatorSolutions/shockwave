@@ -46,6 +46,7 @@ import { readApiConfig, writeApiConfig } from './config.js';
 // The decision itself is pure and unit-tested — see certPolicy.ts. This file is
 // only the Electron wiring around it.
 import { decideCert, toDisplayFingerprint, pendingApplies, mayApprove, DECISION } from './certPolicy.js';
+import { isCompanionUrlAllowed } from './urlPolicy.js';
 
 // Chromium's verify-proc reply codes.
 const CB_USE_CHROMIUM = -3;
@@ -268,6 +269,20 @@ function getCompanionSession(): Electron.Session {
 
 // fetch-compatible, backed by Chromium's net stack. Same call shape as global
 // fetch (method/headers/body/signal), so client.ts is a drop-in swap.
+//
+// The scheme check is HERE, not only where the URL is entered, and that is the
+// whole point: every request carries the API key, including ones built from a URL
+// stored long before this rule existed. Validating on save alone would leave such
+// a config sending the key in the clear forever, with the app reporting a healthy
+// connection the entire time. Refusing at the one door every request goes through
+// means there is no path — settings, live feed, attachment proxy, health probe —
+// that can carry it off the machine unencrypted.
 export function companionFetch(input: string, init?: RequestInit): Promise<Response> {
+  if (!isCompanionUrlAllowed(input)) {
+    return Promise.reject(new Error(
+      'Refusing to send the API key over an unencrypted connection. '
+      + 'Set your companion URL to https:// in Settings → Companion.',
+    ));
+  }
   return getCompanionSession().fetch(input, init);
 }

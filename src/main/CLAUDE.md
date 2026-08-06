@@ -106,6 +106,18 @@ Settings have two homes, and `settingsStore.ts` hides the split behind `readSett
 - **Machine-local settings** (window/view state, the active workspace, each workspace's checkout path + sync toggle) live in `<userData>/local-settings.json` (`src/main/api/localSettings.ts`) and never sync.
 - **The companion connection itself** — URL + API key — lives in `<userData>/api.json` (`src/main/api/config.ts`), the key `safeStorage`-wrapped. This is the **only** secret the desktop stores locally; all other secrets are on the companion.
 
+### The URL must be https — except to loopback
+
+The certificate check below can only decide *who you are talking to*; over plain `http` there is no certificate to check and nothing to pin, so the bearer key and everything `GET /settings` returns with it cross the wire readable. `companionUrlProblem` / `isCompanionUrlAllowed` (`src/main/api/urlPolicy.ts`, pure, `tests/companionUrl.test.js`) answer one question: `https` anywhere, `http` only to **loopback**.
+
+Loopback is the web platform's own set — W3C secure-contexts' "potentially trustworthy origin", the same list that lets a browser treat `http://localhost` as secure: `localhost` and anything under it (`api.localhost`, RFC 6761), the whole `127.0.0.0/8` block, `[::1]`, and `0.0.0.0`. `new URL()` does the normalizing first, so `127.1`, `0x7f000001` and `2130706433` arrive as `127.0.0.1` and are exempt because they *are* that address.
+
+**It stops at loopback, and the line is drawn there on purpose.** The private ranges (`10/8`, `172.16/12`, `192.168/16`) and `*.local` are a real hop over real hardware, and a LAN is exactly where somebody else is in a position to listen. They also don't need the exemption: a companion on a home server gets a self-signed certificate the app pins, which is a working https deployment rather than a downgrade. `localhost.evil.com` resolves to whatever its owner wants, so the `.localhost` rule is a suffix over a reserved tree and everything else is an exact match — never a substring test.
+
+**Enforced at `companionFetch`, not only where the URL is typed.** `api:write` refuses to store a cleartext address and `api:test` refuses to probe one (the probe *is* a request carrying the key — "just testing" leaks it exactly as a real call does), but neither is the mechanism: a URL stored before this rule existed would otherwise keep sending the key in the clear forever, with the app reporting a healthy connection throughout. The transport is the one door every request goes through — settings, live feed, attachment proxy, health probe — so it fails closed there, and an empty or unparseable URL fails closed too.
+
+`api:write` returning `{ok: false, error}` is why `CompanionSection`'s `save` checks `ok`: nothing was written, so the box keeps what was typed and the status row carries main's sentence.
+
 ### Companion TLS — verify, then pin
 
 Every companion request carries the bearer API key, and `GET /settings` returns the whole **decrypted** secret store, so the certificate check is what stands between a hostile network and every credential the user has. `net.ts`:

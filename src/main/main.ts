@@ -38,6 +38,7 @@ import { resolveGitBinary } from './gitBinary.js';
 // every call site below (and in oauth.ts / cron.ts) is untouched.
 import { readSettings, readSettingsSafe, readSettingsForRenderer, writeSettings, deleteCredential, deleteAgentSecret, importLegacySettingsIfNeeded, notifyWorkspacesChanged, notifySettingsResync } from './settingsStore.js';
 import { readApiConfig, writeApiConfig } from './api/config.js';
+import { companionUrlProblem } from './api/urlPolicy.js';
 // The one declaration of which settings paths are credentials — shared with the
 // companion and the renderer. Gates settings:deleteCredential.
 import { isDeletableCredential } from '../../agent-core/credentials.js';
@@ -1022,7 +1023,18 @@ ipcMain.handle('api:read', () => {
 });
 ipcMain.handle('api:write', (_evt, patch) => {
   const next: any = {};
-  if (typeof patch?.url === 'string') next.url = patch.url;
+  // Refuse to STORE a cleartext address as well as refusing to use one — the
+  // transport (net.ts) is what actually protects the key, but a URL that saves
+  // fine and then fails on every request is a connection nobody can debug. The
+  // previous config stays exactly as it was.
+  if (typeof patch?.url === 'string') {
+    const problem = companionUrlProblem(patch.url);
+    if (problem) {
+      const c = readApiConfig();
+      return { ok: false, error: problem, url: c.url, hasApiKey: !!c.apiKey };
+    }
+    next.url = patch.url;
+  }
   if (typeof patch?.apiKey === 'string') next.apiKey = patch.apiKey;
   const c = writeApiConfig(next);
   // Point the live feed at whatever was just configured. Connecting doesn't get
@@ -1045,6 +1057,10 @@ ipcMain.handle('companion:getState', () => ({ online: companionOnline }));
 ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
   const key = apiKey || readApiConfig().apiKey;
   if (!url || !key) return { ok: false, error: 'URL and API key are both required.' };
+  // BEFORE the probe, because the probe is itself a request carrying the key —
+  // "just testing" an http:// address would leak it exactly as a real call does.
+  const problem = companionUrlProblem(url);
+  if (problem) return { ok: false, error: problem };
   const res = await api.health(url, key);
   if (res.ok) {
     // The probe succeeded but the feed may still be parked in its retry backoff

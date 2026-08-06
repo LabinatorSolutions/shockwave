@@ -282,8 +282,11 @@ export interface ShockwaveApi {
      *  — it travels in the clear on every TLS handshake. Empty when the server has
      *  a publicly-trusted certificate, or nothing is approved yet. */
     apiRead(): Promise<{ url: string; hasApiKey: boolean; certFingerprint: string }>;
-    /** Persist URL and/or key. Omit `apiKey` to keep the stored one. */
-    apiWrite(patch: { url?: string; apiKey?: string }): Promise<{ ok: boolean; url: string; hasApiKey: boolean }>;
+    /** Persist URL and/or key. Omit `apiKey` to keep the stored one.
+     *  `ok: false` + `error` = the URL was refused (plain http to anywhere but
+     *  localhost sends the key in the clear); nothing was written, and `url` /
+     *  `hasApiKey` describe the config that is still stored. */
+    apiWrite(patch: { url?: string; apiKey?: string }): Promise<{ ok: boolean; error?: string; url: string; hasApiKey: boolean }>;
     /** Probe a URL + key (falls back to the stored key when omitted). Reports
      *  only — it can never approve a certificate.
      *  `version` is the companion's release tag ('v1.0.21', 'dev' for local builds).

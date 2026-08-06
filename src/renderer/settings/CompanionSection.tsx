@@ -137,6 +137,16 @@ export default function CompanionSection() {
   const save = useCallback(async (patch: any) => {
     try {
       const w = await window.api.settings.apiWrite(patch);
+      // Main refuses a URL that would carry the API key in the clear (plain http
+      // anywhere but localhost). Nothing was written, so the box keeps what was
+      // typed — retyping a rejected address to read the reason would be absurd —
+      // and the status row carries main's sentence rather than a generic failure.
+      if (!w.ok) {
+        setStatus('failed');
+        setMessage(w.error || 'That URL was refused.');
+        setCert(null);
+        return;
+      }
       setStoredUrl(w.url);
       setHasStoredKey(!!w.hasApiKey);
       disconnect('Saved. Press Connect.');

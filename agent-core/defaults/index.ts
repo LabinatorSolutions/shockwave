@@ -7,14 +7,23 @@
 //
 //     <SHOCKWAVE_HELPER (app mechanics + dynamic tool list)>
 //
-// pi then appends, on its own, at session boot:
-//     → discovered AGENTS.md contents (CLAUDE.md filtered out — see codingAgent.ts)
+// pi then appends, on its own, at session boot (buildSystemPrompt's customPrompt
+// branch in pi's `core/system-prompt.js`), in this order:
+//     → project context files — each wrapped in <project_instructions path="…">
+//       inside one <project_context> block. pi looks for AGENTS.md / AGENTS.MD /
+//       CLAUDE.md / CLAUDE.MD per directory and takes the FIRST that exists, in
+//       its own agentDir and then in every ancestor of cwd, root → cwd
+//       (`loadContextFileFromDir` in pi's `core/resource-loader.js`). Nothing
+//       here filters CLAUDE.md out — it simply loses to AGENTS.md in any
+//       directory holding both, which is why the seeded AGENTS.md is what a
+//       workspace root contributes.
 //     → the enabled skills list
 //     → "Current date: YYYY-MM-DD"   (date only, no time)
+//     → "Current working directory: <cwd>"
 //
-// So we do NOT add date, skills, or AGENTS.md here — pi owns those. This is baked
-// once per session (the assembled string is part of the session cache key), so it
-// never changes mid-conversation.
+// So we do NOT add date, cwd, skills, or AGENTS.md here — pi owns those. Note
+// those four are re-derived on every boot, unlike everything above, which is
+// assembled once at chat creation and read back verbatim forever.
 
 import { buildShockwaveHelper } from './helper.js';
 import { readSoul } from './soul.js';
