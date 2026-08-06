@@ -83,6 +83,17 @@ function ago(ts: number | null | undefined): string {
 const RECENT_LIMIT = 10;
 const PINNED_LIMIT = 3;
 
+// The recent half is chats a PERSON started — the desktop and this bot. The
+// server opens chats of its own (cron jobs, review and memory runs), and those
+// are work that happened rather than a conversation to carry on: switching into
+// one puts you inside a maintenance run, and there are enough of them to push
+// every chat you actually had off a ten-row list.
+//
+// The PINNED half is deliberately unfiltered, whatever opened it. Pinning is an
+// explicit act, so a pinned cron chat was pinned on purpose — the only signal
+// here that outranks where a chat came from.
+const HUMAN_SOURCES = ['desktop', 'telegram'] as const;
+
 /**
  * The one numbered list. `index + 1` IS the `/chat <number>` argument, so
  * `/chats`, `/chat n` and the catching-up notice all read positions off this
@@ -95,7 +106,7 @@ const PINNED_LIMIT = 3;
  */
 export async function switchableChats(db: Db, workspaceId: string, activeChatId: string | null | undefined) {
   const [recent, pinned] = await Promise.all([
-    store.listChats(db, workspaceId, { limit: LIST_LIMIT }),
+    store.listChats(db, workspaceId, { limit: LIST_LIMIT, sources: HUMAN_SOURCES }),
     store.listPinned(db, workspaceId),
   ]);
   const notActive = (c: { chatId: string }) => c.chatId !== activeChatId;
@@ -143,11 +154,11 @@ export async function chatNotice(
   // The anchor stays `updatedAt` on both sides of the comparison: "since we last
   // talked" is when THIS chat was last active, not when it was opened.
   const list = await switchableChats(db, chat.workspaceId, activeChatId);
-  // Desktop chats only. "A thread you started somewhere else" is the desktop —
-  // cron jobs and the companion's own review/memory runs also create chat rows,
-  // and those are background work, not something you drifted away from. They
-  // keep their numbers in `list` (and still appear in /chats), so the indexes
-  // printed here stay valid /chat arguments.
+  // Desktop chats only — narrower than the list itself, which also holds the
+  // Telegram ones. "Somewhere else" means away from this bot, and a chat you
+  // started here by typing /new is not something you drifted away from; you
+  // were there. It keeps its number in `list` (and still appears in /chats),
+  // so the indexes printed here stay valid /chat arguments.
   const newer = list.filter((c) => !c.isPinned && c.source === 'desktop' && (c.createdAt ?? 0) > chat.updatedAt!);
   if (!newer.length) return null;
 

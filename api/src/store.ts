@@ -465,10 +465,21 @@ const sessionSelect = {
   transcriptUpdatedAt: chatTable.transcriptUpdatedAt,
 };
 
-export async function listChats(db: Db, workspaceId: string, opts: { limit?: number; before?: number } = {}) {
+export async function listChats(
+  db: Db, workspaceId: string,
+  opts: { limit?: number; before?: number; sources?: readonly string[] } = {},
+) {
   const limit = Math.min(opts.limit ?? 30, 100);
   const conds = [eq(chatTable.workspaceId, workspaceId), eq(chatTable.archived, false), eq(chatTable.pinned, false), eq(chatTable.deleted, false)];
   if (typeof opts.before === 'number') conds.push(lt(chatTable.updatedAt, opts.before));
+  // `sources` narrows in SQL, not after the fetch, so `limit` counts rows the
+  // caller wanted rather than rows it is about to throw away — otherwise a burst
+  // of cron/review/memory chats fills the page and the list comes up short while
+  // older matching chats exist. A null `source` reads as 'desktop', the same
+  // default `upsertChat` writes, so rows predating the column stay visible.
+  if (opts.sources?.length) {
+    conds.push(inArray(sql`coalesce(${chatTable.source}, 'desktop')`, [...opts.sources]));
+  }
   return db.select(sessionSelect).from(chatTable).where(and(...conds)).orderBy(desc(chatTable.updatedAt)).limit(limit);
 }
 
