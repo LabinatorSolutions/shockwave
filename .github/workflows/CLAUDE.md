@@ -47,6 +47,15 @@ docker run --rm -v "$PWD":/repo --workdir /repo rhysd/actionlint:latest -verbose
 - **Publishing is atomic, and that's what the `publish` job buys.** `package.json`'s `build.publish.releaseType` is **`draft`**, so every platform uploads into a draft; `publish` (with `needs: [release, image]`) flips it public. electron-updater only reads *published* releases, so clients cannot see a release until every artifact is there. It used to be `releaseType: "release"` and went public the moment the first platform finished — while `latest-mac.yml`, written last after ~10 minutes of notarization, was still missing, so Mac clients polling in that window got a 404 on the update feed. A failure anywhere now leaves an unpublished draft to inspect rather than a half-published release.
 - **`publish` waits on the container too.** A desktop release that goes public without its matching companion image tells users to upgrade to a companion version `ghcr.io` doesn't have. The cost is that a Docker-only failure holds back a set of perfectly good installers — recoverable by re-running the failed job, since the draft and its artifacts survive.
 
+### `build/` — what electron-builder reads
+
+Not a source directory; nothing imports it. It holds the per-platform packaging assets named in `package.json`'s `build` block, and two of them carry decisions:
+
+- **`entitlements.mac.plist`** is applied both as `entitlements` and `entitlementsInherit`, because `hardenedRuntime: true`. Two keys, each load-bearing: `allow-jit` (V8 will not start under the hardened runtime without it) and `device.audio-input` — **without that second one the hardened runtime kills the process on the first `getUserMedia` call**, so voice input works in dev and takes down the packaged app. The paired `NSMicrophoneUsageDescription` lives in `mac.extendInfo`; the entitlement grants the capability, the usage string is what macOS shows in the prompt, and a missing one is its own crash.
+- **One icon per platform, three formats** — `icon.icns` (mac), `icon.ico` (windows), `icon-linux.png`. `make-icons.js` is a **one-shot generator**, run by hand (`node build/make-icons.js`), not part of any build: it masks `icon-source.png` into the macOS Big Sur squircle spec (1024 canvas, 824 artwork, 185 radius) and emits the per-size PNGs the `.icns`/`.ico` are assembled from. It needs `sharp`, which is deliberately not a dependency of the app — regenerating icons is a design act, not a build step.
+
+`build/icon.png` is also listed in `build.files` because it is loaded at runtime, unlike the rest of the folder.
+
 ### Release notes are commit subjects
 
 electron-builder creates the draft with an **empty body**, and nothing filled it in through v1.0.36 — invisible on github.com, fatal to the app's "What's new" dialog, which reads `body` over the API (see "App updates" in `src/main/CLAUDE.md`). The `publish` job writes them before flipping the draft.
