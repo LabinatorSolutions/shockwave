@@ -68,21 +68,9 @@ Then add a workspace and you're going. Each page tells you what it wants, and a 
 
 ## Running the server
 
-The installer leaves a `shockwave` command on the box:
+Day to day there's nothing to do — the app updates the server for itself, and the containers restart themselves if anything falls over.
 
-```
-shockwave status         # are the containers up
-shockwave logs           # follow the logs
-shockwave check          # test the URL, certificate and key the app uses
-shockwave fingerprint    # show the certificate fingerprint again
-shockwave rotate-cert    # replace the certificate
-```
-
-When the server falls behind the app, the app offers to update it for you — one click, nothing to log into. Re-running the install command does the same from the server side. Either way your data and secrets are left alone.
-
-If it stops responding it should recover on its own: containers restart on crash, on reboot, and when a health check notices the API has gone quiet. `shockwave check` says which part is unhappy — most often it's ports 80 and 443 still closed in the VPS provider's firewall.
-
-Point a domain at the box and re-run the install command with `--domain=notes.example.com --cert-email=you@example.com` to swap the self-signed certificate for a real one.
+When you do need it: **[looking after the server](docs/server.md)** covers the `shockwave` command, backups, certificates and what to check when the app can't connect.
 
 ---
 
