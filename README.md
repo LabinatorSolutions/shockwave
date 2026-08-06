@@ -1,6 +1,6 @@
 <h1><img src="build/icon.png" width="40" align="top" alt="" />&nbsp;Shockwave</h1>
 
-**Shockwave is a second brain and your knowledge base with a built-in AI assistant.** A notes app that organizes itself and does the work for you. It also syncs for free across your devices.
+**Shockwave is a simple to use knowledge base with a built-in AI assistant.** A notes app that organizes itself and does the work for you. It also syncs for free across your devices.
 
 [**Download ↓**](#install-the-app) · macOS · Windows · Linux
 
