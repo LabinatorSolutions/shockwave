@@ -7,6 +7,8 @@ interface TreePanelProps {
   items: TreeNode[];
   activePath: string | null;
   onOpen: (path: string) => void;
+  // Middle-click. Same gesture as the tree above — see the row's onAuxClick there.
+  onOpenInNewTab?: (path: string) => void;
   onContextMenu?: (path: string) => void;
   // Rename happens in place, in the row that was right-clicked (same as the
   // tree above) — App owns which row is editing.
@@ -28,6 +30,7 @@ export default function TreePanel({
   items,
   activePath,
   onOpen,
+  onOpenInNewTab,
   onContextMenu,
   renamingPath,
   checkRenameConflict,
@@ -46,6 +49,12 @@ export default function TreePanel({
             className={treeRowClass(it.id === activePath)}
             title={it.id}
             onClick={() => { if (!editing) onOpen(it.id); }}
+            onAuxClick={(e) => {
+              if (e.button !== 1 || editing || !onOpenInNewTab) return;
+              e.preventDefault();
+              onOpenInNewTab(it.id);
+            }}
+            onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
             onContextMenu={(e) => {
               if (!onContextMenu) return;
               e.preventDefault();

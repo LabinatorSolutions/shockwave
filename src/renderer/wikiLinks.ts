@@ -34,14 +34,28 @@ class LinkWidget extends WidgetType {
       : 'cm-wiki-link cm-wiki-link-unresolved';
     a.textContent = this.display;
     a.href = '#';
+    // Also suppresses Chromium's middle-click autoscroll, so the auxclick below
+    // is the only thing a middle-click does.
     a.addEventListener('mousedown', (e) => e.preventDefault());
     a.addEventListener('click', (e) => {
       e.preventDefault();
-      this.onClick(this.targetName, this.sourcePath);
+      // Cmd/Ctrl+click opens a new tab — the browser gesture, and Obsidian's.
+      // Nothing else claims it inside the editor (unlike the file tree, where
+      // react-arborist owns it for multi-select; see FileTree.tsx's row onClick).
+      this.onClick(this.targetName, this.sourcePath, { newTab: e.metaKey || e.ctrlKey });
+    });
+    // Middle-click, same destination. It arrives as `auxclick` and NEVER as
+    // `click`, so it needs its own listener.
+    a.addEventListener('auxclick', (e) => {
+      if ((e as MouseEvent).button !== 1) return;
+      e.preventDefault();
+      this.onClick(this.targetName, this.sourcePath, { newTab: true });
     });
     return a;
   }
 
+  // `auxclick` isn't named, so it falls to true — the editor leaves middle-clicks
+  // on a link alone and the listener above is the whole behavior.
   ignoreEvent(event) {
     return event.type !== 'mousedown' && event.type !== 'click';
   }

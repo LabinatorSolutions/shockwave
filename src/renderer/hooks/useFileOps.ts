@@ -17,13 +17,17 @@ export function useFileOps({
     linkIndex.bump();
   }, [refreshTree, linkIndex]);
 
-  const onLinkClick = useCallback(async (rawName, sourcePath) => {
+  // `opts.newTab` comes from a Cmd/Ctrl+click or middle-click on the link
+  // (wikiLinks.ts). A plain click reuses the tab so following links accumulates
+  // the back/forward trail that makes browsing a workspace work at all.
+  const onLinkClick = useCallback(async (rawName, sourcePath, opts?: any) => {
     if (!workspacePath) return;
     const parsed = parseTarget(rawName);
     if (!parsed.basename) return;
+    const open = opts?.newTab ? openInNewTab : openInActiveTab;
     const existing = linkIndex.cache.getFirstLinkpathDest(parsed, sourcePath);
     if (existing) {
-      await openInActiveTab(existing);
+      await open(existing);
       return;
     }
     // Unresolved → create the target. Honor a path prefix (folder/Foo →
@@ -37,8 +41,8 @@ export function useFileOps({
     const { path: newPath, mtime } = await window.api.createFile(dir, `${displayBase}.md`, '');
     linkIndex.updateFile(newPath, '', mtime);
     await treeAndIndexChanged();
-    await openInActiveTab(newPath);
-  }, [workspacePath, openInActiveTab, linkIndex, treeAndIndexChanged]);
+    await open(newPath);
+  }, [workspacePath, openInActiveTab, openInNewTab, linkIndex, treeAndIndexChanged]);
 
   const onFileAction = useCallback(async (action, filePath) => {
     try {

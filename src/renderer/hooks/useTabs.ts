@@ -4,6 +4,22 @@ let nextTabId = 1;
 const makeTabId = () => `t${nextTabId++}`;
 
 /**
+ * One tab per file: every open goes through this first, and if the path is
+ * already showing somewhere we switch to that tab instead of making a second one.
+ *
+ * It isn't only convention (VS Code, Sublime and IntelliJ all activate the
+ * existing tab; a file is duplicated only across SPLIT PANES, which this app has
+ * none of). The editor parks view state and undo history keyed by DOCUMENT PATH,
+ * not by tab — see "Per-document undo history" in Editor.tsx — so two tabs on one
+ * file already share their cursor, scroll and undo stack. A duplicate tab can
+ * therefore hold nothing the original doesn't; it is strictly a worse copy.
+ *
+ * Matches a tab's CURRENT path only. A file sitting in some tab's back-history
+ * isn't open, and stealing focus to it would make back/forward unusable.
+ */
+const tabForPath = (tabs, filePath) => tabs.find((t) => t.path === filePath) ?? null;
+
+/**
  * Owns: tabs, activeTabId, viewStateByPath, and per-tab navigation history.
  *
  * Tab shape: { id, path, isDraft, history: string[], historyIndex: number }.
@@ -68,11 +84,19 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
   const openInActiveTab = useCallback(async (filePath) => {
     await writeNow();
     captureCurrentViewState();
+    // Minted OUTSIDE the updater: React may invoke an updater twice (StrictMode),
+    // and an id minted inside would advance the counter on each pass, so the id
+    // setActiveTabId captured wouldn't be the one in the array we returned.
+    const freshId = makeTabId();
     setTabs((prev) => {
+      const existing = tabForPath(prev, filePath);
+      if (existing) {
+        setActiveTabId(existing.id);
+        return prev;
+      }
       if (prev.length === 0) {
-        const id = makeTabId();
-        setActiveTabId(id);
-        return [{ id, path: filePath, isDraft: false, history: [filePath], historyIndex: 0 }];
+        setActiveTabId(freshId);
+        return [{ id: freshId, path: filePath, isDraft: false, history: [filePath], historyIndex: 0 }];
       }
       return prev.map((t) => {
         if (t.id !== activeTabId) return t;
@@ -92,12 +116,23 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
     onAfterSwitch?.();
   }, [writeNow, activeTabId, captureCurrentViewState, onAfterSwitch]);
 
+  // Dedups too — see tabForPath. With one editor pane, "open in a new tab" for a
+  // file that's already open has no outcome distinct from going to that tab, so
+  // that's what it does (as VS Code and IntelliJ do). It never looks like a
+  // no-op: you visibly land on the existing tab.
   const openInNewTab = useCallback(async (filePath) => {
     await writeNow();
     captureCurrentViewState();
     const id = makeTabId();
-    setTabs((prev) => [...prev, { id, path: filePath, isDraft: false, history: [filePath], historyIndex: 0 }]);
-    setActiveTabId(id);
+    setTabs((prev) => {
+      const existing = tabForPath(prev, filePath);
+      if (existing) {
+        setActiveTabId(existing.id);
+        return prev;
+      }
+      setActiveTabId(id);
+      return [...prev, { id, path: filePath, isDraft: false, history: [filePath], historyIndex: 0 }];
+    });
     onAfterSwitch?.();
   }, [writeNow, captureCurrentViewState, onAfterSwitch]);
 

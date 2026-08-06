@@ -867,6 +867,15 @@ export default function App() {
     await openInActiveTab(path);
   }, [openInActiveTab, graphMode]);
 
+  // Middle-click in the tree or the quick-access panel. Same open guards as a
+  // plain click; only the destination differs. Selection is deliberately left
+  // alone — a middle-click is an open, not a pick.
+  const onOpenInNewTab = useCallback(async (path) => {
+    if (!conflictFilterActive && !isOpenable(path)) return;
+    if (graphMode) setGraphMode(false);
+    await openInNewTab(path);
+  }, [openInNewTab, graphMode, conflictFilterActive]);
+
   // Finder → file tree import (copy). Row drops (NativeTypes.FILE targets in
   // FileTree) pass the target folder; drops on tree-wrap empty space pass null
   // (workspace root). Paths resolve via webUtils.getPathForFile in preload;
@@ -2104,6 +2113,7 @@ export default function App() {
               onRename={onTreeRename}
               onFileAction={onFileActionWithBookmarks}
               onFolderAction={onFolderAction}
+              onOpenInNewTab={onOpenInNewTab}
               onMoveItems={onMoveItems}
               disableDrop={disableDrop || conflictFilterActive}
               conflictMode={conflictFilterActive}
@@ -2143,6 +2153,7 @@ export default function App() {
                 items={treePanelData.recent}
                 activePath={activeFile}
                 onOpen={onTreePanelOpen}
+                onOpenInNewTab={onOpenInNewTab}
                 onContextMenu={onTreePanelContextMenu}
                 renamingPath={panelRenamePath}
                 checkRenameConflict={checkTreeRenameConflict}
@@ -2154,6 +2165,7 @@ export default function App() {
                 items={treePanelData.daily}
                 activePath={activeFile}
                 onOpen={onTreePanelOpen}
+                onOpenInNewTab={onOpenInNewTab}
                 onContextMenu={onTreePanelContextMenu}
                 renamingPath={panelRenamePath}
                 checkRenameConflict={checkTreeRenameConflict}

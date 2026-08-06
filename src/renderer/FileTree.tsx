@@ -68,7 +68,7 @@ function NodeWithExtras(props: any) {
 }
 
 const FileTree = forwardRef<any, any>(function FileTree(
-  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, conflictMode, checkRenameConflict, onRootContextMenu, contentSized, onImportFiles },
+  { data, onSelect, onRename, onFileAction, onFolderAction, onOpenInNewTab, onMoveItems, disableDrop, getIsBookmarked, conflictMode, checkRenameConflict, onRootContextMenu, contentSized, onImportFiles },
   ref,
 ) {
   const wrapRef = useRef<any>(null);
@@ -98,8 +98,8 @@ const FileTree = forwardRef<any, any>(function FileTree(
   // Per-app row props, delivered to NodeWithExtras via context so updates
   // re-render rows without remounting them (see NodeExtrasContext above).
   const nodeExtras = useMemo(
-    () => ({ onFileAction, onFolderAction, onImportFiles, getIsBookmarked, conflictMode, checkRenameConflict }),
-    [onFileAction, onFolderAction, onImportFiles, getIsBookmarked, conflictMode, checkRenameConflict],
+    () => ({ onFileAction, onFolderAction, onOpenInNewTab, onImportFiles, getIsBookmarked, conflictMode, checkRenameConflict }),
+    [onFileAction, onFolderAction, onOpenInNewTab, onImportFiles, getIsBookmarked, conflictMode, checkRenameConflict],
   );
 
   // Stable Tree callbacks: any prop identity change makes react-arborist run
@@ -220,7 +220,7 @@ export function RenameInput({ initialValue, checkConflict, onSubmit, onCancel }:
   );
 }
 
-function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, onImportFiles, getIsBookmarked, isBookmarked, conflictMode, checkRenameConflict }: any) {
+function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, onOpenInNewTab, onImportFiles, getIsBookmarked, isBookmarked, conflictMode, checkRenameConflict }: any) {
   const isFolder = node.isInternal;
   const isImage = !isFolder && IMAGE_EXT_RE.test(node.data.name);
   const willReceiveDrop = isFolder && node.willReceiveDrop;
@@ -331,6 +331,20 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, onI
           node.toggle();
         }
       }}
+      // Middle-click opens the file in a new tab. It is the only modifier-free
+      // gesture available here: react-arborist's handleClick (above) already owns
+      // Cmd/Ctrl+click for multi-select and Shift+click for range-select, so
+      // neither can carry a second meaning — VS Code's explorer has the same
+      // collision and resolves it the same way, keeping Cmd for selection.
+      onAuxClick={(e) => {
+        if (e.button !== 1 || isFolder || !onOpenInNewTab) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onOpenInNewTab(node.id);
+      }}
+      // Chromium starts its autoscroll on middle mousedown; without this the row
+      // sprouts a scroll cursor before auxclick ever fires.
+      onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
       onDoubleClick={() => !isFolder && node.edit()}
       onContextMenu={handleContextMenu}
       onDragStart={handleDragStart}

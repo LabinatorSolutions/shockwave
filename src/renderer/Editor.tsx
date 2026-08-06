@@ -75,7 +75,7 @@ function computeStats(state) {
  * Imperative editor wrapper.
  *
  * Props:
- *   onLinkClick(name)              — wiki-link clicks
+ *   onLinkClick(name, src, opts)   — wiki-link clicks; opts.newTab on Cmd/middle-click
  *   onChange()                     — fired when the user changes the doc (not for programmatic load)
  *   onViewCreated()                — fired whenever a NEW, EMPTY EditorView exists: on mount,
  *                                    and on the dark-toggle rebuild. The parent loads content
@@ -588,7 +588,8 @@ const Editor = forwardRef<any, any>(function Editor(
         () => getVaultPathRef?.current ?? null,
       ),
       wikiLinks(
-        (name, sourcePath) => linkClickRef.current?.(name, sourcePath),
+        // Forward opts — it carries { newTab } from a Cmd/middle-click.
+        (name, sourcePath, opts) => linkClickRef.current?.(name, sourcePath, opts),
         () => getCacheRef?.current,
         () => getActiveFilePathRef?.current ?? null,
       ),

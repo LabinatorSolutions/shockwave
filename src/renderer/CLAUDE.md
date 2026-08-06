@@ -49,7 +49,28 @@ The workspace list lives on the companion and the renderer holds an in-memory co
 
 ## Tab strip
 
-`TabStrip.tsx` is presentation over `useTabs` — it renders the tab array in order and calls back. Three behaviors in it are load-bearing.
+### One tab per file, and how a second tab gets made
+
+**Every open goes through `tabForPath` in `useTabs.ts` first: if the path is already showing in some tab, that tab is activated and no new one appears.** This holds for `openInActiveTab` AND `openInNewTab` — including the context menu's "Open in new tab" and the agent's `open_file`. It isn't only convention (VS Code, Sublime and IntelliJ all activate the existing tab; a file duplicates only across SPLIT PANES, which this app doesn't have). The editor parks view state and undo history keyed by **document path**, not by tab — see "Per-document undo history" above — so two tabs on one file already share cursor, scroll and undo stack. A duplicate tab can hold nothing the original doesn't. It matches a tab's **current** path only: a file sitting in some tab's back-history isn't open, and jumping to it would make back/forward unusable.
+
+The gestures, and why they're split this way:
+
+| Gesture | Where | Result |
+|---|---|---|
+| Click | tree row, quick-access panel, quick search, backlinks, bookmark, graph node | reuses the active tab |
+| Click | wiki-link | reuses the active tab, pushing onto its back/forward trail |
+| **Middle-click** | tree row, quick-access panel | new tab |
+| **Cmd/Ctrl+click or middle-click** | wiki-link | new tab |
+
+**Plain click must keep reusing the tab**, because a tab's back/forward history (`goBack`/`goForward`) only has content when navigation lands *in place*. Open-every-click would cap every tab at one history entry and leave the arrows permanently dead — worst exactly where this app is distinctive, since following `[[wiki-links]]` is browsing and browsing wants back/forward, not a tab per hop. Obsidian defaults the same way.
+
+**The tree uses middle-click and not Cmd+click**, and that is forced rather than chosen: react-arborist's `node.handleClick` already owns Cmd/Ctrl+click for multi-select and Shift+click for range-select (see the row's `onClick` in `FileTree.tsx`), and the file context menu's bulk actions read that selection. VS Code's explorer has the identical collision and resolves it the same way. Inside the editor nothing claims Cmd+click, so wiki-links take it — that's Obsidian's gesture. Both row handlers `preventDefault` a button-1 `mousedown` so Chromium's autoscroll doesn't fire, and middle-click arrives as `auxclick`, never `click`.
+
+**The `{ newTab }` flag crosses four files, and a dropped argument is silent.** `wikiLinks.ts` reads the modifier → `Editor.tsx`'s `linkClickRef` forwarder → `useFileOps.onLinkClick` → `openInNewTab`. The forwarder took `(name, sourcePath)` and swallowed the third argument, so Cmd+click looked exactly like a plain click with nothing erroring; if the gesture ever silently degrades, check that hop first.
+
+### Three more load-bearing behaviors
+
+`TabStrip.tsx` is presentation over `useTabs` — it renders the tab array in order and calls back.
 
 **Overflow: shrink, then scroll, then list.** Tabs are capped at `max-w-44` and floored at `min-w-[7rem]`, and the row they live in is the scroller (`overflow-x-auto`). The floor sits on the TAB, not on the label: flex shrinking is proportional, so without it a crowded strip collapses every tab toward nothing at once and you get a row of ellipses rather than a few readable names and a scroll. The strip previously had no overflow rule at all — tabs past the right edge were clipped by the window with no way to reach them, and `+`, as the last flex child, was pushed off *first*. So `+` and the open-tab list now live in a `shrink-0` rail **outside** the scroller and can't be scrolled away. The horizontal scrollbar is suppressed (`scrollbarWidth: 'none'`; Chromium-only, which is all Electron is) because the strip has ~31px of usable height — the list button is the visible affordance instead.
 
