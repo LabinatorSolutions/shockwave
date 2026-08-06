@@ -14,9 +14,9 @@ Want to learn to build apps like this? Join the **[AI Architects](https://skool.
 
 ## Why Shockwave
 
-### 🧠 Knowledge Base - Get it out of your head. It stays organized on its own.
+### 🧠 Knowledge Base — Get it out of your head. It stays organized on its own.
 
-Get it out all out of your head, ideas, projects, due dates. The agent keeps it in order for you, so you never sit down to a pile of notes that needs processing. And because everything's in one place, the agent can use it and even work to complete your work.
+Get it all out of your head, ideas, projects, due dates. The agent keeps it in order for you, so you never sit down to a pile of notes that needs processing. And because everything's in one place, the agent can use it and even complete the work for you.
 
 ### 🧬 Easy to install and use but with all the cool features
 
@@ -26,15 +26,17 @@ Everything the power tools give you (like Hermes) — memory, self-improvement �
 
 Create work for the agent, then close the laptop and the work keeps getting done without you. And you can also pick up where you left off on any other device, even on your phone.
 
-### 🔄 FREE Sync - A better agent file sync (with history) that costs nothing
+### 🔄 FREE Sync — A better agent file sync (with history) that costs nothing
 
-Most notes apps charge you to sync across device we use github instead. Also helps manage file sync conflicts automatically.
+Most notes apps charge you to sync across devices — we use GitHub instead. It also handles file sync conflicts automatically.
 
 ---
 
 ## Install
 
-Setup is three steps: the app, a server you host, and your keys. The app shows a dot on the settings gear until all three are done, so you can always see what's left.
+Setup takes about fifteen minutes and involves standing up a small server. After that you never think about it again.
+
+Three steps — the app, the server, your keys. The app shows a dot on the settings gear until all three are done, so you can always see what's left.
 
 Before you start, have these ready:
 
