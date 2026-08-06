@@ -1,6 +1,8 @@
 <h1><img src="build/icon.png" width="40" align="top" alt="" />&nbsp;Shockwave</h1>
 
-**Shockwave is a simple to use knowledge base with a built-in AI assistant.** A notes app that organizes itself and does the work for you. It also syncs for free across your devices.
+A simple notes app that organizes itself and does the work for you with a built-in AI assistant. It also syncs for free across your devices.
+
+For non-technical note-takers who want smart features — memory, self-improvement — without the setup hassle.
 
 [**Download ↓**](#install-the-app) · macOS · Windows · Linux
 
@@ -12,11 +14,11 @@ Want to learn to build apps like this? Join the **[AI Architects](https://skool.
 
 ## Why Shockwave
 
-### 🧠 Get it out of your head. It stays organized on its own.
+### 🧠 Knowledge Base - Get it out of your head. It stays organized on its own.
 
 Get it out all out of your head, ideas, projects, due dates. The agent keeps it in order for you, so you never sit down to a pile of notes that needs processing. And because everything's in one place, the agent can use it and even work to complete your work.
 
-### 🧬 It learns you — nothing complicated to install
+### 🧬 Easy to install and use but with all the cool features
 
 Everything the power tools give you (like Hermes) — memory, self-improvement — without the complicated setup that comes with them.
 
@@ -24,7 +26,7 @@ Everything the power tools give you (like Hermes) — memory, self-improvement �
 
 Create work for the agent, then close the laptop and the work keeps getting done without you. And you can also pick up where you left off on any other device, even on your phone.
 
-### 🔄 Sync that costs nothing
+### 🔄 FREE Sync - A better agent file sync (with history) that costs nothing
 
 Most notes apps charge you to sync across device we use github instead. Also helps manage file sync conflicts automatically.
 
