@@ -1,6 +1,6 @@
 <h1><img src="build/icon.png" width="40" align="top" alt="" />&nbsp;Shockwave</h1>
 
-A simple notes app that organizes itself and does the work for you with a built-in AI assistant. It also syncs for free across your devices.
+A simple notes app with a built-in ai agent that organizes itself and does work for you, with a free sync that works across all your devices.
 
 For non-technical note-takers who want smart features — memory, self-improvement — without the setup hassle.
 
