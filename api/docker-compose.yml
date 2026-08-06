@@ -29,6 +29,18 @@ services:
     # run `latest` until their first remote upgrade.
     image: ghcr.io/stephengpope/shockwave-companion:${SHOCKWAVE_TAG:-latest}
     pull_policy: missing
+    # The companion's IDENTITY, and it must not move. `os.hostname()` is what
+    # stamps every agent event and every `chat.running_machine` row, and in a
+    # container that defaults to the container ID — a NEW value every time the
+    # container is recreated, which is exactly what a remote upgrade does.
+    #
+    # Two things break when it moves. Boot clears the running marks this machine
+    # left behind (`clearRunningForMachine`), and a redeployed container no
+    # longer recognizes its predecessor's — so a turn interrupted by the upgrade
+    # stays marked running forever, freezing that chat's composer on every
+    # desktop. And the desktop shows this string to the user as "Running on …",
+    # where a 12-character hex id names nothing they can identify.
+    hostname: shockwave-companion
     build:
       # Repo root so the build can reach ../agent-core (the shared agent runtime).
       context: ..

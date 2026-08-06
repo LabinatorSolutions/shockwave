@@ -666,6 +666,35 @@ export async function setRunning(db: Db, chatId: string, machine: string | null)
     .where(eq(chatTable.chatId, chatId));
 }
 
+/**
+ * Clear the running marks THIS machine left behind, at boot.
+ *
+ * `setRunning(id, null)` runs in the agent's own teardown, so a process that
+ * dies mid-turn — a crash, a `POST /update` redeploy, an OOM kill — never gets
+ * to run it. The row is then stuck claiming a turn is in flight on a machine
+ * where nothing is running, and nothing else will ever correct it: no other
+ * writer may touch another machine's mark, since from the outside a live turn
+ * and an abandoned one look identical.
+ *
+ * A process starting up is the ONE moment that ambiguity resolves. Whatever
+ * this machine was running, it is not running it now — so its own marks are
+ * knowably false, and only its own. Everyone else's are left alone.
+ *
+ * It matters beyond a spinner: a desktop reads this row to decide the chat is
+ * running elsewhere and freezes its composer, so a stale mark makes the chat
+ * permanently unusable from every machine.
+ *
+ * Returns how many it cleared, for the boot log — a non-zero count is the tell
+ * that the last shutdown killed live work.
+ */
+export async function clearRunningForMachine(db: Db, machine: string): Promise<number> {
+  const rows = await db.update(chatTable)
+    .set({ running: false, runningMachine: null, updatedAt: now() })
+    .where(and(eq(chatTable.running, true), eq(chatTable.runningMachine, machine)))
+    .returning({ chatId: chatTable.chatId });
+  return rows.length;
+}
+
 // ── Reviews sweep ───────────────────────────────────────────────────
 
 /**

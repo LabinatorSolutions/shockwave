@@ -215,14 +215,18 @@ Chats run concurrently (one live pi session per chat). Events forwarded to the r
 **Reconnecting is three rules and nothing else** — no backoff, no liveness check, no state to get wrong:
 
 1. **Retry every 5s, flat, forever** (`FEED_RETRY_MS`).
-2. **Opening the stream has a 10s deadline** (`STREAM_CONNECT_TIMEOUT_MS` in `client.ts`); the *open* stream has none, because a quiet companion legitimately sends nothing for hours.
+2. **Opening the stream has a 10s deadline** (`STREAM_CONNECT_TIMEOUT_MS` in `client.ts`); the *open* stream is bounded by **silence**, not by total time (`STREAM_IDLE_TIMEOUT_MS`, 30s) — a companion with nothing to report legitimately sends nothing but pings for hours.
 3. **`startLiveFeed()` tears down first and never skips.** Call it whenever, from wherever, as often as you like.
 
 > Rule 3 is why the app used to need a click. It opened with `if (feedAbort) return`, and `feedAbort` is set the instant `api.stream` *returns* — before the response arrives. So an attempt that hung (a half-closed socket after sleep/wake, a restarting companion — no RST, the socket just sits) held that flag with no retry pending, and every later attempt returned at the door. The app sat offline permanently with the retry loop intact and locked out of it. Settings → Connect worked only because `api:write` calls `stopLiveFeed()` first, cancelling the hung attempt. Rule 2 is what makes rule 3's teardown enough: nothing can be blocked by something stuck, because nothing is allowed to still be there.
 >
 > **`powerMonitor.on('resume')` reconnects unconditionally, not "if offline"** — waking is the one moment the connection can be gone with nothing saying so, so its own report of being online is the thing that isn't trustworthy. Window focus deliberately gets no handler: it fires constantly and could only save a few seconds of an outage the 5s loop is already working through.
 >
-> The companion writes `: ping` every 10s (`api/src/server.ts`) purely so routers and proxies don't cut an idle line. **The desktop never counts pings and has no silence timer.** A broken connection surfaces as the connection breaking; one that broke without surfacing is fixed on wake.
+> **The companion's `: ping` every 10s is the desktop's liveness signal, not just an anti-idle keepalive.** The reader arms a 30s deadline on ANY bytes — pings included, even though the frame parser discards them — and aborts when it expires, which reaches `onClose` like any other failure and the 5s loop reconnects.
+>
+> This used to be *"the desktop never counts pings and has no silence timer; a broken connection surfaces as the connection breaking, and one that broke without surfacing is fixed on wake."* The first half is false: a TCP connection can die with no FIN and no RST — a NAT or proxy reaps an idle mapping, a laptop changes network, a container is replaced — and `reader.read()` then simply never resolves again. Nothing surfaces, `onClose` never fires, the retry loop never arms, and the desktop holds a pipe that will never deliver another byte while `companionOnline` still says true. The second half only covers sleep/wake, which is one cause of several.
+>
+> Everything that arrives during such an outage is lost, including the `agent_end` that ends a turn — which is how a chat sat on `Working 150m 36s` for a run the companion's own 30-minute watchdog had long since ended. The renderer no longer *depends* on hearing that event (see "Working is DERIVED" in `src/renderer/CLAUDE.md`), but a feed that can die undetected breaks far more than a spinner, so it is fixed at the transport.
 
 Events **this machine produced** are dropped (`e.machine === os.hostname()`; `agent-core` stamps every event it emits): they already reached the renderer over IPC, and we POST every one of them up to `/chat/:id/events` so other clients see them — the copy coming back would double-render.
 

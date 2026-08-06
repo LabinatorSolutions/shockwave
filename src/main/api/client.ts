@@ -61,6 +61,23 @@ const HEALTH_TIMEOUT_MS = 20_000;
 // nothing failed, so nothing retried. Same reasoning as the health probe above.
 const STREAM_CONNECT_TIMEOUT_MS = 10_000;
 
+// And the third: SILENCE on an already-open stream. The companion writes `: ping`
+// every 10s (`api/src/server.ts`), so an open feed is never legitimately quiet —
+// three missed pings is a dead line, not a quiet server.
+//
+// This exists because a TCP connection can die without saying so: a NAT or proxy
+// reaps an idle mapping, a laptop changes network, a container is replaced. No
+// FIN, no RST — `reader.read()` below simply never resolves again. `onClose`
+// never fires, so main's retry loop never arms and the desktop sits holding a
+// pipe that will never deliver another byte while believing it is connected.
+// Every event that arrives during that is lost, including the `agent_end` that
+// ends a turn, which is how a chat can sit on "Working" for hours.
+//
+// `powerMonitor.on('resume')` in `main.ts` covers the sleep/wake case only, and
+// waking is not the only way this happens. This covers all of them, by asking
+// the one question that has an honest answer: are bytes still arriving?
+const STREAM_IDLE_TIMEOUT_MS = 30_000;
+
 function base(): { url: string; apiKey: string } {
   const c = readApiConfig();
   if (!c.url || !c.apiKey) throw new ApiError('config', 'The Shockwave server is not configured.');
@@ -171,8 +188,9 @@ export const api = {
   // reason (abort, drop, non-2xx, or failing to open in time) so the caller can
   // reconnect. Returns an abort fn.
   //
-  // OPENING is bounded (STREAM_CONNECT_TIMEOUT_MS); the open stream is not, and
-  // must not be — a quiet companion sends nothing for hours and that is normal.
+  // OPENING is bounded (STREAM_CONNECT_TIMEOUT_MS); the open stream is bounded by
+  // SILENCE (STREAM_IDLE_TIMEOUT_MS), never by total time — a companion with
+  // nothing to report sends nothing but pings for hours and that is normal.
   stream(pathname: string, onEvent: (evt: any) => void, onClose?: () => void, onOpen?: () => void): () => void {
     const { url, apiKey } = base();
     const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
@@ -182,6 +200,13 @@ export const api = {
     // like any other failure and the caller's retry loop carries on.
     let connectTimer: NodeJS.Timeout | null = setTimeout(() => ctrl.abort(), STREAM_CONNECT_TIMEOUT_MS);
     const clearConnectTimer = () => { if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; } };
+    let idleTimer: NodeJS.Timeout | null = null;
+    const clearIdleTimer = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
+    // Armed on ANY bytes, which deliberately includes the `:` comment pings the
+    // parser below discards. The pings are the whole signal: a healthy feed with
+    // no news still has to arrive, or silence can't tell "nothing happened" from
+    // "nothing can reach me any more".
+    const beat = () => { clearIdleTimer(); idleTimer = setTimeout(() => ctrl.abort(), STREAM_IDLE_TIMEOUT_MS); };
     (async () => {
       try {
         const res = await companionFetch(target, {
@@ -194,9 +219,11 @@ export const api = {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
+        beat();
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          beat();
           buf += decoder.decode(value, { stream: true });
           let idx: number;
           while ((idx = buf.indexOf('\n\n')) >= 0) {
@@ -208,11 +235,12 @@ export const api = {
             }
           }
         }
-      } catch { /* aborted, timed out, or connection dropped */ }
+      } catch { /* aborted, timed out, went silent, or connection dropped */ }
       clearConnectTimer();
+      clearIdleTimer();
       if (!aborted) onClose?.(); // dropped on its own → caller reconnects
     })();
     // Deliberate stop → no onClose, no reconnect.
-    return () => { aborted = true; clearConnectTimer(); ctrl.abort(); };
+    return () => { aborted = true; clearConnectTimer(); clearIdleTimer(); ctrl.abort(); };
   },
 };

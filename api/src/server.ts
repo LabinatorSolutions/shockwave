@@ -3,6 +3,7 @@
 // key; Postgres is private (never exposed to clients).
 
 import crypto from 'node:crypto';
+import os from 'node:os';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
@@ -411,6 +412,12 @@ async function settleTls(): Promise<void> {
   // plaintext `setting` row has to be encrypted on the way across, and only this
   // process holds the master key. See migrateLegacyVoiceKeys.
   await store.migrateLegacyVoiceKeys(getDb(pool), masterKey, log);
+  // Anything this machine was mid-turn on when it last stopped is not running
+  // now — a crash or a redeploy skips the teardown that clears the mark, and
+  // nobody else may clear another machine's. Booting is the one moment that is
+  // knowable, so it is done here, before anything can start a new turn.
+  const staleRuns = await store.clearRunningForMachine(getDb(pool), os.hostname());
+  if (staleRuns) log.warn({ chats: staleRuns }, 'cleared running marks left by a previous process');
   initScheduler(pool, masterKey, agentRuntime); // registers cron jobs from each cron.json
   initSweeper(pool, masterKey);                 // reclaims idle per-run working dirs (TTL)
   initCheckoutPool(pool, masterKey);            // keeps a warm checkout ready for a new Telegram chat

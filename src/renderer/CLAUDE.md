@@ -192,7 +192,20 @@ Chats run **concurrently** — in the desktop's `agent-core` host, or on the **c
 - `ChatSidebar` is a view over the active entry. Its only local state is view-stuff (popover open, rename draft, drag-over, voice partials). "New chat" just mints a fresh entry — the previous chat keeps running in the background (spinner on its row in the history popover; switching into it mid-turn shows the live stream).
 - **Sending while the chat is running steers** — main queues the message into the running turn; the composer never locks, and Stop + Send coexist while running. `queue_update` events drive the "N queued" hint on the Working line.
 - After a window reload the store reseeds running flags from `agent:runningChats`.
-- **Remote / companion runs.** A chat can execute on the companion or another machine (a Telegram/cron turn, or the same chat open on a second desktop). `remoteMachine` (compared against `window.api.app.machineId()`) marks a chat running elsewhere and freezes its composer until `agent_end`. There is nothing to subscribe to — main's live feed is always on, so those events are already arriving.
+- **Remote / companion runs.** A chat can execute on the companion or another machine (a Telegram/cron turn, or the same chat open on a second desktop). The entry stores the run's origin machine RAW (`runMachine`); `remoteMachineOf(entry)` compares it against `window.api.app.machineId()` at read time and a non-null answer freezes the composer. Derived rather than stored because `machineId()` resolves asynchronously at startup — a comparison made once, at `agent_start`, is permanently wrong for any turn whose first event beat that answer. There is nothing to subscribe to; main's live feed is always on, so those events are already arriving.
+
+### "Working" is DERIVED — there is no stored flag to get stuck
+
+`isWorking(entry)` = a turn is claimed to be in flight **AND** the channel carrying that claim is still alive. A turn on this machine reports over IPC (alive as long as the app is); a turn anywhere else reports over the live feed, so `chatStore` mirrors main's `companion:state` and gates remote runs on it. A dead feed means we know *nothing* about that turn, and knowing nothing must not render as a spinner.
+
+This replaced a stored boolean set by `agent_start` and cleared only by `agent_end`, and the failure it caused is worth keeping in mind because every part of it looked reasonable in isolation:
+
+- Losing ONE terminal event stranded the flag on. A silently half-open feed (see `STREAM_IDLE_TIMEOUT_MS` in `src/main/api/client.ts`) or a companion restarted mid-run both do it, and a Memory run was observed sitting on `Working 150m 36s` — well past the companion's own 30-minute watchdog, so the run had certainly ended.
+- **The stale flag then blocked its own repair.** `hydrateOnly`, `openChat` and therefore `resyncAll` all bailed on `running`, so the reconnect re-read — the one thing that would have learned the truth — never ran. Stop didn't help either: it aborts a *local* session, and this turn wasn't local. Restarting the app was the only exit.
+
+So the guard on re-reading is now `running && !remoteMachineOf(c)` — running *here*, not running at all. A turn on this machine genuinely owns the screen (the server holds only finished messages, so a replace would delete the tool call in flight); a turn anywhere else is the **server row's** call, via `applyRunState`. That is safe to trust because of the ordering in `api/src/store.ts`: the machine doing the work clears `running` only after uploading the turn, so `running: false` means "finished AND stored", never merely "stopped talking".
+
+`agent_send_failed` clears the run state too. It didn't, and only got away with it because pi happens to emit `agent_end` alongside — a second event doing the load-bearing work.
 
 ### Event protocol consumed by the store
 

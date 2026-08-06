@@ -725,17 +725,22 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (workspacePath) chatStore.ensureActiveChat(workspacePath);
   }, [workspacePath]);
 
-  const { messages, running, error, tokens, queuedCount, attachments, remoteMachine } = chat;
+  const { messages, running, error, tokens, queuedCount, attachments } = chat;
   // Running on another machine → this composer is frozen (single writer per turn).
-  // It unfreezes when that turn ends (agent_end clears remoteMachine).
+  // It unfreezes when that turn ends (agent_end clears the run's machine).
+  const remoteMachine = chatStore.remoteMachineOf(chat);
   const frozen = !!remoteMachine;
+  // What the SPINNER shows, which is not the same question as `running`: a
+  // remote turn is only observable while the feed carrying it is alive, and a
+  // claim we can no longer see must not be drawn as live. See `isWorking`.
+  const working = chatStore.isWorking(chat);
   const input = chat.draft;
   const chatTitle = chat.title;
   const chatPinned = chat.pinned;
 
   // Chats with a turn in flight (any workspace) — drives the history spinner.
   const runningIds = useMemo(
-    () => new Set(Object.keys(snap.chats).filter((id) => snap.chats[id].running)),
+    () => new Set(Object.keys(snap.chats).filter((id) => chatStore.isWorking(snap.chats[id]))),
     [snap.chats],
   );
 
@@ -759,11 +764,11 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   // store isn't churned 5×/sec. Just re-renders this component while running.
   const [, forceTick] = useReducer((x) => x + 1, 0);
   useEffect(() => {
-    if (!running || !chat.runStartAt) return;
+    if (!working || !chat.runStartAt) return;
     const t = setInterval(forceTick, 200);
     return () => clearInterval(t);
-  }, [running, chat.runStartAt]);
-  const elapsedMs = running && chat.runStartAt ? Date.now() - chat.runStartAt : chat.elapsedMs;
+  }, [working, chat.runStartAt]);
+  const elapsedMs = working && chat.runStartAt ? Date.now() - chat.runStartAt : chat.elapsedMs;
 
   // Store-backed setters with the local-state call shapes the handlers below
   // (and the voice hook) expect. Each resolves the chat id at call time via
@@ -822,7 +827,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
 
   const onSend = useCallback(async () => {
     const activeId = chatIdRef.current;
-    if (activeId && chatStore.getState().chats[activeId]?.remoteMachine) return; // frozen: running elsewhere
+    const activeEntry = activeId ? chatStore.getState().chats[activeId] : null;
+    if (activeEntry && chatStore.remoteMachineOf(activeEntry)) return; // frozen: running elsewhere
     // Commit any in-flight partial transcript before submitting. The textarea
     // displays input+partial as one string, so the user expects the partial
     // they just said to be part of what gets sent.
@@ -1228,7 +1234,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         <ChatWorkspaceContext.Provider value={workspacePath}>
           {messages.map((m) => <MessageRow key={m.id} message={m} />)}
         </ChatWorkspaceContext.Provider>
-        {running && (
+        {working && (
           <div className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-2">
             <SpinnerIcon />
             <span className="thinking-shimmer">Working</span>
@@ -1333,7 +1339,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
                 ? <VoiceBars volumeRef={voiceVolumeRef} isRecording={voiceRecording} />
                 : <MicIcon size={15} />}
             </button>
-            {running && !frozen && (
+            {working && !frozen && (
               <button
                 type="button"
                 className="flex size-[29px] items-center justify-center rounded-[9px] bg-foreground/80 text-background hover:bg-foreground"
@@ -1347,7 +1353,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               className="flex size-[29px] items-center justify-center rounded-[9px] bg-primary text-primary-foreground hover:bg-primary-hover disabled:pointer-events-none disabled:opacity-40"
               onClick={onSend}
               disabled={frozen || (!input.trim() && !partialText.trim() && attachments.length === 0) || !workspacePath}
-              title={frozen ? `Running on ${remoteMachine}` : running ? 'Send (steers the running response)' : 'Send'}
+              title={frozen ? `Running on ${remoteMachine}` : working ? 'Send (steers the running response)' : 'Send'}
               aria-label="Send"
             ><PlayIcon size={14} /></button>
           </div>

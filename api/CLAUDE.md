@@ -480,7 +480,7 @@ coalesce(c.checked_in_at, max message created_at) <= now() - quietMs
 
 **Stamped on failure too.** It records "we finished trying", not "we succeeded". A chat that is never stamped drops out of review permanently, and a conversation whose push conflicted is one worth learning from.
 
-**Holding `running` across the check-in would have been simpler and is wrong.** The desktop freezes its composer for a chat running on another machine (`remoteMachine` in `ChatSidebar.tsx`), so a Telegram chat would be un-typeable for as long as the fixer ran — up to `maxRunMinutes`. A separate stamp blocks the sweep and nobody else. **Never block a user message to protect a maintenance pass.**
+**Holding `running` across the check-in would have been simpler and is wrong.** The desktop freezes its composer for a chat running on another machine (`remoteMachineOf` in `chatStore.ts`), so a Telegram chat would be un-typeable for as long as the fixer ran — up to `maxRunMinutes`. A separate stamp blocks the sweep and nobody else. **Never block a user message to protect a maintenance pass.**
 
 Not covered by an automated test: the due queries need a live Postgres, like the rest of this tree.
 
