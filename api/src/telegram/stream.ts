@@ -9,7 +9,7 @@
 // best-effort: the DB transcript is the source of truth, so a dropped edit is fine.
 
 import type { TelegramClient } from './client.js';
-import { splitMessage } from './client.js';
+import { toTelegram, splitFormatted, truncateFormatted } from './markdownEntities.js';
 import { startWaitingBubble } from './waitingBubble.js';
 import {
   extractMedia, extractLocalFiles, filterDeliveryPaths, deliveryKind,
@@ -140,10 +140,16 @@ export function makeTelegramSink(
     // confirming a bare path is a file needs disk, and a bare path reads as
     // ordinary prose until it's delivered anyway.
     const shown = extractMedia(text).cleaned;
-    const body = (shown.length > 4096 ? shown.slice(0, 4096) : shown) || PLACEHOLDER;
+    // Formatted on EVERY frame, not just the final one. hermes sends its
+    // intermediate edits raw because half-typed MarkdownV2 is a 400 per frame;
+    // an entity list has no invalid state, so the only cost of a construct the
+    // agent hasn't closed yet is that it renders as itself until it is closed.
+    const fmt = truncateFormatted(toTelegram(shown), 4096);
+    const body = fmt.text || PLACEHOLDER;
+    const entities = fmt.text ? fmt.entities : [];
     try {
-      if (messageId == null) { const m = await client.sendMessage(chatId, body); messageId = m?.message_id ?? null; }
-      else await client.editMessageText(chatId, messageId, body);
+      if (messageId == null) { const m = await client.sendMessage(chatId, body, { entities }); messageId = m?.message_id ?? null; }
+      else await client.editMessageText(chatId, messageId, body, entities);
       // Only once a write has actually LANDED does the message stop being a free
       // slot. Inside the try on purpose: a rate-limited edit leaves it claimable.
       // The `PLACEHOLDER` body is the one case where a landed write still leaves
@@ -274,10 +280,10 @@ export function makeTelegramSink(
       // about the text at all.
       if (!voiceOnly || !spoke) {
         try {
-          const chunks = splitMessage(final);
-          if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0]);
-          else { const m = await client.sendMessage(chatId, chunks[0]); messageId = m?.message_id ?? null; }
-          for (const c of chunks.slice(1)) await client.sendMessage(chatId, c);
+          const chunks = splitFormatted(toTelegram(final));
+          if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0].text, chunks[0].entities);
+          else { const m = await client.sendMessage(chatId, chunks[0].text, { entities: chunks[0].entities }); messageId = m?.message_id ?? null; }
+          for (const c of chunks.slice(1)) await client.sendMessage(chatId, c.text, { entities: c.entities });
         } catch { /* best-effort */ }
       } else {
         // Nothing was ever written into it, so the bubble is still the "…" slot.

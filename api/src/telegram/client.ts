@@ -1,9 +1,11 @@
 // Minimal Telegram Bot API client — raw HTTPS over fetch, no library (matches
-// knack). One 429 retry honoring retry_after. Plus splitMessage for the 4096
-// limit, which carries open code fences across chunks.
+// knack). One 429 retry honoring retry_after. Chunking for the 4096 limit lives
+// in `markdownEntities.ts` (`splitFormatted`), because a chunk boundary has to
+// cut the formatting spans as well as the text.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { Entity } from './markdownEntities.js';
 
 /**
  * Telegram's ceiling for anything a bot uploads. Checked before we read a file,
@@ -123,9 +125,16 @@ export class TelegramClient {
   // How boot tells whether the subscription list is stale without re-registering
   // (and re-uploading a certificate) on every start.
   getWebhookInfo() { return this.call('getWebhookInfo'); }
-  async sendMessage(chatId: number, text: string, opts: { replyToMessageId?: number } = {}) {
+  /**
+   * `entities` carries the formatting alongside the text rather than inside it
+   * — see `markdownEntities.ts` for why that route and not `parse_mode`. Absent
+   * means plain text, which is what every fixed string in this codebase wants;
+   * only the agent's own prose is converted.
+   */
+  async sendMessage(chatId: number, text: string, opts: { replyToMessageId?: number; entities?: Entity[] } = {}) {
     const m = await this.call('sendMessage', {
       chat_id: chatId, text,
+      ...(opts.entities?.length ? { entities: opts.entities } : {}),
       ...(opts.replyToMessageId ? { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } } : {}),
     });
     if (m?.message_id != null) this.onSent?.(m.message_id, text);
@@ -135,8 +144,11 @@ export class TelegramClient {
   // says rather than as the "…" it started out as. An unchanged body throws
   // ("message is not modified") and never reaches this line — which is right,
   // since the text already on record is the text on screen.
-  async editMessageText(chatId: number, messageId: number, text: string) {
-    const r = await this.call('editMessageText', { chat_id: chatId, message_id: messageId, text });
+  async editMessageText(chatId: number, messageId: number, text: string, entities?: Entity[]) {
+    const r = await this.call('editMessageText', {
+      chat_id: chatId, message_id: messageId, text,
+      ...(entities?.length ? { entities } : {}),
+    });
     this.onSent?.(messageId, text);
     return r;
   }
@@ -213,47 +225,4 @@ export class TelegramClient {
       return this.upload('document', chatId, filePath, caption, opts);
     }
   }
-}
-
-const LIMIT = 4096; // Telegram's per-message ceiling (UTF-16 units == JS .length)
-
-// Chunk a long message under the limit. Splits on paragraph > line > space (never
-// mid-word), carries an open ``` code fence across the boundary (closing it at
-// the end of a chunk and reopening with the language on the next), and appends
-// (i/n) when there's more than one chunk.
-export function splitMessage(text: string, limit = LIMIT): string[] {
-  if (text.length <= limit) return [text];
-  const chunks: string[] = [];
-  let rest = text;
-  let openFence: string | null = null; // e.g. "```ts" if a fence is open at the boundary
-
-  while (rest.length > 0) {
-    const prefix = openFence ? openFence + '\n' : '';
-    const budget = limit - prefix.length - 12; // reserve room for a closing fence + " (i/n)"
-    if (prefix.length + rest.length <= limit) { chunks.push(prefix + rest); break; }
-
-    let cut = rest.lastIndexOf('\n\n', budget);
-    if (cut < budget * 0.5) cut = rest.lastIndexOf('\n', budget);
-    if (cut < budget * 0.5) cut = rest.lastIndexOf(' ', budget);
-    if (cut <= 0) cut = budget;
-
-    let piece = prefix + rest.slice(0, cut);
-    rest = rest.slice(cut).replace(/^\n+/, '');
-
-    // Track fence state across the boundary.
-    const fences = (piece.match(/```[^\n`]*/g) || []);
-    const stateOpen = fences.length % 2 === 1;
-    if (stateOpen) {
-      const last = fences[fences.length - 1];
-      openFence = last.startsWith('```') && last.length > 3 ? '```' : '```';
-      openFence = last; // reopen with the same language tag
-      piece += '\n```';
-    } else {
-      openFence = null;
-    }
-    chunks.push(piece);
-  }
-
-  const n = chunks.length;
-  return n > 1 ? chunks.map((c, i) => `${c}\n\n(${i + 1}/${n})`) : chunks;
 }

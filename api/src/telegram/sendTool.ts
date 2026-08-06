@@ -6,7 +6,8 @@
 
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { TelegramClient, splitMessage, type SendKind } from './client.js';
+import { TelegramClient, type SendKind } from './client.js';
+import { toTelegram, splitFormatted } from './markdownEntities.js';
 import * as store from '../store.js';
 import type { PgPool } from '../db.js';
 import { getDb } from '../db.js';
@@ -72,7 +73,11 @@ export async function sendTelegramMessage(
     tlog.info({ chars: String(text ?? '').length, mode, chatId: opts.chatId ?? null }, 'sending a telegram message');
 
     const sendChunks = async () => {
-      for (const c of splitMessage(String(text ?? ''))) await client.sendMessage(acc.dmChatId!, c);
+      // The agent's own prose, so it gets the same formatting treatment as a
+      // streamed reply — this tool is the other door its words leave by.
+      for (const c of splitFormatted(toTelegram(String(text ?? '')))) {
+        await client.sendMessage(acc.dmChatId!, c.text, { entities: c.entities });
+      }
     };
 
     // Text first when the mode sends it at all. Voice-only is the one mode that
