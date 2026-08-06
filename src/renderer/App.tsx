@@ -2100,10 +2100,10 @@ export default function App() {
           }}
         >
           {bookmarkFilterActive && sortedTree.length > 0 && (
-            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Bookmarks</div>
+            <div className="px-2 py-1.5 text-micro font-semibold uppercase tracking-[0.09em] text-muted-2">Bookmarks</div>
           )}
           {!bookmarkFilterActive && !conflictFilterActive && sortedTree.length > 0 && (
-            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Explorer</div>
+            <div className="px-2 py-1.5 text-micro font-semibold uppercase tracking-[0.09em] text-muted-2">Explorer</div>
           )}
           {sortedTree.length > 0 ? (
             <FileTree
@@ -2128,7 +2128,7 @@ export default function App() {
             />
           ) : (
             <div
-              className="py-1.5 pl-10 pr-3 text-[13px] text-muted-2"
+              className="py-1.5 pl-10 pr-3 text-sm text-muted-2"
               onContextMenu={(e) => {
                 if (!workspacePath || conflictFilterActive) return;
                 e.preventDefault();
@@ -2309,7 +2309,7 @@ export default function App() {
               )}
           </div>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-[13px] text-muted-2">
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-2">
             {/* An empty workspace list means one of two very different things,
                 and they used to render identically. Workspaces live on the
                 companion, so with it unreachable the list is empty because we
@@ -2390,7 +2390,7 @@ export default function App() {
             <path d="M15 13v2" />
             <path d="M9 13v2" />
           </svg>
-          <span className="rotate-180 select-none text-[11px] font-medium tracking-[0.08em] opacity-70 [text-orientation:mixed] [writing-mode:vertical-rl] group-hover:opacity-100">Agent Chat</span>
+          <span className="rotate-180 select-none text-xs font-medium tracking-[0.08em] opacity-70 [text-orientation:mixed] [writing-mode:vertical-rl] group-hover:opacity-100">Agent Chat</span>
         </button>
       )}
 

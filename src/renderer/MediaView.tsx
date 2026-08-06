@@ -71,7 +71,7 @@ export default function MediaView({ path, workspacePath, kind }: {
 }) {
   const rel = toRelPath(path, workspacePath);
   if (!rel) {
-    return <div className="p-6 text-[13px] text-muted-2">Can't preview this file — it's outside the workspace.</div>;
+    return <div className="p-6 text-sm text-muted-2">Can't preview this file — it's outside the workspace.</div>;
   }
   // Encode each segment so spaces / unicode survive the URL round-trip.
   const src = 'app://media/' + rel.split('/').map(encodeURIComponent).join('/');

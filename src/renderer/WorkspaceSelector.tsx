@@ -46,10 +46,10 @@ export default function WorkspaceSelector({
             aria-label={active ? `Workspace: ${active.name}. Switch workspace` : 'No workspace open. Choose a workspace'}
           >
             {/* Square accent workspace badge (polish spec §4). */}
-            <span className="flex size-[18px] items-center justify-center rounded-[5px] bg-primary text-[9px] font-bold text-primary-foreground">
+            <span className="flex size-[18px] items-center justify-center rounded-[5px] bg-primary text-micro font-bold text-primary-foreground">
               {badgeLetter}
             </span>
-            <span className="max-w-40 truncate text-[12.5px] font-medium">
+            <span className="max-w-40 truncate text-sm font-medium">
               {active ? active.name : 'No workspace'}
             </span>
             <ChevronDownIcon size={12} />
@@ -70,7 +70,7 @@ export default function WorkspaceSelector({
                 title={w.path ?? `${w.repo} — not on this machine`}
               >
                 <span className="truncate">{w.name}</span>
-                {!w.path && <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">not here</span>}
+                {!w.path && <span className="ml-2 shrink-0 text-micro text-muted-foreground">not here</span>}
                 {w.id === activeWorkspaceId && <Check className="ml-auto" />}
               </DropdownMenuItem>
             ))

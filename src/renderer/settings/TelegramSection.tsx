@@ -93,7 +93,7 @@ export default function TelegramSection({
           <>
             <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
               <div>
-                <div className="text-[13px] font-medium">Connected{status.botUsername ? ` as @${status.botUsername}` : ''}</div>
+                <div className="text-sm font-medium">Connected{status.botUsername ? ` as @${status.botUsername}` : ''}</div>
                 <div className="text-xs text-muted-foreground">Message the bot on Telegram to run the agent.</div>
               </div>
               <Button type="button" size="sm" onClick={disconnect} disabled={busy}>
@@ -163,7 +163,7 @@ export default function TelegramSection({
           have written a vendor nobody chose. */}
       <SettingsGroup title="Voice notes">
         <Field>
-          <Label className="gap-2.5 text-[13px] font-normal">
+          <Label className="gap-2.5 text-sm font-normal">
             <Checkbox
               checked={!!transcription?.echoTelegramTranscript}
               onCheckedChange={(v) => onTranscriptionChange?.({ echoTelegramTranscript: v === true })}
@@ -185,7 +185,7 @@ export default function TelegramSection({
           the sentence that explains them. */}
       <SettingsGroup title="Catching up">
         <Field>
-          <Label className="gap-2.5 text-[13px] font-normal">
+          <Label className="gap-2.5 text-sm font-normal">
             <Checkbox
               checked={effective.enabled}
               onCheckedChange={(v) => setNotice({ enabled: v === true })}
@@ -199,7 +199,7 @@ export default function TelegramSection({
             Shows up to
             <Input
               type="number" min={1} max={10} inputMode="numeric"
-              className="mx-1.5 inline-block h-6 w-12 px-1 text-center align-baseline text-[13px]"
+              className="mx-1.5 inline-block h-6 w-12 px-1 text-center align-baseline text-sm"
               aria-label="How many chats to list"
               disabled={!effective.enabled}
               value={limit.value}
@@ -209,7 +209,7 @@ export default function TelegramSection({
             newer chats when the one you&apos;re returning to is over
             <Input
               type="number" min={0} max={8760} inputMode="numeric"
-              className="mx-1.5 inline-block h-6 w-14 px-1 text-center align-baseline text-[13px]"
+              className="mx-1.5 inline-block h-6 w-14 px-1 text-center align-baseline text-sm"
               aria-label="How old the chat has to be, in hours"
               disabled={!effective.enabled}
               value={hours.value}

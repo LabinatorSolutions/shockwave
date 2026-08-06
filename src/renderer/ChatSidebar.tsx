@@ -111,8 +111,8 @@ function toolSummary(toolName, args) {
 // Per-tool detail rendering for the expanded view header (above the output).
 // Keep these terse — the collapsed-summary line already shows the headline arg.
 // Shared styling for the expanded tool-args area (JetBrains Mono, quiet).
-const toolArgsClass = 'mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted-foreground';
-const toolArgPathClass = 'font-mono text-[11px] text-muted-foreground break-all';
+const toolArgsClass = 'mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground';
+const toolArgPathClass = 'font-mono text-xs text-muted-foreground break-all';
 
 function ToolArgsDetail({ toolName, args }) {
   const a = args ?? {};
@@ -200,7 +200,7 @@ function AttachmentChip({ att, onRemove }: any) {
           title={`${att.name} · ${formatBytes(att.bytes)}`}
         >
           <span className="shrink-0 text-muted-foreground"><FileTextIcon size={16} /></span>
-          <span className="truncate text-[11px] text-foreground/85">{att.name}</span>
+          <span className="truncate text-xs text-foreground/85">{att.name}</span>
         </div>
       )}
       {onRemove && (
@@ -262,7 +262,7 @@ const MessageRow = memo(function MessageRow({ message: m }: any) {
     // Right-aligned indigo bubble with an asymmetric radius "tail" (spec §6).
     return (
       <div className="group/message flex flex-col items-end">
-        <div className="max-w-[82%] rounded-[16px_16px_5px_16px] bg-primary px-[13px] py-[9px] text-[13px] leading-[1.45] text-primary-foreground">
+        <div className="max-w-[82%] rounded-[16px_16px_5px_16px] bg-primary px-[13px] py-[9px] text-md leading-[1.45] text-primary-foreground">
           {m.attachments && m.attachments.length > 0 && (
             <div className="mb-1.5"><AttachmentRow attachments={m.attachments} /></div>
           )}
@@ -276,7 +276,7 @@ const MessageRow = memo(function MessageRow({ message: m }: any) {
     // No bubble — full-width flowing text. The asymmetry IS the hierarchy.
     return (
       <div className="group/message flex flex-col items-start">
-        <div className="chat-markdown w-full max-w-full text-[13.5px] leading-[1.6] text-foreground">
+        <div className="chat-markdown w-full max-w-full text-md leading-[1.6] text-foreground">
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS as any}>{m.text}</ReactMarkdown>
         </div>
         {m.text && <CopyButton text={m.text} />}
@@ -328,16 +328,16 @@ function ThinkingEntry({ entry }) {
         {open
           ? <ChevronDown className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />
           : <ChevronRight className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />}
-        <span className="w-3 shrink-0 text-[11px] leading-none text-success">
+        <span className="w-3 shrink-0 text-xs leading-none text-success">
           {streaming ? <SpinnerIcon size={11} /> : '✓'}
         </span>
-        <span className="shrink-0 font-mono text-[11px] font-medium text-muted-foreground">
+        <span className="shrink-0 font-mono text-xs font-medium text-muted-foreground">
           {streaming ? <span className="thinking-shimmer">Thinking</span> : 'Thought'}
         </span>
       </button>
       {open && (entry.text || streaming) && (
         <div className="mt-1.5 border-t border-border pt-1.5">
-          <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-[12.5px] leading-[1.55] text-muted-foreground">
+          <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-[1.55] text-muted-foreground">
             <span>{entry.text}</span>
             {streaming && <span className="animate-pulse" aria-hidden="true">▌</span>}
           </div>
@@ -362,17 +362,17 @@ function ToolEntry({ entry }) {
         {open
           ? <ChevronDown className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />
           : <ChevronRight className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />}
-        <span className={cn('w-3 shrink-0 text-[11px] leading-none', entry.isError ? 'text-destructive' : 'text-success')}>
+        <span className={cn('w-3 shrink-0 text-xs leading-none', entry.isError ? 'text-destructive' : 'text-success')}>
           {running ? <SpinnerIcon size={11} /> : entry.isError ? '✗' : '✓'}
         </span>
-        <span className="shrink-0 font-mono text-[11px] font-medium text-muted-foreground">{entry.toolName}</span>
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/80">{toolSummary(entry.toolName, entry.args)}</span>
+        <span className="shrink-0 font-mono text-xs font-medium text-muted-foreground">{entry.toolName}</span>
+        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80">{toolSummary(entry.toolName, entry.args)}</span>
       </button>
       {open && (
         <div className="mt-1.5 border-t border-border pt-1.5">
           <ToolArgsDetail toolName={entry.toolName} args={entry.args} />
           {(entry.output || running) && (
-            <div className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted-foreground/90">
+            <div className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground/90">
               <span>{entry.output}</span>
               {running && <span className="animate-pulse" aria-hidden="true">▌</span>}
             </div>
@@ -545,19 +545,19 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
       ><PinIcon size={13} filled={isPinned} /></span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">{it.title || 'Untitled chat'}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{it.title || 'Untitled chat'}</span>
           {/* Source tag AFTER the title for non-desktop chats (cron, telegram, …).
               bg-foreground/text-background is black-on-white → auto-reverses in dark mode. */}
           {it.source && it.source !== 'desktop' && (
-            <span className="shrink-0 rounded bg-foreground px-1 py-px text-[9px] font-semibold uppercase leading-none tracking-wide text-background">{it.source}</span>
+            <span className="shrink-0 rounded bg-foreground px-1 py-px text-micro font-semibold uppercase leading-none tracking-wide text-background">{it.source}</span>
           )}
         </span>
-        {searching && it.snippet && <span className="truncate text-[11px] text-muted-2">{it.snippet}</span>}
+        {searching && it.snippet && <span className="truncate text-xs text-muted-2">{it.snippet}</span>}
       </span>
       {runningIds?.has(it.chatId) ? (
         <span className="shrink-0 text-primary" title="Responding…" aria-label="Responding"><SpinnerIcon size={12} /></span>
       ) : (
-        !searching && <span className="shrink-0 text-[11px] text-muted-2">{formatAgo(it.updatedAt)}</span>
+        !searching && <span className="shrink-0 text-xs text-muted-2">{formatAgo(it.updatedAt)}</span>
       )}
       <span
         role="button"
@@ -624,7 +624,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         <SearchIcon size={13} />
         <input
           type="text"
-          className="min-w-0 flex-1 bg-transparent text-[12.5px] text-foreground outline-none placeholder:text-muted-2"
+          className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-2"
           placeholder="Search chats…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -645,7 +645,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
               type="button"
               title={allSelected ? 'Showing all chats' : `Showing ${sourceSummary}`}
               className={cn(
-                'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] hover:bg-accent hover:text-foreground',
+                'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs hover:bg-accent hover:text-foreground',
                 allSelected ? 'text-muted-foreground' : 'bg-selected text-primary',
               )}
             >
@@ -654,7 +654,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-52">
-            <DropdownMenuLabel className="text-[11px] font-semibold text-muted-2">Show chats from</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs font-semibold text-muted-2">Show chats from</DropdownMenuLabel>
             {CHAT_SOURCES.map((key) => (
               <DropdownMenuCheckboxItem
                 key={key}
@@ -664,7 +664,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
               >
                 <span className="flex w-full items-center justify-between gap-3">
                   <span>{CHAT_SOURCE_LABELS[key]}</span>
-                  <span className="text-[11px] text-muted-2">{countsBySource[key] ?? 0}</span>
+                  <span className="text-xs text-muted-2">{countsBySource[key] ?? 0}</span>
                 </span>
               </DropdownMenuCheckboxItem>
             ))}
@@ -681,9 +681,9 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         )}
         {showPinned && (
           <>
-            <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Pinned</div>
+            <div className="px-2 pb-1 pt-1.5 text-micro font-semibold uppercase tracking-[0.09em] text-muted-2">Pinned</div>
             {visiblePinned.map((it) => renderRow(it, true))}
-            {visible.length > 0 && <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Recent</div>}
+            {visible.length > 0 && <div className="px-2 pb-1 pt-2 text-micro font-semibold uppercase tracking-[0.09em] text-muted-2">Recent</div>}
           </>
         )}
         {visible.map((it) => renderRow(it, false))}
@@ -1133,7 +1133,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     >
       {dragOver && (
         <div className="absolute inset-0 z-40 flex items-center justify-center rounded-none border-2 border-dashed border-primary bg-primary/5" aria-hidden="true">
-          <div className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground">Drop to attach</div>
+          <div className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground">Drop to attach</div>
         </div>
       )}
       {/* 44px header: history left, avatar+title centered, collapse right (spec §6).
@@ -1179,7 +1179,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           </span>
           {renamingTitle ? (
             <input
-              className="w-full max-w-48 rounded-sm border border-input bg-background px-1.5 py-0.5 text-[13px] font-semibold outline-none focus:border-ring"
+              className="w-full max-w-48 rounded-sm border border-input bg-background px-1.5 py-0.5 text-sm font-semibold outline-none focus:border-ring"
               value={titleDraft}
               autoFocus
               onChange={(e) => setTitleDraft(e.target.value)}
@@ -1191,7 +1191,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
             />
           ) : (
             <span
-              className="truncate text-[13px] font-semibold text-foreground"
+              className="truncate text-sm font-semibold text-foreground"
               onDoubleClick={startRename}
               title={chat.persisted ? 'Double-click to rename' : undefined}
             >{chatTitle || 'Agent Chat'}</span>
@@ -1235,7 +1235,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           {messages.map((m) => <MessageRow key={m.id} message={m} />)}
         </ChatWorkspaceContext.Provider>
         {working && (
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-2">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-2">
             <SpinnerIcon />
             <span className="thinking-shimmer">Working</span>
             <span className="font-normal">
@@ -1257,14 +1257,14 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
             <AttachmentRow attachments={attachments} onRemove={removeAttachment} />
           )}
           {rejected && (
-            <div className="flex items-center justify-between gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+            <div className="flex items-center justify-between gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
               <span className="min-w-0 truncate">{rejected.name}: {rejected.reason}</span>
               <button type="button" className="shrink-0 hover:opacity-70" onClick={() => setRejected(null)} aria-label="Dismiss"><XIcon size={12} /></button>
             </div>
           )}
         <textarea
           ref={textareaRef}
-          className="max-h-44 w-full resize-none bg-transparent font-chat text-[13px] leading-normal text-foreground outline-none placeholder:text-muted-2 disabled:opacity-50"
+          className="max-h-44 w-full resize-none bg-transparent font-chat text-md leading-normal text-foreground outline-none placeholder:text-muted-2 disabled:opacity-50"
           value={input + (partialText ? (input && !input.endsWith(' ') ? ' ' : '') + partialText : '')}
           placeholder={frozen ? `Running on ${remoteMachine}…` : 'Ask the agent…'}
           disabled={frozen}

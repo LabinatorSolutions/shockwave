@@ -84,7 +84,7 @@ function SortableTab({
       {...attributes}
       {...listeners}
       className={cn(
-        'group -mb-px flex cursor-pointer items-center gap-2 rounded-t-lg px-2.5 pb-2 pt-[7px] text-[12.5px]',
+        'group -mb-px flex cursor-pointer items-center gap-2 rounded-t-lg px-2.5 pb-2 pt-[7px] text-sm',
         TAB_MIN_W,
         'max-w-44',
         isDragging && 'z-10 opacity-80',
@@ -264,7 +264,7 @@ export default function TabStrip({
             <button
               type="button"
               className={cn(
-                'flex h-[26px] items-center gap-1 rounded-[7px] px-1.5 text-[11.5px] text-muted-foreground hover:bg-accent hover:text-foreground data-[state=open]:bg-selected data-[state=open]:text-primary',
+                'flex h-[26px] items-center gap-1 rounded-[7px] px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground data-[state=open]:bg-selected data-[state=open]:text-primary',
                 !listOpen && (tabs.length === 0 || !overflowing) && 'invisible pointer-events-none',
               )}
               title="Search open tabs"
@@ -289,7 +289,7 @@ export default function TabStrip({
               <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-muted-2">
                 <SearchIcon size={13} />
                 <CommandPrimitive.Input
-                  className="min-w-0 flex-1 bg-transparent text-[12.5px] text-foreground outline-none placeholder:text-muted-2"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-2"
                   placeholder="Search open tabs…"
                   value={query}
                   onValueChange={setQuery}
@@ -317,14 +317,14 @@ export default function TabStrip({
                       )}
                     >
                       <TreeFileIcon />
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
+                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                         {indexes
                           ? segmentsFromIndexes(label, indexes).map((s, i) => (
                             <span key={i} className={s.match ? 'font-semibold' : undefined}>{s.value}</span>
                           ))
                           : label}
                       </span>
-                      {folder && <span className="shrink-0 truncate text-[11px] text-muted-2">{folder}</span>}
+                      {folder && <span className="shrink-0 truncate text-xs text-muted-2">{folder}</span>}
                       <span
                         role="button"
                         tabIndex={0}

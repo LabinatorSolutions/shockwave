@@ -547,7 +547,7 @@ export default function AgentSecretsSection({ secrets, onChange, onReload }) {
       {connectError && <ErrorMessage>{connectError}</ErrorMessage>}
 
       {(!secrets || secrets.length === 0) ? (
-        <div className="text-[13px] text-muted-foreground">No secrets yet.</div>
+        <div className="text-sm text-muted-foreground">No secrets yet.</div>
       ) : (
         <div className="flex flex-col gap-5">
           {oauthSecrets.length > 0 && (
@@ -563,7 +563,7 @@ export default function AgentSecretsSection({ secrets, onChange, onReload }) {
                       <Link2 className="size-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-[13px] font-medium text-foreground">{s.name}</span>
+                          <span className="text-sm font-medium text-foreground">{s.name}</span>
                           <StatusBadge status={s.oauth?.status} />
                         </div>
                         <div className="truncate text-xs text-muted-foreground">
@@ -622,7 +622,7 @@ export default function AgentSecretsSection({ secrets, onChange, onReload }) {
                     <div className="flex min-w-0 items-center gap-2.5">
                       <KeyRound className="size-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0">
-                        <div className="text-[13px] font-medium text-foreground">{s.name}</div>
+                        <div className="text-sm font-medium text-foreground">{s.name}</div>
                         {s.description && (
                           <div className="truncate text-xs text-muted-foreground" title={s.description}>{s.description}</div>
                         )}

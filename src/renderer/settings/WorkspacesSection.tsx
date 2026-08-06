@@ -156,12 +156,12 @@ export default function WorkspacesSection({
                 if (e.key === 'Enter') commitRename();
                 if (e.key === 'Escape') setRenamingId(null);
               }}
-              className="h-7 text-[13px]"
+              className="h-7 text-sm"
             />
           ) : (
             <button
               type="button"
-              className="block max-w-full truncate rounded px-1 -mx-1 text-left text-[13px] font-medium hover:bg-accent"
+              className="block max-w-full truncate rounded px-1 -mx-1 text-left text-sm font-medium hover:bg-accent"
               onClick={() => { setRenamingId(ws.id); setRenameDraft(ws.name); }}
               title="Rename"
               aria-label={`Rename ${ws.name}`}
@@ -279,7 +279,7 @@ export default function WorkspacesSection({
               told. The old split's failure was leaving people to discover the
               token requirement on their own. */}
           {!hasSyncPat && (
-            <p className="mb-2 text-[13px] text-muted-foreground">
+            <p className="mb-2 text-sm text-muted-foreground">
               A GitHub token is required.{' '}
               <button
                 type="button"
@@ -296,7 +296,7 @@ export default function WorkspacesSection({
 
       {workspaces.length === 0 ? (
         <SettingsGroup>
-          <p className="text-[13px] text-muted-foreground">No workspaces yet.</p>
+          <p className="text-sm text-muted-foreground">No workspaces yet.</p>
         </SettingsGroup>
       ) : (
         <>

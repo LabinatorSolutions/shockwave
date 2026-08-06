@@ -114,7 +114,7 @@ export default function Combobox({
               role="option"
               aria-selected={o === value}
               className={cn(
-                'cursor-pointer rounded-sm px-2 py-1.5 text-[13px]',
+                'cursor-pointer rounded-sm px-2 py-1.5 text-sm',
                 i === highlight && 'bg-accent',
                 o === value && 'font-medium'
               )}

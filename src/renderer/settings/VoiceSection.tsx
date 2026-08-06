@@ -439,7 +439,7 @@ export default function VoiceSection({
             {testError && <p className="text-xs text-destructive">{testError}</p>}
           </div>
 
-          <div className="min-h-[60px] rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[13px] leading-normal">
+          <div className="min-h-[60px] rounded-md border border-border bg-muted/40 px-3 py-2.5 text-sm leading-normal">
             {(finalText || partial) ? (
               <div className="text-foreground">
                 <span>{finalText}</span>

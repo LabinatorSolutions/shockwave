@@ -101,8 +101,8 @@ export default function SortBar({
                   onPickBookmark?.(row.path);
                 }}
               >
-                <span className="text-[12.5px] text-foreground">{row.name}</span>
-                {row.dir && <span className="text-[11px] text-muted-2">{row.dir}</span>}
+                <span className="text-sm text-foreground">{row.name}</span>
+                {row.dir && <span className="text-xs text-muted-2">{row.dir}</span>}
               </button>
             ))
           )}
@@ -193,7 +193,7 @@ export default function SortBar({
           aria-pressed={conflictFilterActive}
         >
           <CloudAlertIcon size={15} />
-          <span className="text-[11px] font-semibold">{conflictCount}</span>
+          <span className="text-xs font-semibold">{conflictCount}</span>
         </button>
       )}
     </div>

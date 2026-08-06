@@ -19,7 +19,7 @@ export function SettingsSection({ title, description, children, wide = false }: 
     <div className="flex min-h-full flex-col px-7 pb-8 pt-6">
       <div className="pr-8">
         <h2 className="text-xl font-bold tracking-tight text-foreground">{title}</h2>
-        {description && <p className="mt-1.5 text-[13px] text-muted-foreground">{description}</p>}
+        {description && <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>}
       </div>
       <div className={cn('flex flex-col gap-[22px] pt-[22px]', !wide && SETTINGS_MEASURE)}>
         {children}
@@ -42,7 +42,7 @@ export function SettingsGroup({ title, description, children, className }: any) 
           {title}
         </div>
       )}
-      {description && <p className="mb-3 text-[13px] text-muted-foreground">{description}</p>}
+      {description && <p className="mb-3 text-sm text-muted-foreground">{description}</p>}
       <div className="flex flex-col gap-3">{children}</div>
     </div>
   );

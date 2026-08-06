@@ -138,7 +138,7 @@ export default function EditorStatusBar({
   const saveTitle = isSaved ? 'All changes saved' : 'Saving…';
 
   return (
-    <div className="flex items-center gap-4 border-t border-border px-4 py-[5px] text-[11.5px] text-muted-foreground">
+    <div className="flex items-center gap-4 border-t border-border px-4 py-[5px] text-xs text-muted-foreground">
       <div className="flex items-center gap-1">
         <button type="button" className={statusBtn} onClick={onUndo} disabled={!canUndo} title="Undo" aria-label="Undo">
           <RotateCcwIcon size={13} />

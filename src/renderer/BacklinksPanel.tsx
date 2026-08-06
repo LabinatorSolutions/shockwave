@@ -4,11 +4,11 @@ import { prettyName } from './linkIndex.js';
 export default function BacklinksPanel({ groups, vaultPath, onOpen }) {
   return (
     <div className="shrink-0 px-(--text-col-left) pb-[18px] pt-[5em]">
-      <div className="mb-2 border-t border-border pt-2 text-[11px] font-semibold text-muted-foreground">
+      <div className="mb-2 border-t border-border pt-2 text-xs font-semibold text-muted-foreground">
         Linked references ({groups.length})
       </div>
       {groups.length === 0 ? (
-        <div className="text-[11px] text-muted-2">No backlinks yet</div>
+        <div className="text-xs text-muted-2">No backlinks yet</div>
       ) : (
         groups.map((group) => (
           <div key={group.fromPath} className="mb-3">
@@ -26,7 +26,7 @@ export default function BacklinksPanel({ groups, vaultPath, onOpen }) {
               >
                 <div className="whitespace-pre-wrap break-words text-xs text-foreground">{match.lineText.trim()}</div>
                 {match.contextLines.length > 0 && (
-                  <pre className="m-0 mt-[3px] whitespace-pre-wrap break-words pl-2 font-mono text-[11px] text-muted-foreground">
+                  <pre className="m-0 mt-[3px] whitespace-pre-wrap break-words pl-2 font-mono text-xs text-muted-foreground">
                     {match.contextLines.join('\n')}
                   </pre>
                 )}

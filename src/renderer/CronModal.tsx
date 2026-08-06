@@ -31,7 +31,7 @@ function fmtRel(ms: number | null): string {
   return delta > 0 ? `in ${span}` : `${span} ago`;
 }
 
-const PILL = 'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium';
+const PILL = 'shrink-0 rounded px-1.5 py-0.5 text-micro font-medium';
 
 function JobRow({ job, tz, busy, running, onRun }: {
   job: CronJobView; tz: string; busy: boolean; running: boolean; onRun: () => void;

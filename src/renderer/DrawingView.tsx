@@ -142,7 +142,7 @@ const DrawingView = forwardRef<DrawingViewHandle, {
     onSendToAgent(selected);
   }, [onSendToAgent]);
 
-  if (!initialData) return <div className="p-6 text-[13px] text-muted-2">Loading drawing…</div>;
+  if (!initialData) return <div className="p-6 text-sm text-muted-2">Loading drawing…</div>;
 
   return (
     // drawing-view-host: the `.excalidraw` descendant sizing rule lives in

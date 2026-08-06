@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 export const treeRowClass = (selected: boolean) => cn(
   // Extra left padding so the row fill / selection ring extends a few px past
   // the caret instead of hugging it.
-  'flex h-6 cursor-pointer items-center gap-1.5 rounded-md pl-3 pr-2 text-[12.5px] text-foreground/85',
+  'flex h-6 cursor-pointer items-center gap-1.5 rounded-md pl-3 pr-2 text-sm text-foreground/85',
   'hover:bg-accent',
   selected && 'bg-accent',
 );
@@ -203,7 +203,7 @@ export function RenameInput({ initialValue, checkConflict, onSubmit, onCancel }:
     <input
       autoFocus
       className={cn(
-        'h-5 w-full min-w-0 rounded-sm border border-input bg-background px-1 text-[12.5px] outline-none focus:border-ring',
+        'h-5 w-full min-w-0 rounded-sm border border-input bg-background px-1 text-sm outline-none focus:border-ring',
         conflict && 'border-destructive focus:border-destructive',
       )}
       value={val}

@@ -87,7 +87,7 @@ export default function UpdatesSection({ appUpdate }) {
       title="Updates"
       description={`${APP_NAME} checks for new versions automatically, then waits for you. Nothing downloads or installs until you say so.`}
     >
-      <div className="text-[13px] text-foreground">
+      <div className="text-sm text-foreground">
         Current version: {current ? `v${current}` : '—'}
       </div>
 

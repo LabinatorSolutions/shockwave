@@ -180,6 +180,33 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-chat: 'Instrument Sans', 'Inter', sans-serif;
 
+  /* ── Type scale ──────────────────────────────────────────────────────
+     Four sizes, no in-between values. Modelled on Obsidian's, which this
+     app's editor already matches: nav/tabs 13px, status bar 12px, editor
+     16px. Before this, chrome was six ad-hoc literals (9 / 10 / 11 / 11.5
+     / 12 / 12.5 / 13 / 13.5) and every new component was a fresh guess.
+
+     `--text-sm` is Tailwind's OWN token, deliberately redefined from 14px
+     to 13px. That is what pulls the vendored shadcn primitives (menu and
+     select items, buttons, labels — all `text-sm`) onto the scale without
+     editing them, so `npm run ui:diff` stays clean. It also means you get
+     the right size by writing plain `text-sm`; there is no bespoke class
+     to remember. Do not "fix" it back to 14px.
+
+     Text INSIDE the editor stays em-relative (see the .cm-* and
+     .chat-markdown rules in the legacy block below) so it tracks the body.
+
+     The 14px step is `--text-md` and NOT `--text-chat`: `--color-chat`
+     already exists (the chat panel's background, defined above), and
+     Tailwind resolves a `text-<name>` that collides with a color token AS
+     A COLOR. It silently emitted `.text-chat { color: var(--chat) }`, no
+     font-size utility was generated at all, and the chat body kept
+     inheriting 16px. Check the color tokens before adding a size here. */
+  --text-micro: 10px; /* uppercase section labels, badges */
+  --text-xs: 12px; /* status bar, timestamps, snippets, tool rows */
+  --text-sm: 13px; /* nav rows, tabs, settings, menus — the default chrome size */
+  --text-md: 14px; /* rendered chat markdown — Obsidian sizes sidebar markdown at 0.9× the editor */
+
   --radius-sm: calc(var(--radius) - 2px); /* 6px — rows/chips */
   --radius-md: var(--radius); /* 8px — buttons */
   --radius-lg: calc(var(--radius) + 1px); /* 9px — inputs/send */
@@ -576,13 +603,16 @@ html, body, #root {
 .chat-markdown h2,
 .chat-markdown h3,
 .chat-markdown h4 { margin: 10px 0 6px; line-height: 1.25; font-weight: 600; }
-.chat-markdown h1 { font-size: 16px; }
-.chat-markdown h2 { font-size: 15px; }
+/* Sizes here are em-relative so they track the transcript's --text-chat body
+   rather than being pinned to it — same reason the editor's code sizes are
+   in em. Ratios chosen against a 14px body: 1.15em ≈ 16px, 1.07em ≈ 15px. */
+.chat-markdown h1 { font-size: 1.15em; }
+.chat-markdown h2 { font-size: 1.07em; }
 .chat-markdown h3,
-.chat-markdown h4 { font-size: 14px; }
+.chat-markdown h4 { font-size: 1em; }
 .chat-markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: 0.875em;
   background: var(--bg-secondary);
   padding: 1px 4px;
   border-radius: 3px;
@@ -593,7 +623,7 @@ html, body, #root {
   background: var(--bg-secondary);
   border-radius: 6px;
   overflow-x: auto;
-  font-size: 12px;
+  font-size: 0.875em;
   line-height: 1.4;
 }
 .chat-markdown pre code {
@@ -612,7 +642,7 @@ html, body, #root {
 .chat-markdown table {
   border-collapse: collapse;
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: 0.875em;
 }
 .chat-markdown th,
 .chat-markdown td {

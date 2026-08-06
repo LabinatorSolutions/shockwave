@@ -40,7 +40,7 @@ export default function TreePanel({
   if (items.length === 0) return null;
   return (
     <div>
-      <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">{title}</div>
+      <div className="px-2 py-1.5 text-micro font-semibold uppercase tracking-[0.09em] text-muted-2">{title}</div>
       {items.map((it) => {
         const editing = renamingPath === it.id;
         return (

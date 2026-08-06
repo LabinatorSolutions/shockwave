@@ -231,7 +231,7 @@ export default function SettingsModal({
                 <div
                   key={`h-${idx}`}
                   className={cn(
-                    'px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2',
+                    'px-3 pb-1.5 text-micro font-semibold uppercase tracking-[0.09em] text-muted-2',
                     idx === 0 ? 'pt-1.5' : 'pt-4',
                   )}
                 >
@@ -248,7 +248,7 @@ export default function SettingsModal({
                 disabled={disabled}
                 title={disabled ? 'Connect to your server first' : undefined}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg px-3 py-[7px] text-left text-[13px] text-foreground/75 hover:bg-accent',
+                  'flex items-center gap-2 rounded-lg px-3 py-[7px] text-left text-sm text-foreground/75 hover:bg-accent',
                   effectiveActive === row.id && 'bg-selected font-medium text-selected-foreground hover:bg-selected',
                   disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent',
                 )}

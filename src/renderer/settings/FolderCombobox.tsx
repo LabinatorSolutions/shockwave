@@ -108,7 +108,7 @@ export default function FolderCombobox({
               role="option"
               aria-selected={f === activeOption}
               className={cn(
-                'cursor-pointer rounded-sm px-2 py-1.5 text-[13px] hover:bg-accent',
+                'cursor-pointer rounded-sm px-2 py-1.5 text-sm hover:bg-accent',
                 f === activeOption && 'bg-accent font-medium'
               )}
               onMouseDown={(e) => { e.preventDefault(); pick(f); }}

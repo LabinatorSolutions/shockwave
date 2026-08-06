@@ -269,7 +269,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
                     <FieldLabel htmlFor="ws-repo">Repository name</FieldLabel>
                     <Input
                       id="ws-repo"
-                      className="font-mono text-[13px]"
+                      className="font-mono text-sm"
                       value={repoNameTouched ? repoName : slugify(name)}
                       onChange={(e) => { setRepoNameTouched(true); setRepoName(e.target.value); }}
                       placeholder="my-notes"
@@ -279,7 +279,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
                       Created under your GitHub account.
                     </FieldDescription>
                   </Field>
-                  <label className="flex items-center gap-2 text-[13px]">
+                  <label className="flex items-center gap-2 text-sm">
                     <Checkbox checked={isPrivate} onCheckedChange={(v) => setIsPrivate(!!v)} />
                     Private repository
                   </label>
@@ -289,7 +289,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
                   <FieldLabel htmlFor="ws-repo-pick">Repository</FieldLabel>
                   <Input
                     id="ws-repo-pick"
-                    className="font-mono text-[13px]"
+                    className="font-mono text-sm"
                     value={repoFilter}
                     onChange={(e) => setRepoFilter(e.target.value)}
                     placeholder={repos === null ? 'Loading…' : 'Filter repositories…'}

@@ -77,7 +77,7 @@ export default function GeneralSection({
       <SettingsDivider />
 
       <SettingsGroup title="Editor">
-        <Label className="gap-2.5 text-[13px] font-normal">
+        <Label className="gap-2.5 text-sm font-normal">
           <Checkbox
             checked={!!hideLineNumbers}
             onCheckedChange={(v) => onHideLineNumbersChange?.(v === true)}
