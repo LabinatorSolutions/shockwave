@@ -568,8 +568,10 @@ contextBridge.exposeInMainWorld('api', {
      *  @returns {Promise<{ ok: boolean, files?: Array<{name: string, purpose: string}>, missing?: string[], error?: string }>} */
     listFiles: (opts) => ipcRenderer.invoke('workspace:listFiles', opts),
     /** Write the default files. Without `overwrite` only missing ones are added;
-     *  with it, all four are replaced by the current defaults (confirm first).
-     *  @param {{ workspacePath: string, overwrite?: boolean }} opts
+     *  with it, they are replaced by the current defaults (confirm first).
+     *  `names` narrows both to a subset of the manifest — how one file is
+     *  restored on its own.
+     *  @param {{ workspacePath: string, overwrite?: boolean, names?: string[] }} opts
      *  @returns {Promise<{ ok: boolean, written?: string[], error?: string }>} */
     ensureFiles: (opts) => ipcRenderer.invoke('workspace:ensureFiles', opts),
   },

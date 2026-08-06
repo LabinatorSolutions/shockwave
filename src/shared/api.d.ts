@@ -489,7 +489,7 @@ export interface ShockwaveApi {
     listFiles(opts: { workspacePath: string }): Promise<{ ok: boolean; files?: Array<{ name: string; purpose: string }>; missing?: string[]; error?: string }>;
     /** Write the defaults. Default fills only what's missing and can't destroy
      *  anything; `overwrite` replaces all of them. */
-    ensureFiles(opts: { workspacePath: string; overwrite?: boolean }): Promise<{ ok: boolean; written?: string[]; error?: string }>;
+    ensureFiles(opts: { workspacePath: string; overwrite?: boolean; names?: string[] }): Promise<{ ok: boolean; written?: string[]; error?: string }>;
   };
 
   sync: {

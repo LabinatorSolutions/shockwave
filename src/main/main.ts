@@ -1884,9 +1884,9 @@ ipcMain.handle('workspace:listFiles', async (_evt, { workspacePath }) => {
   return { ok: true, files: DEFAULT_FILES.map((f) => ({ name: f.name, purpose: f.purpose })), missing };
 });
 
-ipcMain.handle('workspace:ensureFiles', async (_evt, { workspacePath, overwrite = false }) => {
+ipcMain.handle('workspace:ensureFiles', async (_evt, { workspacePath, overwrite = false, names }) => {
   if (!workspacePath) return { ok: false, error: 'That workspace is not set up on this machine.' };
-  const written = await ensureWorkspaceFiles(workspacePath, { overwrite });
+  const written = await ensureWorkspaceFiles(workspacePath, { overwrite, names });
   return { ok: true, written };
 });
 

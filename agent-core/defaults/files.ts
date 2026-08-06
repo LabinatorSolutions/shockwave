@@ -85,6 +85,13 @@ export const DEFAULT_FILES: DefaultFile[] = [
 // tell the user what landed. Best-effort throughout: a write failure must never
 // block workspace setup, so failures are skipped rather than thrown.
 //
+// `names` narrows the write to those entries of the manifest — how the UI
+// restores one file rather than all six. Omit it and the whole manifest is
+// written, which is what every automatic caller wants. A name that isn't in the
+// manifest is ignored rather than an error: the list the caller is choosing from
+// came from DEFAULT_FILES in the first place, and the alternative is a failure
+// mode that only appears when the two are already out of step.
+//
 // `overwrite: false` (the default) writes with 'wx' — fail-if-exists — so a
 // tuned SOUL.md or hand-maintained .gitignore survives. Every automatic caller
 // uses this.
@@ -100,11 +107,13 @@ export const DEFAULT_FILES: DefaultFile[] = [
 // write again; those two are everything the agent has learned.
 export async function ensureWorkspaceFiles(
   workspacePath: string,
-  { overwrite = false }: { overwrite?: boolean } = {},
+  { overwrite = false, names }: { overwrite?: boolean; names?: string[] } = {},
 ): Promise<string[]> {
   if (!workspacePath) return [];
+  const wanted = names?.length ? new Set(names) : null;
   const written: string[] = [];
   for (const file of DEFAULT_FILES) {
+    if (wanted && !wanted.has(file.name)) continue;
     try {
       await fs.writeFile(join(workspacePath, file.name), file.content, overwrite ? undefined : { flag: 'wx' });
       written.push(file.name);

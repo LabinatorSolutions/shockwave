@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FolderOpen, Plus, Trash2, X, FileCog } from 'lucide-react';
+import { FolderOpen, Plus, Trash2, X, FileCog, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import ConfirmDialog from '../ConfirmDialog.jsx';
 import AddWorkspaceDialog from './AddWorkspaceDialog';
@@ -12,6 +12,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import ErrorMessage from '../ErrorMessage.jsx';
@@ -34,6 +37,17 @@ import ErrorMessage from '../ErrorMessage.jsx';
 // aimed at people who already had one. Same mistake the Verify button made
 // (see "Verifying a credential" in settings/CLAUDE.md); anything asking "is
 // this credential set?" asks the presence flag.
+
+// The two default files whose default is EMPTY, so "restore" means "erase".
+// Spelled out here rather than imported from `agent-core/defaults/files.ts`:
+// that module imports `node:fs`, which the renderer has no access to. The
+// whole-set confirmation below already names them in prose for the same reason.
+// If a third memory file is ever added to the manifest, it belongs here too —
+// the cost of missing it is a dialog that promises a restore and performs a
+// deletion.
+const USER_FILE = 'USER.md';
+const MEMORY_FILES = ['MEMORY.md', USER_FILE];
+const isMemoryFile = (name: string) => MEMORY_FILES.includes(name);
 
 export default function WorkspacesSection({
   workspaces,
@@ -58,19 +72,48 @@ export default function WorkspacesSection({
   const [rowError, setRowError] = useState<any>(null);
   const [addOpen, setAddOpen] = useState(false);
 
-  // The workspace default files (SOUL.md, AGENTS.md, .ignore, .gitignore). Both
-  // creation paths seed them; this is the manual half, for workspaces that
-  // predate one being added to the set.
+  // The workspace default files (SOUL.md, AGENTS.md, MEMORY.md, USER.md,
+  // .ignore, .gitignore). Both creation paths seed them; this is the manual
+  // half, for workspaces that predate one being added to the set.
   const [confirmResetWs, setConfirmResetWs] = useState<any>(null);
+  // Restoring ONE file, once we know it's already there and about to be
+  // overwritten: `{ ws, name, purpose }`.
+  const [confirmFile, setConfirmFile] = useState<any>(null);
+  // What the open row's menu is listing. One slot, not a map keyed by
+  // workspace — only one dropdown can be open at a time, and a map would keep
+  // serving a list from whenever that row was last opened.
+  const [fileMenu, setFileMenu] = useState<any>(null);
 
   const target = workspaces.find((w) => w.id === confirmRemoveId) ?? null;
 
-  // `overwrite` replaces all of them; without it only missing ones are written,
-  // so the safe action can't destroy anything and needs no confirm.
-  const writeDefaultFiles = async (ws: any, overwrite: boolean) => {
+  // The manifest is the app's, not the repo's, so the menu is built from what
+  // main reports rather than from anything on disk — `files` is every default
+  // and `missing` is the subset this workspace hasn't got. Read when the menu
+  // opens, so a file restored (or deleted in Finder) since last time is
+  // reflected without a settings reload.
+  const loadFileList = async (ws: any) => {
+    setFileMenu({ id: ws.id, files: null, missing: [] });
+    try {
+      const res = await window.api.workspace.listFiles({ workspacePath: ws.path });
+      if (!res?.ok) {
+        setFileMenu({ id: ws.id, files: [], missing: [], error: res?.error });
+        return;
+      }
+      setFileMenu({ id: ws.id, files: res.files ?? [], missing: res.missing ?? [] });
+    } catch {
+      // Nothing to report here — the menu shows that it couldn't list them, and
+      // the two whole-set actions below it still work.
+      setFileMenu({ id: ws.id, files: [], missing: [] });
+    }
+  };
+
+  // `overwrite` replaces; without it the write is fail-if-exists, so the safe
+  // action can't destroy anything and needs no confirm. `names` narrows both to
+  // part of the manifest — how one file is restored on its own.
+  const writeDefaultFiles = async (ws: any, overwrite: boolean, names?: string[]) => {
     setRowError(null);
     try {
-      const res = await window.api.workspace.ensureFiles({ workspacePath: ws.path, overwrite });
+      const res = await window.api.workspace.ensureFiles({ workspacePath: ws.path, overwrite, names });
       if (!res?.ok) {
         setRowError({ id: ws.id, error: res?.error ?? 'Could not write the default files.' });
         return;
@@ -78,12 +121,27 @@ export default function WorkspacesSection({
       const written = res.written ?? [];
       toast(
         written.length === 0
-          ? `${ws.name} already has every default file.`
-          : `${overwrite ? 'Reset' : 'Added'} ${written.join(', ')} in ${ws.name}.`,
+          ? names?.length
+            ? `${names.join(', ')} is already there in ${ws.name}.`
+            : `${ws.name} already has every default file.`
+          : `${overwrite ? 'Restored' : 'Added'} ${written.join(', ')} in ${ws.name}.`,
       );
     } catch (err: any) {
       setRowError({ id: ws.id, error: err?.message ?? 'Could not write the default files.' });
+    } finally {
+      // The list this menu was built from is now stale about what's missing.
+      setFileMenu(null);
     }
+  };
+
+  // Picking one file out of the submenu. A file that ISN'T there has nothing to
+  // lose, so it's written straight away — and written fail-if-exists rather than
+  // overwriting, so if the list has gone stale in the seconds since it was read
+  // (the agent writes these files too) the worst case is that nothing happens,
+  // not that a live file is replaced without being asked about.
+  const restoreOneFile = (ws: any, file: any) => {
+    if (fileMenu?.missing?.includes(file.name)) { writeDefaultFiles(ws, false, [file.name]); return; }
+    setConfirmFile({ ws, ...file });
   };
 
   // Renames go through the normal settings save — `updateWorkspaces` applies
@@ -144,7 +202,20 @@ export default function WorkspacesSection({
         <div className="min-w-0 flex-1">
           {/* Name is the only editable field. The repo is the workspace's
               identity and the path is where it was cloned — neither is a
-              rename, they'd be a different workspace. */}
+              rename, they'd be a different workspace.
+
+              THE TWO STATES ARE SIZED TO MATCH, which is what these classes are
+              for rather than taste. The resting state was bare text on a 20px
+              line and the input is 28px, so clicking the name grew the row and
+              shunted the path down under it — the click read as having hit
+              something, not as having opened the field that replaced it. Both
+              are `h-7` now with the same padding, and both are pulled left by
+              the same `-mx-2` so the NAME TEXT sits in the same column either
+              way: the field appears around the word instead of moving it. The
+              input compensates for that negative margin in its width (`w-full`
+              would otherwise overflow the row by exactly `mx-2`), and the button
+              carries a transparent border so the input's 1px doesn't nudge the
+              text either. Change one of these and change the other. */}
           {renamingId === ws.id ? (
             <Input
               autoFocus
@@ -156,17 +227,21 @@ export default function WorkspacesSection({
                 if (e.key === 'Enter') commitRename();
                 if (e.key === 'Escape') setRenamingId(null);
               }}
-              className="h-7 text-sm"
+              className="-mx-2 h-7 w-[calc(100%+1rem)] px-2 text-sm"
             />
           ) : (
             <button
               type="button"
-              className="block max-w-full truncate rounded px-1 -mx-1 text-left text-sm font-medium hover:bg-accent"
+              className="group/name -mx-2 flex h-7 max-w-full items-center gap-1.5 rounded-md border border-transparent px-2 text-left text-sm font-medium hover:bg-accent"
               onClick={() => { setRenamingId(ws.id); setRenameDraft(ws.name); }}
               title="Rename"
               aria-label={`Rename ${ws.name}`}
             >
-              {ws.name}
+              <span className="min-w-0 truncate">{ws.name}</span>
+              {/* Dimmed rather than hover-only: a control nobody can see until
+                  they happen to hover it is one most people never find, and
+                  "this name is editable" is not guessable from text alone. */}
+              <Pencil className="size-3 shrink-0 text-muted-foreground opacity-60 transition-opacity group-hover/name:opacity-100" />
             </button>
           )}
           <div className="truncate font-mono text-xs text-muted-2" title={ws.path || ws.repo}>
@@ -224,7 +299,7 @@ export default function WorkspacesSection({
           )}
           {/* Meaningless without a checkout — there's no folder to write to. */}
           {here && (
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={(open) => { if (open) loadFileList(ws); }}>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
@@ -236,13 +311,48 @@ export default function WorkspacesSection({
                   <FileCog />
                 </Button>
               </DropdownMenuTrigger>
+              {/* Safe action first, destructive last — the same order every other
+                  menu in the app uses, and the reason the whole-set restore isn't
+                  sitting where the pointer lands when the menu opens. */}
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onSelect={() => writeDefaultFiles(ws, false)}>
                   Add missing files
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Restore a specific file</DropdownMenuSubTrigger>
+                  {/* Each row carries the file's PURPOSE, because the names alone
+                      don't say what restoring one costs — `.ignore` is a file
+                      nobody would miss and `MEMORY.md` is everything the agent has
+                      learned, and they look equally harmless as a list of names. */}
+                  <DropdownMenuSubContent className="w-72">
+                    {fileMenu?.id !== ws.id || fileMenu.files === null ? (
+                      <DropdownMenuItem disabled>Reading the workspace…</DropdownMenuItem>
+                    ) : fileMenu.files.length === 0 ? (
+                      <DropdownMenuItem disabled>Could not list the default files.</DropdownMenuItem>
+                    ) : (
+                      fileMenu.files.map((f: any) => {
+                        const absent = fileMenu.missing.includes(f.name);
+                        return (
+                          <DropdownMenuItem
+                            key={f.name}
+                            onSelect={() => restoreOneFile(ws, f)}
+                            className="flex-col items-start gap-0.5"
+                          >
+                            <span className="flex w-full items-center justify-between gap-3">
+                              <span className="font-mono text-xs">{f.name}</span>
+                              {absent && <span className="text-xs text-muted-foreground">missing</span>}
+                            </span>
+                            <span className="text-xs text-muted-foreground">{f.purpose}</span>
+                          </DropdownMenuItem>
+                        );
+                      })
+                    )}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={() => setConfirmResetWs(ws)}>
-                  Reset to defaults…
+                  Restore all files…
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -336,10 +446,30 @@ export default function WorkspacesSection({
           // retype — it is everything the agent has learned about them.
           ? `Replace SOUL.md, AGENTS.md, .ignore, and .gitignore in "${confirmResetWs.name}" with the current defaults, and empty MEMORY.md and USER.md — everything the agent has learned about you and this workspace? Any edits you've made are overwritten — committed versions stay in the repo's history, but changes since the last sync are lost.`
           : ''}
-        confirmLabel="Reset files"
+        confirmLabel="Restore all"
         destructive
         onConfirm={() => { writeDefaultFiles(confirmResetWs, true); setConfirmResetWs(null); }}
         onClose={() => setConfirmResetWs(null)}
+      />
+
+      {/* Restoring ONE file asks separately, because the answer is genuinely
+          different per file — and for two of them the word "restore" is wrong
+          about what happens. `.ignore` is app boilerplate nobody edits; SOUL.md
+          is usually tuned by hand; MEMORY.md and USER.md have a BLANK default,
+          so restoring them is an erase, and a dialog that said "replace with the
+          default" would be technically true and completely misleading. */}
+      <ConfirmDialog
+        open={!!confirmFile}
+        title={confirmFile && isMemoryFile(confirmFile.name) ? `Empty ${confirmFile.name}` : `Restore ${confirmFile?.name ?? ''}`}
+        message={confirmFile
+          ? isMemoryFile(confirmFile.name)
+            ? `Empty ${confirmFile.name} in "${confirmFile.ws.name}"? This file starts blank, so restoring it erases ${confirmFile.name === USER_FILE ? 'everything the agent has learned about you' : 'everything the agent has learned about working here'}. The committed version stays in the repo's history, but anything learned since the last sync is lost.`
+            : `Replace ${confirmFile.name} in "${confirmFile.ws.name}" with the app's default? Any edits you've made to it are overwritten — the committed version stays in the repo's history, but changes since the last sync are lost.`
+          : ''}
+        confirmLabel={confirmFile && isMemoryFile(confirmFile.name) ? 'Empty it' : 'Restore it'}
+        destructive
+        onConfirm={() => { writeDefaultFiles(confirmFile.ws, true, [confirmFile.name]); setConfirmFile(null); }}
+        onClose={() => setConfirmFile(null)}
       />
 
       <AddWorkspaceDialog
