@@ -18,11 +18,11 @@ Want to learn to build apps like this? Join the **[AI Architects](https://skool.
 
 Get it all out of your head, ideas, projects, due dates. The agent keeps it in order for you, so you never sit down to a pile of notes that needs processing. And because everything's in one place, the agent can use it and even complete the work for you.
 
-### 🧬 Easy to install and use but with all the cool features
+### 🧬 It Learns You — Memory and self-improvement, built in
 
-Everything the power tools give you (like Hermes) — memory, self-improvement — without the complicated setup that comes with them.
+Everything the power tools give you — memory, self-improvement — and it keeps learning how you work.
 
-### 🛰 Close the laptop. It keeps working.
+### 🛰 Always On — Close the laptop. It keeps working.
 
 Create work for the agent, then close the laptop and the work keeps getting done without you. And you can also pick up where you left off on any other device, even on your phone.
 
@@ -34,8 +34,6 @@ Most notes apps charge you to sync across devices — we use GitHub instead. It 
 
 ## Install
 
-Three steps, about fifteen minutes.
-
 ### 1. Download the app
 
 | Platform | Download |
@@ -43,6 +41,8 @@ Three steps, about fifteen minutes.
 | **macOS** (Apple Silicon) | [Shockwave-mac.dmg](https://github.com/stephengpope/shockwave/releases/latest/download/Shockwave-mac.dmg) |
 | **Windows** | [Shockwave-windows.exe](https://github.com/stephengpope/shockwave/releases/latest/download/Shockwave-windows.exe) |
 | **Linux** | [Shockwave-linux.AppImage](https://github.com/stephengpope/shockwave/releases/latest/download/Shockwave-linux.AppImage) |
+
+Not signed yet, so you get one warning the first time: macOS right-click → **Open**, Windows **More info → Run anyway**, Linux `chmod +x` the AppImage.
 
 ### 2. Start your server
 
@@ -62,16 +62,7 @@ It asks a few questions. Press Enter through them if you're not sure — the def
 | **GitHub Sync** | a [GitHub token](https://github.com/settings/personal-access-tokens) — this is what makes syncing free |
 | **Agent Chat** | a model provider, and that provider's API key |
 
-Then add a workspace and you're going. The app shows a dot on the settings gear until all three pages are done, so you can always see what's left.
-
-### Notes
-
-- **First launch** — the builds aren't signed yet, so you get a one-time warning. macOS: right-click → **Open**, or `xattr -cr /Applications/Shockwave.app`. Windows: **More info → Run anyway**. Linux: `chmod +x` the AppImage first.
-- **git** — a workspace is a GitHub repo checked out locally, so the app needs `git` on your PATH. Most systems have it. If not, the app shows you how to get it.
-- **The fingerprint** — if you skipped the domain, the app asks you to approve the server's certificate. Check it matches what the installer printed. That one comparison is what makes the connection yours and not someone else's.
-- **GitHub token** — needs `Contents: Read and write`, plus `Administration: Write` if you want the app to create repos for you.
-- **Ports** — 80 and 443 have to be reachable, which usually means opening them in your VPS provider's firewall too.
-- **Installer options** — `--yes` skips the questions, `--domain=` gives you a real certificate and no fingerprint to approve, plus `--cert-email=` and `--no-firewall`.
+Then add a workspace and you're going. Each page tells you what it wants, and a dot on the settings gear stays until all three are done.
 
 ---
 
@@ -89,7 +80,9 @@ shockwave rotate-cert    # replace the certificate
 
 When the server falls behind the app, the app offers to update it for you — one click, nothing to log into. Re-running the install command does the same from the server side. Either way your data and secrets are left alone.
 
-If it stops responding it should recover on its own: containers restart on crash, on reboot, and when a health check notices the API has gone quiet. `shockwave check` says which part is unhappy.
+If it stops responding it should recover on its own: containers restart on crash, on reboot, and when a health check notices the API has gone quiet. `shockwave check` says which part is unhappy — most often it's ports 80 and 443 still closed in the VPS provider's firewall.
+
+Point a domain at the box and re-run the install command with `--domain=notes.example.com --cert-email=you@example.com` to swap the self-signed certificate for a real one.
 
 ---
 
