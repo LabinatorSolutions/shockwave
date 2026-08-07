@@ -77,15 +77,27 @@ const FIRST_PIECE_CHARS = 50;
  *
  * Without it the floor for the opener is `MIN_PIECE_CHARS` against a budget of 50,
  * i.e. 25 characters — five above the shortest clip permitted anywhere. Replies
- * opening with a short sentence hit that constantly ("Yes, that's the problem." is
- * 24), and a 24-character opener buffers 1.4s, which gives the second piece a
- * 37-character budget, which buffers barely more. Measured over nine real-shaped
- * replies, that compounding cost a whole extra bubble on a third of them.
+ * opening with a short sentence hit that constantly ("Here's where the deploy
+ * stands." is 31), and a 31-character opener buffers under two seconds, which gives
+ * the second piece a small budget, which buffers barely more. **The ladder never
+ * gets going, and the cost lands on LONG replies** — the ones with the most pieces
+ * to get wrong. Measured on a 1,093-character answer: six voice notes at 30, four
+ * at 60. At 2,398 characters it is seven against five.
  *
- * 30 and not more because the plateau is flat: every value from 30 to 50 produced
- * the identical split, and the existing clause-break test opens with 34 characters.
+ * **This is the knob for "fewer, longer voice notes", and the only honest one.**
+ * The ladder above sizes every later piece from how long this one PLAYS, so raising
+ * it lifts the whole curve; nothing downstream can be dialled directly, because
+ * piece lengths land wherever a sentence ends.
+ *
+ * 60 is a chosen point on a real trade, not a plateau. It is paid for in the one
+ * wait nothing covers — on that same long answer the first voice note goes from
+ * 1.5s to 3.8s, and averaged over eleven replies 3.4s to 4.5s. Going further keeps
+ * buying pieces at a worsening rate: 150 gets that answer to three notes but takes
+ * the average first sound to 5.6s, which is long enough to read as nothing having
+ * happened. Dead air stays at zero across all of them — this trades against the
+ * opening wait, never against a gap mid-answer.
  */
-const FIRST_PIECE_MIN = 30;
+const FIRST_PIECE_MIN = 60;
 
 /**
  * Below this, a script is spoken as ONE piece. A twelve-second answer split into

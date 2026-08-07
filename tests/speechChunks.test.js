@@ -92,7 +92,7 @@ test('the opener is never a runt, whatever break is on offer', () => {
   const rambling = `Done. ${'and then it kept going on '.repeat(20)}finally.`;
   for (const script of [`So: ${sentences(30)}`, `Yes. ${sentences(30)}`, rambling]) {
     const first = splitForSpeech(script, null)[0];
-    assert.ok(first.length >= 30, `runt opener: ${JSON.stringify(first)}`);
+    assert.ok(first.length >= 60, `runt opener: ${JSON.stringify(first)}`);
   }
 });
 
