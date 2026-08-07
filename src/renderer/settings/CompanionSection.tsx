@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { useCommitField, useCredentialField } from './useCommitField';
 import CredentialRow from './CredentialRow';
 import CompanionUpdateDialog from '../CompanionUpdateDialog.jsx';
+import type { CompanionState } from '../../shared/api';
 
 // The desktop's connection to the Shockwave companion (server URL + API key).
 // Every other settings page reads/writes through this connection. The modal's
@@ -39,7 +40,7 @@ type Status = 'idle' | 'checking' | 'connected' | 'failed' | 'needsApproval';
 
 interface CertInfo { host: string; approved: string | null; offered: string }
 
-export default function CompanionSection() {
+export default function CompanionSection({ version = null }: { version?: CompanionState['version'] }) {
   const [storedUrl, setStoredUrl] = useState('');
   const [hasStoredKey, setHasStoredKey] = useState(false);
   const [status, setStatus] = useState<Status>('idle');
@@ -60,14 +61,16 @@ export default function CompanionSection() {
   // they like — not only during first setup. Empty when the server has a
   // publicly-trusted certificate, since then nothing is pinned.
   const [approvedFp, setApprovedFp] = useState('');
-  // Companion-vs-desktop version check. Runs after a successful connection: the
-  // two are cut from the same release tag, so a mismatch means one side is stale.
-  const [verCheck, setVerCheck] = useState<{ status: string; desktop?: string; companion?: string } | null>(null);
+  // The version arrives as a PROP — this page does not check for itself.
+  //
+  // It used to own a probe (`apiCheckVersion`) that ran on every successful
+  // connect and was cleared on every edit, alongside a separate boot check in
+  // App.tsx and a third in main. Three lifetimes, one server: the page could
+  // show "up to date" while the toast said otherwise, and whichever answer you
+  // happened to be looking at was the one you believed. Main now classifies once
+  // per feed open and pushes it; everything reads that. See "Connection state"
+  // in src/main/CLAUDE.md.
   const [updateOpen, setUpdateOpen] = useState(false);
-
-  const refreshVersionCheck = () => {
-    window.api.settings.apiCheckVersion().then(setVerCheck).catch(() => setVerCheck(null));
-  };
 
   // Only the newest probe may publish. Press Connect twice, or edit a field
   // mid-probe, and a slower earlier reply must not overwrite a newer result.
@@ -81,7 +84,6 @@ export default function CompanionSection() {
     setStatus('idle');
     setMessage(msg);
     setCert(null);
-    setVerCheck(null); // it described the connection we just dropped
   }, []);
 
   // Probe. Reports only — it cannot approve a certificate.
@@ -101,7 +103,6 @@ export default function CompanionSection() {
         setStatus('connected'); setMessage(''); setCert(null);
         // Re-read: an approval that just happened changes what's stored.
         window.api.settings.apiRead().then((c) => setApprovedFp(c.certFingerprint || '')).catch(() => {});
-        refreshVersionCheck();
       } else if (r.certNeedsApproval) {
         setStatus('needsApproval'); setMessage(''); setCert(r.certNeedsApproval);
       } else {
@@ -203,24 +204,26 @@ export default function CompanionSection() {
     >
       <SettingsGroup>
         {/* Version mismatch rides at the top of the page, not down by Connect.
-            It only ever renders while connected (`disconnect` clears verCheck),
-            but it's the one thing here that needs doing rather than setting up
-            once — below the fields and the status row it was missed. */}
-        {verCheck?.status === 'companion-older' && (
-          <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+            While it's showing, this is the ONLY page the modal will let you onto
+            (the gate in SettingsModal), so it is both the first thing here that
+            needs doing and the reason everything else is unreachable — below the
+            fields and the status row it was missed. */}
+        {version?.status === 'companion-older' && (
+          <div className="flex items-center justify-between rounded-lg border border-destructive px-3 py-2.5">
             <div className="text-sm">
-              Update available — companion <span className="font-mono">{verCheck.companion}</span> →{' '}
-              <span className="font-mono">v{String(verCheck.desktop ?? '').replace(/^v/, '')}</span>
+              Your server is on <span className="font-mono">{version.companion}</span>, this app is on{' '}
+              <span className="font-mono">v{String(version.desktop ?? '').replace(/^v/, '')}</span>. Nothing saves until they match.
             </div>
             <Button type="button" size="sm" variant="outline" onClick={() => setUpdateOpen(true)}>
-              Update companion
+              Update server
             </Button>
           </div>
         )}
-        {verCheck?.status === 'companion-newer' && (
-          <p className="text-xs text-muted-foreground">
-            Companion ({verCheck.companion}) is newer than this app — update the desktop app.
-          </p>
+        {version?.status === 'companion-newer' && (
+          <div className="rounded-lg border border-destructive px-3 py-2.5 text-sm">
+            Your server ({version.companion}) is ahead of this app — update Shockwave from the Updates page.
+            Nothing saves until they match.
+          </div>
         )}
 
         <Field>
@@ -299,18 +302,17 @@ export default function CompanionSection() {
           {/* What's actually running over there. It used to surface ONLY as a
               mismatch prompt, so the common case — the two agree — showed no
               version at all, and "is my server current?" had no answer on the
-              page that owns the server. Read from the same `verCheck` the
-              mismatch rows use, so there is one version fact and it can't
-              disagree with itself.
+              page that owns the server. Same `version` the mismatch rows above
+              read, so there is one version fact and it can't disagree with
+              itself.
 
-              Ephemeral by construction: `verCheck` is component state and this
-              section is conditionally mounted, so leaving the page drops it and
-              a stale version can never outlive the connection it described —
-              the same reason `disconnect` clears it. */}
-          {status === 'connected' && verCheck?.companion && (
+              It cannot outlive the connection it describes: main clears the
+              version the moment the companion goes offline, so an unreachable
+              server shows none rather than the last one it happened to have. */}
+          {status === 'connected' && version?.companion && (
             <p className="mt-1 text-muted-foreground">
-              Running <span className="font-mono">{verCheck.companion}</span>
-              {verCheck.status === 'match' && <> &mdash; up to date</>}
+              Running <span className="font-mono">{version.companion}</span>
+              {version.status === 'match' && <> &mdash; up to date</>}
             </p>
           )}
 
@@ -393,8 +395,8 @@ export default function CompanionSection() {
       <CompanionUpdateDialog
         open={updateOpen}
         onClose={() => setUpdateOpen(false)}
-        desktop={verCheck?.desktop}
-        companion={verCheck?.companion}
+        desktop={version?.desktop}
+        companion={version?.companion}
       />
     </SettingsSection>
   );

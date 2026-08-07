@@ -70,3 +70,22 @@ export const SUPPORTED_PROVIDER_SLUGS = Object.freeze([
 ] as const);
 
 export const DEFAULT_PROVIDER_SLUG = 'anthropic';
+
+// ── Is the desktop/companion pair unusable? ─────────────────────────────────
+// ONE declaration, for the same reason `agent-core/credentials.ts` is one: the
+// answer is read on both sides of the IPC boundary — main latches it to arm the
+// write kill switch (`setStaleCompanion` in `api/client.ts`), the renderer reads
+// it for the toast, the sidebar icon, the settings gate and the chat composer —
+// and every reader must agree. It briefly existed as three inline comparisons,
+// which is three chances to spell one of the two statuses wrong and get a UI
+// that says everything is fine while every write is being refused.
+//
+// **Only a REAL mismatch counts.** 'dev' means either side is unversioned — a
+// local companion reports `APP_VERSION='dev'` — so treating it as stale would
+// block every write in every development session, on a machine that runs both a
+// packaged and a dev install. 'match' and a null status (unreachable, or the
+// first probe hasn't answered yet) are likewise fine: not knowing is not a
+// reason to refuse, and an unreachable server fails at the transport anyway.
+export function isCompanionStale(status) {
+  return status === 'companion-older' || status === 'companion-newer';
+}

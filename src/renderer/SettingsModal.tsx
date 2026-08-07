@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import CompanionSection from './settings/CompanionSection.jsx';
 import TelegramSection from './settings/TelegramSection.jsx';
-import { SETTINGS_SECTIONS } from './constants.js';
+import { SETTINGS_SECTIONS, isCompanionStale } from './constants.js';
 import { CheckCircleIcon } from './Icons.jsx';
 import {
   Dialog,
@@ -22,6 +22,7 @@ import TemplatesSection from './settings/TemplatesSection.jsx';
 import VoiceSection from './settings/VoiceSection.jsx';
 import UpdatesSection from './settings/UpdatesSection.jsx';
 import AdvancedSection from './settings/AdvancedSection.jsx';
+import type { CompanionState } from '../shared/api';
 
 // Sidebar layout: section headers group related items. Header rows are
 // non-interactive labels; item rows are the actual nav buttons. To add a new
@@ -140,7 +141,11 @@ export default function SettingsModal({
   saveStatus,
   setupStatus,
   companionOnline = true,
+  companionVersion = null as CompanionState['version'],
 }) {
+  // Derived, never stored: main clears the version when the companion goes away,
+  // so there is one place this can be answered from and it can't go stale.
+  const companionStale = isCompanionStale(companionVersion?.status);
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
 
   // This modal is PERMANENTLY MOUNTED and driven by `open` (see the Dialog
@@ -164,7 +169,13 @@ export default function SettingsModal({
   // backing off (up to 30s) after a successful Connect, so the nav sat disabled
   // beside a green "Connected" row. And it gated on draft edits, which is
   // wrong — other pages talk to the stored config, not the boxes.
-  const gated = !companionOnline;
+  // A version mismatch gates for the same reason unreachable does, and it is the
+  // same gate rather than a second one: main refuses every write while the two
+  // sides disagree, so each field on every other page would accept an edit and
+  // silently fail to store it. Pinning to the Companion page is also where the
+  // fix lives, which is what makes gating proportionate here — the user can't
+  // proceed, and the button is in front of them.
+  const gated = !companionOnline || companionStale;
   const effectiveActive = gated && !UNGATED_SECTIONS.includes(active)
     ? SETTINGS_SECTIONS.COMPANION
     : active;
@@ -270,7 +281,7 @@ export default function SettingsModal({
         </nav>
         <div className="min-w-0 flex-1 overflow-y-auto">
           {effectiveActive === SETTINGS_SECTIONS.COMPANION && (
-            <CompanionSection />
+            <CompanionSection version={companionVersion} />
           )}
           {effectiveActive === SETTINGS_SECTIONS.GENERAL && (
             <GeneralSection

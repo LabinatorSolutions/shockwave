@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, CloudOff } from 'lucide-react';
+import { Check, CloudOff, CircleArrowUp } from 'lucide-react';
 import { GearIcon, ChevronDownIcon } from './Icons.jsx';
 import {
   DropdownMenu,
@@ -10,16 +10,27 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 
-// The companion being unreachable is a STATE, not an event: it lasts until the
-// server comes back, so it gets a persistent indicator here rather than a toast
-// that scrolls away. It sits next to the gear because the only thing a user can
-// do about it lives one click away, on Settings → Companion.
+// Two things about the companion are STATES, not events — they last until
+// something is done about them, so they get a persistent indicator here rather
+// than a toast that scrolls away. Both sit next to the gear because the only
+// thing a user can do about either lives one click away, in Settings.
 //
-// Deliberately not an error color, and deliberately not a modal. A dropped
-// request means the server is away — not that the settings on this page are
-// wrong — and telling the user to go fix their configuration invites them to
-// retype a URL or key that was correct all along. Amber matches the sync icon's
-// `offline` state, which is the same "away, retrying" fact about the same server.
+//  - **Unreachable** → `CloudOff`. The server is away; nothing is wrong with the
+//    settings on that page, so this must never open a modal or invite the user
+//    to retype a URL and key that were correct all along.
+//  - **Version mismatch** → `CircleArrowUp`. The server is up and answering, but
+//    it and this app are on different releases, so main is refusing every write
+//    until they match. A separate icon because it is a separate fact with a
+//    separate fix — reusing the cloud would say "away" about a server that is
+//    plainly there.
+//
+// They are mutually exclusive by construction: main clears the version the
+// moment the companion goes offline, because a server we can't reach is one
+// whose version we no longer know.
+//
+// **Toast announces, icon holds.** Both conditions also raise a toast in
+// `App.tsx`; the toasts are dismissible and these are not, which is the whole
+// point of having both — the news can be waved away, the state can't be lost.
 export default function WorkspaceSelector({
   workspaces,
   activeWorkspaceId,
@@ -27,6 +38,7 @@ export default function WorkspaceSelector({
   onManage,
   onOpenSettings,
   companionOnline = true,
+  companionStale = false,
   onOpenCompanion,
   needsSetup = false,
 }) {
@@ -82,12 +94,22 @@ export default function WorkspaceSelector({
       <div className="flex shrink-0 items-center gap-0.5">
         {!companionOnline && (
           <button
-            className="flex size-[26px] items-center justify-center rounded-[7px] text-amber-500 hover:bg-accent"
+            className="flex size-[26px] items-center justify-center rounded-[7px] text-destructive hover:bg-accent"
             onClick={onOpenCompanion}
             title="Can't reach your companion server — settings, workspaces, and chats won't update until it's back. Click to review the connection."
             aria-label="Companion server unreachable. Review the connection"
           >
             <CloudOff className="size-[15px]" />
+          </button>
+        )}
+        {companionOnline && companionStale && (
+          <button
+            className="flex size-[26px] items-center justify-center rounded-[7px] text-destructive hover:bg-accent"
+            onClick={onOpenCompanion}
+            title="Your server and this app are on different versions — chats and settings won't save until they match. Click to fix it."
+            aria-label="Companion server version mismatch. Update to fix"
+          >
+            <CircleArrowUp className="size-[15px]" />
           </button>
         )}
         {/* The gear carries the dot as well as the pages inside it. Without

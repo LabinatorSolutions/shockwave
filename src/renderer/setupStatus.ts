@@ -18,7 +18,7 @@
 //
 // Reachability is likewise NOT a badge. The companion goes away with the wifi
 // and comes back; a dot that blinks on and off teaches people to ignore dots.
-// That case is the amber cloud in the sidebar footer.
+// That case is the red cloud in the sidebar footer, plus a toast on the drop.
 
 /** The one provider that authenticates by URL rather than an API key. */
 export const COMPATIBLE_PROVIDER = 'openai-compatible';

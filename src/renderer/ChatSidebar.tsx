@@ -708,7 +708,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   );
 }
 
-const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets, onOpenVoiceSettings, chatSources, onChatSourcesChange }, ref) {
+const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets, onOpenVoiceSettings, chatSources, onChatSourcesChange, companionStale = false }, ref) {
   // All chat state (transcripts, running flags, drafts, counters) lives in
   // chatStore — OUTSIDE this component — so background chats keep streaming
   // and nothing is lost when the sidebar collapses (unmount) or the workspace
@@ -729,7 +729,16 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   // Running on another machine → this composer is frozen (single writer per turn).
   // It unfreezes when that turn ends (agent_end clears the run's machine).
   const remoteMachine = chatStore.remoteMachineOf(chat);
-  const frozen = !!remoteMachine;
+  // A version mismatch freezes it too, and for a blunter reason: main refuses
+  // every write to the companion while the two sides disagree, and a chat turn
+  // is nothing BUT writes — the message row, the transcript, the run flag, each
+  // streamed event. Left open, a turn would run, look normal, and store none of
+  // itself. Refusing at the composer is the same bargain as the remote-run
+  // freeze: nothing starts that can't finish.
+  const frozen = !!remoteMachine || companionStale;
+  const frozenReason = remoteMachine
+    ? `Running on ${remoteMachine}…`
+    : 'Your server needs updating before chats can run';
   // What the SPINNER shows, which is not the same question as `running`: a
   // remote turn is only observable while the feed carrying it is alive, and a
   // claim we can no longer see must not be drawn as live. See `isWorking`.
@@ -1266,7 +1275,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           ref={textareaRef}
           className="max-h-44 w-full resize-none bg-transparent font-chat text-md leading-normal text-foreground outline-none placeholder:text-muted-2 disabled:opacity-50"
           value={input + (partialText ? (input && !input.endsWith(' ') ? ' ' : '') + partialText : '')}
-          placeholder={frozen ? `Running on ${remoteMachine}…` : 'Ask the agent…'}
+          placeholder={frozen ? frozenReason : 'Ask the agent…'}
           disabled={frozen}
           onChange={(e) => { setInput(e.target.value); setPartialText(''); }}
           onKeyDown={onKeyDown}
@@ -1353,7 +1362,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               className="flex size-[29px] items-center justify-center rounded-[9px] bg-primary text-primary-foreground hover:bg-primary-hover disabled:pointer-events-none disabled:opacity-40"
               onClick={onSend}
               disabled={frozen || (!input.trim() && !partialText.trim() && attachments.length === 0) || !workspacePath}
-              title={frozen ? `Running on ${remoteMachine}` : working ? 'Send (steers the running response)' : 'Send'}
+              title={frozen ? frozenReason : working ? 'Send (steers the running response)' : 'Send'}
               aria-label="Send"
             ><PlayIcon size={14} /></button>
           </div>

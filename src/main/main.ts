@@ -55,7 +55,7 @@ import {
   onCertNeedsApproval, readServerCert, getPendingCert, hostOf,
 } from './api/net.js';
 import os from 'node:os';
-import { api } from './api/client.js';
+import { api, setStaleCompanion } from './api/client.js';
 import { classifyVersions } from './versionCompare.js';
 import { readLocalSettings, patchLocalSettings } from './api/localSettings.js';
 import {
@@ -87,6 +87,7 @@ import {
   FOLDER_ACTIONS,
   EDITOR_ACTIONS,
   SUPPORTED_PROVIDER_SLUGS as SUPPORTED_PROVIDER_SLUGS_LIST,
+  isCompanionStale,
 } from '../shared/constants';
 
 const SUPPORTED_PROVIDER_SLUGS = new Set(SUPPORTED_PROVIDER_SLUGS_LIST);
@@ -1050,7 +1051,7 @@ ipcMain.handle('api:write', (_evt, patch) => {
 
 // Asked once on load: the push below can fire before the window is listening,
 // same reason `api:pendingCert` exists.
-ipcMain.handle('companion:getState', () => ({ online: companionOnline }));
+ipcMain.handle('companion:getState', () => ({ online: companionOnline, version: companionVersion }));
 // Probe the connection. This NEVER approves anything — it only reports. A
 // certificate the app held on comes back as `certNeedsApproval` for the user to
 // look at; `approved: null` means this server has never been approved here.
@@ -1093,19 +1094,15 @@ ipcMain.handle('api:test', async (_evt, { url, apiKey }) => {
   return { ok: false, error: 'Could not reach the server with that URL and key.' };
 });
 
-// ── Companion version check + remote upgrade ────────────────────────────────
+// ── Remote companion upgrade ────────────────────────────────────────────────
 // The desktop and the companion image are cut from the same release tag, so
-// `app.getVersion()` is the upgrade target. 'companion-older' is the only
-// status that offers an upgrade; 'companion-newer' means THIS desktop is the
-// stale side (electron-updater's problem, not ours).
-ipcMain.handle('api:checkVersion', async () => {
-  const c = readApiConfig();
-  if (!c.url || !c.apiKey) return { status: 'unconfigured' };
-  const h = await api.health(c.url, c.apiKey);
-  if (!h.ok) return { status: 'unreachable' };
-  const desktop = app.getVersion();
-  return { status: classifyVersions(desktop, h.version), desktop, companion: h.version };
-});
+// `app.getVersion()` is the upgrade target. The CLASSIFICATION lives in
+// `onFeedOpen` (one probe, one latch, pushed on `companion:state`) — there is
+// deliberately no `api:checkVersion` for a caller to ask on its own.
+//
+// This must stay callable at ANY version, in either direction: it is the way
+// out of a mismatch, so it can't be behind the switch the mismatch throws.
+// `api.triggerUpdate` bypasses `request()` for exactly that reason.
 ipcMain.handle('api:upgradeCompanion', async () => {
   const tag = `v${app.getVersion()}`;
   const r = await api.triggerUpdate(tag);
@@ -2304,12 +2301,44 @@ async function refreshCompanionData(attempt = 0) {
   refreshRetry = setTimeout(() => void refreshCompanionData(attempt + 1), delay);
 }
 
+// ── The companion version, latched ──────────────────────────────────────────
+// ONE fact, ONE writer, and every reader — the toast, the sidebar icon, the
+// settings gate, the Companion page's version rows, the write guard — reads it
+// rather than asking for itself. There used to be three independent checks
+// (a boot probe in App.tsx, the Companion page's own probe, and this one) with
+// three lifetimes, which is three answers free to disagree about one server.
+//
+// It can only change when the companion RESTARTS, and a restart drops the feed —
+// so the feed opening is a complete trigger, and nothing here polls.
+let companionVersion: { status: string; desktop?: string; companion?: string } | null = null;
+
+function pushCompanionState() {
+  const payload = { online: companionOnline, version: companionVersion };
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('companion:state', payload);
+  }
+}
+
+// The kill switch trips on a REAL mismatch and nothing else. 'dev' (either side
+// unparseable — a local companion is literally APP_VERSION='dev'), 'match', and
+// not-yet-known all read as fine. Getting this backwards bricks every dev
+// session, and there are two installs on this machine to get it wrong on.
+function setCompanionVersion(next: typeof companionVersion) {
+  companionVersion = next;
+  setStaleCompanion(isCompanionStale(next?.status));
+  pushCompanionState();
+}
+
 function setCompanionOnline(online: boolean) {
   if (companionOnline === online) return; // edge-triggered: reconnect churn is not news
   companionOnline = online;
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('companion:state', { online });
-  }
+  // Losing the companion means we no longer KNOW what it's running, so the
+  // version goes with it — which is also what keeps the upgrade quiet: while the
+  // companion is restarting into its new image the user sees the offline cloud
+  // and nothing else, instead of a version warning stacked on top of it. The
+  // reconnect re-classifies and either clears the toast or brings it back.
+  if (!online) setCompanionVersion(null);
+  else pushCompanionState();
   // Going online is the refresh. Going offline pushes NOTHING but the flag: a
   // degraded read returns an empty workspace list, and broadcasting that would
   // clear the renderer's good copy, which is the bug this exists to fix.
@@ -2384,20 +2413,28 @@ function startLiveFeed() {
   }
 }
 
-// The upgrade tag this session asked the companion to install, if any. The
-// feed reconnects for lots of reasons (sleep/wake, network blips); only when
-// this is set does a version match after a reconnect mean "the upgrade you
-// started just landed" — worth a toast. In-memory only: quit before the server
-// returns and the normal boot check reports the outcome instead.
+// The upgrade tag this session asked the companion to install, if any. A match
+// after a reconnect only means "the upgrade you started just landed" when the
+// user actually started one — the feed reconnects for lots of reasons, and
+// every boot onto a matching pair would otherwise announce an update nobody
+// asked for. In-memory only: quit before the server returns and the next launch
+// simply finds them matching, with nothing to report.
 let pendingUpgradeTag: string | null = null;
 
+// THE version probe — the only one in the app. It runs on every feed open,
+// which covers every moment the answer can have changed: boot, any reconnect
+// (including the companion coming back from its own upgrade restart), and
+// Settings → Connect, which tears the feed down and starts it again. No timer,
+// no polling, no second caller.
 async function onFeedOpen() {
-  if (!pendingUpgradeTag) return;
   try {
     const c = readApiConfig();
     if (!c.url || !c.apiKey) return;
     const h = await api.health(c.url, c.apiKey);
-    if (h.ok && h.version && classifyVersions(app.getVersion(), h.version) === 'match') {
+    if (!h.ok) return; // the feed says otherwise; keep the last answer rather than invent one
+    const status = classifyVersions(app.getVersion(), h.version);
+    setCompanionVersion({ status, desktop: app.getVersion(), companion: h.version });
+    if (pendingUpgradeTag && status === 'match') {
       pendingUpgradeTag = null;
       for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed()) w.webContents.send('api:companionUpdated', { version: h.version });

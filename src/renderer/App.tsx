@@ -6,6 +6,7 @@ import GraphView from './GraphView.jsx';
 import MediaView, { mediaKind, isOpenable, isDrawing, isMarkdown, isTextFile } from './MediaView';
 import DrawingView from './DrawingView';
 import type { DrawingViewHandle } from './DrawingView';
+import type { CompanionState } from '../shared/api';
 import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from './renameOps.js';
 import { decideLoad } from './loadDecision.js';
 import TabStrip from './TabStrip.jsx';
@@ -27,7 +28,7 @@ import JournalDatePicker from './JournalDatePicker.jsx';
 import QuickSearch from './QuickSearch.jsx';
 import { basenameOf, dirOf, toRelPath } from './pathUtils';
 import { cn } from '@/lib/utils';
-import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, VIEW_MODES, SAVE_STATES, TREE_SORT_ORDERS, FILE_ACTIONS } from './constants.js';
+import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, VIEW_MODES, SAVE_STATES, TREE_SORT_ORDERS, FILE_ACTIONS, isCompanionStale } from './constants.js';
 import SortBar from './SortBar.jsx';
 import TreePanel from './TreePanel.jsx';
 import { openFileContextMenu } from './fileContextMenu.js';
@@ -217,6 +218,14 @@ export default function App() {
   // empty state has to say so. Seeded true so the first paint isn't a flash of
   // "unreachable" before main answers.
   const [companionOnline, setCompanionOnline] = useState(true);
+  // What the companion is running, as classified by main. Null = not known
+  // (unreachable, or the first probe hasn't answered) — never a guess.
+  const [companionVersion, setCompanionVersion] = useState<CompanionState['version']>(null);
+  // Derived every render rather than stored, so it can't fall out of step with
+  // the value main pushed. This is the whole of the renderer's version logic:
+  // the toast, the sidebar icon, the settings gate and the chat composer all
+  // read this one boolean.
+  const companionStale = isCompanionStale(companionVersion?.status);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const sidebarWidthRef = useRef(260);
   const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
@@ -332,32 +341,23 @@ export default function App() {
   useEffect(() => {
     let alive = true;
     window.api.settings.companionState()
-      .then((s) => { if (alive) setCompanionOnline(!!s?.online); })
+      .then((s) => { if (!alive) return; setCompanionOnline(!!s?.online); setCompanionVersion(s?.version ?? null); })
       .catch(() => {});
-    const off = window.api.settings.onCompanionState(({ online }) => setCompanionOnline(!!online));
+    const off = window.api.settings.onCompanionState(({ online, version }) => {
+      setCompanionOnline(!!online);
+      setCompanionVersion(version ?? null);
+    });
     return () => { alive = false; off(); };
   }, []);
 
-  // Companion-version boot check — once per app run. A companion behind this
-  // desktop opens the update dialog; a companion AHEAD means this desktop is
-  // the stale side (electron-updater's job), so just say so. dev/match/
-  // unreachable/unconfigured stay silent.
   const [companionUpdate, setCompanionUpdate] = useState<{ desktop?: string; companion?: string } | null>(null);
   useEffect(() => {
-    let alive = true;
-    window.api.settings.apiCheckVersion().then((r) => {
-      if (!alive) return;
-      if (r.status === 'companion-older') setCompanionUpdate({ desktop: r.desktop, companion: r.companion });
-      else if (r.status === 'companion-newer') {
-        toast.info('Companion is newer than this app', { description: 'Update the desktop app to match your companion server.' });
-      }
-    }).catch(() => {});
     // A requested upgrade landing (main sees the feed reconnect on the new
     // version) — the async completion signal for CompanionUpdateDialog.
     const off = window.api.settings.onCompanionUpdated(({ version }) => {
-      toast.success('Companion updated', { description: `Now on ${version}.` });
+      toast.success('Server updated', { description: `Now on ${version}.` });
     });
-    return () => { alive = false; off(); };
+    return off;
   }, []);
 
   // Live ref to the active file's absolute path. Used by the editor's image
@@ -1597,6 +1597,65 @@ export default function App() {
     return window.api.settings.onCertNeedsApproval(show);
   }, [openSettings]);
 
+  // Losing the companion also taps you on the shoulder. The red CloudOff in the
+  // sidebar footer is what HOLDS the state, but it's a 26px button in a corner
+  // you weren't looking at, and everything it explains fails quietly — a
+  // background settings write that can't reach the server only sets
+  // `saveStatus: 'error'`, which nothing renders outside the Settings modal.
+  //
+  // Transition-only, and the ref is seeded to match `companionOnline`'s own
+  // optimistic `true` — so a launch with the server already down still reads as
+  // a drop and toasts, which is exactly the case where nothing works at all.
+  // Fixed `id` so flapping connectivity updates one toast in place rather than
+  // stacking. Ordinary duration and no "back online" counterpart, unlike the
+  // sync pair: this is the news, the icon is the state, and it clears itself.
+  const prevCompanionOnlineRef = useRef(true);
+  useEffect(() => {
+    const prev = prevCompanionOnlineRef.current;
+    prevCompanionOnlineRef.current = companionOnline;
+    if (companionOnline || prev === companionOnline) return;
+    toast.error("Can't reach your companion server", {
+      id: 'companion-offline',
+      description: "Settings, workspaces, and chats won't update until it's back.",
+      action: { label: 'Review connection', onClick: () => openSettings(SETTINGS_SECTIONS.COMPANION) },
+    });
+  }, [companionOnline, openSettings]);
+
+  // The desktop and the server are cut from one release tag, so a mismatch means
+  // they disagree about the shape of the data they exchange — main blocks every
+  // write until they match (see the kill switch in `api/client.ts`). This says
+  // so, and carries the button that fixes it.
+  //
+  // **This is the app's ONE piece of version news.** It replaced a boot-only
+  // check that opened the update dialog over a launching app, plus a separate
+  // auto-dismissing toast for the other direction — two warnings about one fact,
+  // neither of which survived being ignored. The dialog is now what this toast's
+  // button OPENS, never something that opens itself.
+  //
+  // Persistent (`duration: Infinity`) because a blocked write is a state, not an
+  // event, and a toast that scrolls away while writes are still failing is worse
+  // than none. Dismissible anyway — the red cloud in the sidebar footer holds the
+  // state once it's gone, the same division of labour as the offline pair above.
+  // Keyed by status so flipping direction replaces the toast rather than stacking.
+  useEffect(() => {
+    const status = companionVersion?.status;
+    if (status !== 'companion-older' && status !== 'companion-newer') {
+      toast.dismiss('companion-version');
+      return;
+    }
+    const older = status === 'companion-older';
+    toast.error(older ? 'Your server needs updating' : 'Shockwave needs updating', {
+      id: 'companion-version',
+      duration: Infinity,
+      description: older
+        ? `It's on ${companionVersion?.companion}, this app is on v${String(companionVersion?.desktop ?? '').replace(/^v/, '')}. Chats and settings won't save until they match.`
+        : `Your server is on ${companionVersion?.companion}, ahead of this app. Chats and settings won't save until they match.`,
+      action: older
+        ? { label: 'Update server', onClick: () => setCompanionUpdate({ desktop: companionVersion?.desktop, companion: companionVersion?.companion }) }
+        : { label: 'Update app', onClick: () => openSettings(SETTINGS_SECTIONS.UPDATES) },
+    });
+  }, [companionVersion, openSettings]);
+
   // ---- remember which files are open, per workspace ----
   //
   // Gated on `tabsReadyForWsRef`, which loadWorkspace clears on entry and sets
@@ -2182,6 +2241,7 @@ export default function App() {
           onManage={() => openSettings(SETTINGS_SECTIONS.WORKSPACES)}
           onOpenSettings={() => openSettings()}
           companionOnline={companionOnline}
+          companionStale={companionStale}
           onOpenCompanion={() => openSettings(SETTINGS_SECTIONS.COMPANION)}
           needsSetup={setup.any}
         />
@@ -2364,7 +2424,7 @@ export default function App() {
             className="absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize"
             onMouseDown={onChatSidebarResizeStart}
           />
-          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} onOpenSecrets={() => openSettings(SETTINGS_SECTIONS.AGENT_SECRETS)} onOpenVoiceSettings={() => openSettings(SETTINGS_SECTIONS.VOICE)} chatSources={chatSources} onChatSourcesChange={onChatSourcesChange} />
+          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} onOpenSecrets={() => openSettings(SETTINGS_SECTIONS.AGENT_SECRETS)} onOpenVoiceSettings={() => openSettings(SETTINGS_SECTIONS.VOICE)} chatSources={chatSources} onChatSourcesChange={onChatSourcesChange} companionStale={companionStale} />
         </aside>
       ) : (
         <button
@@ -2539,6 +2599,7 @@ export default function App() {
         open={settingsOpen}
         initialSection={settingsInitialSection}
         companionOnline={companionOnline}
+        companionVersion={companionVersion}
         setupStatus={setup}
         // The companion URL/key and git are the two inputs that don't ride the
         // settings object, and Settings is the only place either can change —

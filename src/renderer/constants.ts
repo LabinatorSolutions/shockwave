@@ -9,6 +9,7 @@ export {
   EDITOR_ACTIONS,
   SUPPORTED_PROVIDER_SLUGS,
   DEFAULT_PROVIDER_SLUG,
+  isCompanionStale,
 // Spelled `.ts` because `tests/chatSources.test.js` loads this module, and
 // `node --test` resolves a specifier literally — no extensionAlias, so an
 // extensionless (or `.js`) specifier does not find `constants.ts`. See the

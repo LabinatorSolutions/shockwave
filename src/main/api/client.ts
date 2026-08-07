@@ -11,7 +11,7 @@ import { companionFetch, getPendingCert, hostOf, clearPendingCert, type PendingC
 // approved one. Reporting that as offline would be a lie, would look identical
 // to the server being down, and would give the user no route to the one screen
 // that can resolve it.
-export type ApiErrorKind = 'unreachable' | 'unauthorized' | 'server' | 'config' | 'needsApproval';
+export type ApiErrorKind = 'unreachable' | 'unauthorized' | 'server' | 'config' | 'needsApproval' | 'stale';
 
 export class ApiError extends Error {
   kind: ApiErrorKind;
@@ -84,7 +84,36 @@ function base(): { url: string; apiKey: string } {
   return c;
 }
 
+// ── The stale-companion kill switch ─────────────────────────────────────────
+// The desktop and the companion image are cut from ONE release tag, so a version
+// mismatch means the two sides disagree about the shape of the data they're
+// exchanging. Reads are harmless — a stale read can't destroy anything, and an
+// app that shows you what it has beats one that pretends to be empty. WRITES are
+// the whole risk: a settings PATCH, a transcript, a chat row authored against
+// the wrong schema is how a mismatch turns into lost data rather than a nag.
+//
+// So: block every write, allow every read, and say why. ONE guard, in the one
+// function every write goes through — `settingsStore`, `api/workspaces`,
+// `api/chats`, `api/cron` and the Telegram handlers all call `patch`/`post`/
+// `del` below, so there is no second door to remember.
+//
+// `health()` and `triggerUpdate()` are DELIBERATELY not routed through here.
+// That is the escape hatch and it is load-bearing: the switch must never be
+// able to block the two calls that turn it off. Any version, either direction —
+// authentication is the only thing gating them. Don't "tidy" them into
+// `request`.
+let staleCompanion = false;
+
+/** Latched by main from the version classification (see `onFeedOpen`). Only ever
+ *  true for a real mismatch — never for 'dev', 'match', or an unknown answer. */
+export function setStaleCompanion(stale: boolean): void {
+  staleCompanion = stale;
+}
+
 async function request(method: string, pathname: string, body?: any): Promise<any> {
+  if (staleCompanion && method !== 'GET') {
+    throw new ApiError('stale', 'Your companion server and this app are on different versions. Nothing will be saved until they match.');
+  }
   const { url, apiKey } = base();
   const target = new URL(pathname.replace(/^\//, ''), url.endsWith('/') ? url : `${url}/`).href;
   let res: Response;

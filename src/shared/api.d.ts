@@ -8,6 +8,24 @@
 import type { FileAction, FolderAction, EditorAction } from './constants';
 import type { Settings, WorkspaceData } from './settings';
 
+/** How the desktop's version compares to the companion's. The two are cut from
+ *  ONE release tag, so anything but `match` means one side is stale — except
+ *  `dev`, which is either side being unversioned (a local companion reports
+ *  `APP_VERSION='dev'`) and is always treated as fine. */
+export type CompanionVersionStatus = 'match' | 'companion-older' | 'companion-newer' | 'dev';
+
+/** Reachability + version as ONE fact, from one probe in main (`onFeedOpen`).
+ *
+ *  `version` is null while the companion is unreachable — we don't know what it
+ *  is running, and claiming otherwise is what would leave a version warning
+ *  stacked on top of the offline cloud while the server restarts into its new
+ *  image. Every reader (toast, sidebar icon, settings gate, Companion page) reads
+ *  this; none of them probes on its own. */
+export interface CompanionState {
+  online: boolean;
+  version: { status: CompanionVersionStatus; desktop?: string; companion?: string } | null;
+}
+
 /** A curated scope bundle for the connect form's second dropdown. */
 export interface OAuthSetup {
   id: string;
@@ -300,14 +318,6 @@ export interface ShockwaveApi {
       version?: string;
       certNeedsApproval?: { host: string; approved: string | null; offered: string };
     }>;
-    /** Compare the desktop version against the companion's. 'companion-older' is
-     *  the only status that offers an upgrade; 'dev' (either side unversioned)
-     *  stays silent. */
-    apiCheckVersion(): Promise<{
-      status: 'match' | 'companion-older' | 'companion-newer' | 'dev' | 'unreachable' | 'unconfigured';
-      desktop?: string;
-      companion?: string;
-    }>;
     /** Ask the companion to upgrade itself to this desktop's version (POST /update
      *  -> the updater sidecar). `updater-unavailable` = pre-sidecar deployment;
      *  the user must re-run the install script once. Fire-and-forget: success
@@ -327,16 +337,17 @@ export interface ShockwaveApi {
      *  call because a name absent from a saved list is no longer a delete — this
      *  window's copy of the list is legitimately stale. */
     deleteAgentSecret(name: string): Promise<{ ok: boolean; error?: string }>;
-    /** Whether the companion is reachable right now. Asked on load — the push
-     *  below can fire before the window is listening. */
-    companionState(): Promise<{ online: boolean }>;
-    /** Fires when the companion becomes reachable, or stops being. Edge-triggered.
+    /** Whether the companion is reachable right now, and what it's running. Asked
+     *  on load — the push below can fire before the window is listening. */
+    companionState(): Promise<CompanionState>;
+    /** Fires when the companion becomes reachable, stops being, or its version is
+     *  re-classified. Edge-triggered on reachability.
      *
      *  Becoming reachable is the ONE trigger that refreshes companion-owned data:
      *  main follows it with a `settings:changed` push carrying `workspaces`. Boot,
      *  reconnect after an upgrade restart, and Settings → Connect are all the same
      *  event, so none of them needs its own refresh. */
-    onCompanionState(cb: (s: { online: boolean }) => void): () => void;
+    onCompanionState(cb: (s: CompanionState) => void): () => void;
     /** Approve a companion certificate the user has been shown. The only path
      *  that stores one. Refuses any fingerprint main didn't itself read off the
      *  configured server — the value on screen is the only approvable value. */

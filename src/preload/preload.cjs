@@ -249,7 +249,6 @@ contextBridge.exposeInMainWorld('api', {
      *  deletes it, because this window's copy of the list can be stale.
      *  @param {string} name @returns {Promise<{ok: boolean, error?: string}>} */
     deleteAgentSecret: (name) => ipcRenderer.invoke('settings:deleteAgentSecret', { name }),
-    apiCheckVersion: () => ipcRenderer.invoke('api:checkVersion'),
     apiUpgradeCompanion: () => ipcRenderer.invoke('api:upgradeCompanion'),
     /** Fires when an upgrade this session requested has landed (main sees the
      *  live feed reconnect on the new version). Returns an unsubscribe fn. */
@@ -258,15 +257,16 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('api:companionUpdated', h);
       return () => ipcRenderer.removeListener('api:companionUpdated', h);
     },
-    /** Whether the companion is reachable right now. Asked on load, because the
-     *  push below can fire before the window is listening.
-     *  @returns {Promise<{online: boolean}>} */
+    /** Whether the companion is reachable right now, and what version it's
+     *  running. Asked on load, because the push below can fire before the window
+     *  is listening.
+     *  @returns {Promise<{online: boolean, version: object|null}>} */
     companionState: () => ipcRenderer.invoke('companion:getState'),
-    /** Fires when the companion becomes reachable or stops being reachable.
-     *  Edge-triggered, so reconnect churn doesn't spam. Becoming reachable is
-     *  also what refreshes settings — main follows it with a `settings:changed`
-     *  push carrying a complete snapshot.
-     *  @param {(s: {online: boolean}) => void} cb @returns {() => void} unsubscribe */
+    /** Fires when the companion becomes reachable, stops being reachable, or its
+     *  version is re-classified. Edge-triggered on reachability, so reconnect
+     *  churn doesn't spam. Becoming reachable is also what refreshes settings —
+     *  main follows it with a `settings:changed` push carrying a full snapshot.
+     *  @param {(s: {online: boolean, version: object|null}) => void} cb @returns {() => void} unsubscribe */
     onCompanionState: (cb) => {
       const h = (_evt, payload) => cb(payload);
       ipcRenderer.on('companion:state', h);
