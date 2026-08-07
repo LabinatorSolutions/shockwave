@@ -67,27 +67,63 @@ test('the prompt does not enumerate the tools', () => {
 });
 
 test('the tool-choice guidance survived, since no tool definition carries it', () => {
-  // The one thing the old section held that the tool definitions do not: which
-  // tool to prefer when several would do. It is ours, and pi's own `bash`
-  // snippet pushes the other way ("Execute bash commands (ls, grep, find,
-  // etc.)"), so losing it with the list would have been the opposite mistake.
-  // It lives in `# Guidelines` now.
+  // Which tool to prefer when several would do is ours — pi's own `bash` blurb
+  // pushes the other way ("Execute bash commands (ls, grep, find, etc.)"). It
+  // lives in `# Operating system` now, because what you can shell out to IS a
+  // fact about the platform.
   for (const source of ['desktop', 'cron', 'telegram', 'review', 'memory']) {
     const h = helperFor(source);
-    assert.ok(h.includes('rather than shelling out through `bash`'), source);
-    assert.ok(h.includes('Reach for `bash` to run programs'), source);
-    assert.ok(h.indexOf('rather than shelling out through `bash`') > h.indexOf('# Guidelines'), source);
+    assert.ok(h.includes('Use `grep`, `find`, `ls` for searching'), source);
   }
 });
 
-test('the secret-handling guideline is present everywhere too', () => {
-  // It used to be gated on the tool. The tool is offered everywhere now, so the
-  // rule about not echoing what it returns has to travel with it.
-  for (const source of ['desktop', 'review']) {
-    assert.ok(helperFor(source).includes('Do not echo a token returned by `get_agent_secret`'), source);
-    assert.ok(helperFor(source).includes('- Be concise in your responses.'), source);
-    assert.ok(helperFor(source).includes('- Show file paths clearly when working with files.'), source);
+test('the platform is stated, and said to be a starting point', () => {
+  // The value is read where the CHAT IS CREATED and then frozen, so it can
+  // become wrong rather than merely stale — a chat started on a Mac and
+  // continued from Telegram runs on Linux still holding "started on macOS".
+  // The warning is what stops the agent treating it as a fact about the machine
+  // it is on right now.
+  for (const [platform, name] of [['darwin', 'macOS'], ['linux', 'Linux'], ['win32', 'Windows']]) {
+    const h = buildShockwaveHelper({ tools: TOOL_CATALOG, platform });
+    assert.ok(h.includes(`Chat started on **${name}**`), platform);
+    assert.ok(h.includes('Could change later'), platform);
   }
+});
+
+test('Windows is told bash is absent, and the others are not', () => {
+  // The whole reason this section exists. It used to be one clause inside a
+  // guideline that printed everywhere — so every Mac, and every Telegram and
+  // cron run (which are Linux and can never be Windows), was warned about a
+  // platform it was not on.
+  const win = buildShockwaveHelper({ tools: TOOL_CATALOG, platform: 'win32' });
+  assert.ok(win.includes('no `bash`, no Unix tools'));
+  assert.ok(win.includes('Shell commands must be Windows'));
+
+  for (const platform of ['darwin', 'linux']) {
+    const h = buildShockwaveHelper({ tools: TOOL_CATALOG, platform });
+    assert.ok(h.includes('`bash` and Unix tools available'), platform);
+    assert.ok(!h.includes('must be Windows'), platform);
+  }
+});
+
+test('the secret rule is its own section on every run', () => {
+  // It was a bullet in `# Guidelines`, gated on holding `get_agent_secret` — a
+  // gate that could never be false, since every run is offered the whole
+  // catalog.
+  for (const source of ['desktop', 'cron', 'telegram', 'review', 'memory']) {
+    const h = helperFor(source);
+    assert.ok(h.includes('# Secrets'), source);
+    assert.ok(h.includes('Never echo a token from `get_agent_secret`'), source);
+  }
+});
+
+test('`# Guidelines` is gone, and so are the two preferences it carried', () => {
+  // Formatting preferences belong in SOUL, which a workspace can edit. Neither
+  // of these is app behaviour.
+  const h = helperFor('desktop');
+  assert.ok(!h.includes('# Guidelines'));
+  assert.ok(!h.includes('Be concise in your responses'));
+  assert.ok(!h.includes('Show file paths clearly'));
 });
 
 // ── The association rule the prompt states must be the rule the parser runs ──
@@ -277,9 +313,20 @@ test('the gating machinery still works when handed a subset', () => {
   const only = TOOL_CATALOG.filter((t) => t.name === 'read');
   const h = buildShockwaveHelper({ tools: only, source: 'review', unattended: true });
   assert.ok(!h.includes('# Saving what you learn as a skill'));
-  assert.ok(!h.includes('# Finding what links to a file'));
-  // The guidance that names tools is gated too — a run holding only `read` must
-  // not be told to prefer `grep` over a `bash` it hasn't got.
-  assert.ok(!h.includes('shelling out through `bash`'));
-  assert.ok(h.includes('- Be concise in your responses.'));
+  // NOTE — the backlink guidance is no longer gated. It was its own section
+  // conditional on `grep`; it is now a `##` subsection of `# Wiki-links`, which
+  // is unconditional. So a run without `grep` is handed a grep pattern.
+  //
+  // Inert today (every run gets the whole catalog) and accepted deliberately:
+  // finding what links to a file is part of what wiki-links ARE, and splitting
+  // one subject across four headings to preserve a gate nothing exercises was
+  // the worse trade. If a narrow run is ever reintroduced, this is the line that
+  // has to be reconsidered — which is why it is written down here rather than
+  // discovered later.
+  assert.ok(h.includes('# Wiki-links'));
+  // `# Operating system` and `# Secrets` are ungated — they describe the machine
+  // and a rule about a tool's output, neither of which depends on the run's set.
+  // Their landing is what proves the subset was narrowed rather than emptied.
+  assert.ok(h.includes('# Operating system'));
+  assert.ok(h.includes('# Secrets'));
 });

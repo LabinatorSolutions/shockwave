@@ -21,7 +21,7 @@ import {
   createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
 } from './api/workspaces.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isWatchIgnored, isTreeHidden } from './pathResolver.js';
-import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../../agent-core/defaults/files.js';
+import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../../agent-core/defaults/workspaceFiles/index.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
 import { getProviders } from '@earendil-works/pi-ai/compat';
 import { initModelCatalog, getCatalogModels } from '../../agent-core/modelCatalog.js';

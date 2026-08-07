@@ -26,10 +26,14 @@
 // assembled once at chat creation and read back verbatim forever.
 
 import { buildShockwaveHelper } from './helper.js';
-import { readSoul } from './soul.js';
+import { readSoul } from './workspaceFiles/soul.js';
 import { TOOL_CATALOG } from './tools.js';
 
-export { readSoul, SOUL_FILENAME, AGENTS_FILENAME, AGENTS_STUB, DEFAULT_SOUL } from './soul.js';
+// The workspace's default files live in `workspaceFiles/`, one module per file.
+// Re-exported here because this is the prompt module and SOUL is the top of the
+// prompt; everything else about those files belongs to that folder's index.
+export { readSoul, SOUL_FILENAME, DEFAULT_SOUL } from './workspaceFiles/soul.js';
+export { AGENTS_FILENAME, DEFAULT_AGENTS } from './workspaceFiles/agents.js';
 export { buildShockwaveHelper } from './helper.js';
 export { TOOL_CATALOG, DENIED, activeToolNames, deniedReason } from './tools.js';
 

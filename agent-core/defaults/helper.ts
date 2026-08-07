@@ -1,5 +1,5 @@
 // SHOCKWAVE_HELPER — the app-level operating manual injected into every coding-
-// agent session, on top of the per-workspace SOUL (see `soul.ts`).
+// agent session, on top of the per-workspace SOUL (see `workspaceFiles/soul.ts`).
 //
 // This is workspace-agnostic: it describes HOW to work inside Shockwave (tools,
 // wiki-links, invariants, the link graph, markdown support, skill authoring). It
@@ -16,7 +16,7 @@
 // a type in a value import is a missing export at runtime.
 import { TOOL_CATALOG } from './tools.ts';
 import type { ToolDescriptor } from './tools.ts';
-import { SENDING_FILES, SPEAKING, isCompanionSource } from './companion.ts';
+import { SENDING_FILES, isCompanionSource } from './companion.ts';
 
 // Two directories, each described on its own terms. The agent needs somewhere to
 // work that isn't the user's files: everything in the workspace is committed and
@@ -99,29 +99,53 @@ You are running on a schedule with no user present. You will not receive a reply
 // grep, find, etc.)"). That moved into GUIDELINES below, where the rest of our
 // cross-cutting rules already live.
 
-// A guideline naming a tool this run doesn't hold is noise at best, and at worst
-// tells the reader the run has it — so each line that names one is gated on it.
-// Nothing here restates what a tool does; these are rules about USING them that
-// no single tool's description is the right place for.
-const GUIDELINES = (tools: ToolDescriptor[]) => {
-  const has = (n: string) => tools.some((t) => t.name === n);
-  const searchTools = ['grep', 'find', 'ls'].filter(has);
-  const lines = [
-    ...(has('get_agent_secret')
-      ? ['- Do not echo a token returned by \`get_agent_secret\` in your reply, into a file, or into a shell command that prints it. Prefer passing the token via env vars to the subprocess that needs it.']
-      : []),
-    ...(has('bash') && searchTools.length
-      ? [`- Use ${searchTools.map((t) => `\`${t}\``).join(', ')} for searching and listing rather than shelling out through \`bash\`: they respect \`.gitignore\`, and \`bash\` and Unix tools like \`grep\` are not available on Windows. Reach for \`bash\` to run programs, git, and anything the other tools don't cover.`]
-      : []),
-    '- Be concise in your responses.',
-    '- Show file paths clearly when working with files.',
-  ];
-  return `# Guidelines\n\n${lines.join('\n')}`;
+// ── `# Guidelines` is gone. It was three unrelated rules in one box ────────
+//
+// Secret handling, which tool to search with, and how to format a reply have
+// nothing in common — "Guidelines" was where a rule went when it fitted nowhere
+// else, which is how it collected a fourth ("Be concise in your responses") that
+// DEFAULT_SOUL already said in the one file a workspace can edit.
+//
+// Two of the three became real sections below. The third — "Show file paths
+// clearly when working with files" — is a formatting preference like the
+// concision line, and went with it.
+//
+// It also carried three gates that could never be false, because
+// `assembleSystemPrompt` always passes the whole catalog: has(`get_agent_secret`),
+// has(`bash`) plus a search tool, and which of grep/find/ls to name. Meanwhile
+// the one statement that genuinely varied — that bash and the Unix tools are
+// missing on Windows — was NOT gated, so it printed on every Mac, and on every
+// Telegram and cron run, which are Linux and can never be Windows. Gating the
+// wrong things and not the one thing that varies is the shape worth remembering.
+
+const SECRETS = `# Secrets
+
+Never echo a token from \`get_agent_secret\`. Pass it as an env var.`;
+
+// ── The platform, and why it carries a warning ─────────────────────────────
+//
+// Read from `process.platform` WHERE THE CHAT IS CREATED — the user's machine on
+// the desktop, always Linux on the companion. The prompt is then frozen for the
+// life of that chat.
+//
+// So this line can become wrong rather than merely stale: a chat started on a
+// Mac and later continued from Telegram runs on Linux, still holding "started on
+// macOS". Hence "could change later; check if it matters" — the agent is told the
+// value is a starting point rather than a fact about the machine it is on right
+// now. What it must NOT do is plan for a move that will usually never happen.
+//
+// `bash` on Windows is the reason any of this is here: pi's `bash` tool shells
+// out, and Windows has neither it nor the Unix tools, so a command that works
+// everywhere else fails there with nothing in the prompt to explain why.
+const OPERATING_SYSTEM = (platform: string) => {
+  const win = platform === 'win32';
+  const name = win ? 'Windows' : platform === 'darwin' ? 'macOS' : 'Linux';
+  return `# Operating system
+
+Chat started on **${name}** — ${win ? 'no \`bash\`, no Unix tools' : '\`bash\` and Unix tools available'}. Could change later; check if it matters.
+
+Use \`grep\`, \`find\`, \`ls\` for searching${win ? '. Shell commands must be Windows.' : ', not \`bash\`. Use \`bash\` for programs and git.'}`;
 };
-
-const WORKSPACE = `# The workspace
-
-The user's workspace is a single folder on disk (your cwd). It contains \`.md\` files alongside images and other assets. Subfolders are allowed; the user organizes however they want. Files connect to each other through **wiki-links**.`;
 
 const WIKILINKS = `# Wiki-links
 
@@ -136,29 +160,9 @@ A file's **basename** is its name with no folder path and no \`.md\` extension �
 
 When a basename is duplicated, a bare \`[[Meeting]]\` resolves to the copy in the **linking file's own folder**, otherwise the one with the **shortest path** — which may not be the one you meant. Path-qualify to be sure: \`[[acme/Meeting]]\`. Use only as much leading path as you need, never a leading slash; if that path goes stale because the file moved, resolution falls back to the bare basename so the link still works.
 
-To rename a file, just \`mv\` it. Shockwave detects the rename by inode and rewrites the \`[[…]]\` references that resolve to it in every other file, path-qualified ones included. **Don't hand-edit references on rename.**`;
+To rename a file, just \`mv\` it. Shockwave detects the rename by inode and rewrites the \`[[…]]\` references that resolve to it in every other file, path-qualified ones included. **Don't hand-edit references on rename.**
 
-// ── This section IS the rule, and the rule changed under it once already ────
-//
-// It used to say a bullet never counts as indentation ("a `-` at the start of a
-// line is still column 0") and carried a worked example proving it. That has
-// been false since `collectContext` (`src/renderer/linkIndex.ts`) grew its
-// second clause: a LIST ITEM at the link's own indent IS associated, provided no
-// blank line separates them. The prompt went on teaching the old rule, with an
-// example — `[[Topic A]]` then `- Note 2.` — asserting the opposite of what the
-// parser does. Anyone following it indented content that did not need indenting,
-// and would have read a correctly-associated file as unassociated.
-//
-// So six examples became three, chosen to cover the three ANSWERS rather than to
-// restate one: the line that does not attach, the list that does, and the blank
-// line that breaks it. The blank-line case is new here and is now the only real
-// gotcha; nothing documented it before.
-//
-// Checked by running the examples through `parseLinks` itself, not by reading
-// `collectContext` and reasoning about it. If that function changes again, this
-// text is what has to change with it — and the same rule lives in
-// `src/main/linkParser.ts`, which parity-tests against the renderer's copy.
-const ASSOCIATION = `# Associating content with a link
+## What attaches to a link
 
 Content following a wiki-link is associated with it — and shows up as a preview under the backlink on the target's page — when either is true:
 
@@ -182,50 +186,71 @@ NOT associated — a plain unindented line, and a list separated by a blank line
 
     [[Topic B]]
 
-    - Note 4.`;
+    - Note 4.
 
-// `DUPLICATE_BASENAMES` was folded into `WIKILINKS` above. They answered ONE
-// question — how a link finds its file — and stated the resolution tiebreaker
-// twice in slightly different words; the old `WIKILINKS` even ended by pointing
-// at "the next section". Dropped in the merge: the note that the in-app create
-// UI auto-appends " 1" / " 2" on a same-folder collision, which describes what
-// happens when a PERSON creates a file and is nothing the agent does or can act
-// on.
-
-// ── Cut to the two facts that stop a WORSE default ─────────────────────────
-//
-// This was a five-step research procedure. Most of it — open the central file,
-// follow its outgoing links, two hops is usually enough — is ordinary competent
-// behaviour that needs no instruction, and the one step that WAS specific to
-// this app taught a method measured at roughly 26% precision.
-//
-// A 2026-07-30 benchmark (synthetic workspaces at 10K/50K/100K files, ground
-// truth from this repo's own parser and resolver) put numbers on both halves of
-// what remains. The plain string `[[Name]]` finds **22% of real backlinks** — it
-// misses every `#heading`, `|alias` and folder-prefixed form. The full-form
-// regex has 100% recall but precision around **1/k**, k being the number of
-// files sharing that basename: 58% at k=2, 1.1% at k=70. That second half is
-// **not fixable by any regex**, because resolution depends on the LINKING file's
-// own folder and grep cannot see it — and the section above now tells the agent
-// that duplicate basenames are normal, so the case where this breaks is one we
-// actively encourage.
-//
-// Deleting the section outright would be worse than keeping it small: `grep` is
-// a tool the agent already has, so with no guidance it reaches for the plain
-// string — the 22% option. Two sentences buy the 100%-recall pattern and the
-// warning that the hits need checking.
-//
-// The real fix is an indexed backlinks tool: 294 tokens against 55,949, exact.
-// It does not exist yet. When it does, this goes.
-const LINK_GRAPH = `# Finding what links to a file
+## Finding what links to a file
 
 To find files linking to \`<Name>\`, \`grep\` for \`\\[\\[([^]]*/)?<Name>\` rather than the plain string \`[[<Name>]]\` — that plain form misses every link written as \`[[<Name>#heading]]\`, \`[[<Name>|alias]]\`, or with a folder prefix, which is most of them.
 
-**Treat the hits as candidates, not answers.** A wiki-link resolves by the linking file's own folder, which no pattern can see, so when several files share this basename some matches belong to one of the others. Check where each hit lives before counting it.`;
+**Treat the hits as candidates, not answers.** A wiki-link resolves by the linking file's own folder, which no pattern can see, so when several files share this basename some matches belong to one of the others. Check where each hit lives before counting it.
 
-const EXTENDING_GRAPH = `# Extending the graph
+## Adding links as you write
 
 When you write or update content, add wiki-links wherever there's an obvious connection. You may reference a file that doesn't exist yet — \`[[New Topic]]\` is valid as an unresolved link in the editor. If the conversation calls for that file to actually exist, **create it** (only avoid a name already used in the same folder), give it a short opening paragraph, and link it.`;
+
+// `DUPLICATE_BASENAMES` and `ASSOCIATION` were both folded into `WIKILINKS`.
+// Three sections, one subject: how a wiki-link behaves. Duplicates stated the
+// resolution tiebreaker a second time in slightly different words (the old
+// WIKILINKS even ended by pointing at "the next section"), and association is
+// the same syntax from the other end — what a link pulls IN rather than where
+// it points.
+//
+// Dropped in the merge: the note that the in-app create UI auto-appends " 1" /
+// " 2" on a same-folder collision. That describes what happens when a PERSON
+// creates a file and is nothing the agent does or can act on.
+//
+// ── The association rules changed under the prompt once ────────────────────
+//
+// That subsection used to say a bullet never counts as indentation ("a `-` at
+// the start of a line is still column 0"), with a worked example proving it. It
+// has been FALSE since `collectContext` (`src/renderer/linkIndex.ts`) grew its
+// second clause: a LIST ITEM at the link's own indent IS associated, provided no
+// blank line separates them. The prompt went on teaching the old rule, with an
+// example asserting the opposite of what the parser does — so anyone following
+// it indented content that needed no indenting, and would have read a
+// correctly-associated file as unassociated.
+//
+// Six examples became three, covering the three ANSWERS rather than restating
+// one: the line that does not attach, the list that does, and the blank line
+// that breaks it. That last case is the only real gotcha and nothing documented
+// it before.
+//
+// Checked by running the examples through `parseLinks` itself, not by reading
+// `collectContext` and reasoning about it (`tests/helperPrompt.test.js`). If
+// that function changes again, this text has to change with it — and the same
+// rule lives in `src/main/linkParser.ts`, which parity-tests against the
+// renderer's copy.
+
+// `LINK_GRAPH` and `EXTENDING_GRAPH` are folded into `WIKILINKS` too — every
+// section about links is now that one section, with `##` subheads. Finding what
+// points at a file and adding links as you write are both things you do WITH the
+// syntax the section already teaches, so splitting them made the reader assemble
+// one subject from four headings.
+//
+// What the finding subsection says is measured, not guessed. A 2026-07-30
+// benchmark (synthetic workspaces at 10K/50K/100K files, ground truth from this
+// repo's own parser and resolver): the plain string `[[Name]]` finds 22% of real
+// backlinks — it misses every `#heading`, `|alias` and folder-prefixed form —
+// while the full regex has 100% recall but precision around 1/k, k being the
+// number of files sharing that basename (58% at k=2, 1.1% at k=70). The
+// precision half is NOT fixable by any regex, because resolution depends on the
+// LINKING file's own folder and grep cannot see it. Hence "candidates, not
+// answers".
+//
+// Deleting it outright would be worse than keeping it small: `grep` is a tool
+// the agent already has, so with no guidance it reaches for the plain string —
+// the 22% option. It goes entirely once an indexed backlinks tool exists (294
+// tokens against 55,949, exact).
 
 // ── There is no `DAILY_NOTES` section, and it is not coming back ────────────
 //
@@ -248,17 +273,20 @@ When you write or update content, add wiki-links wherever there's an obvious con
 // `AGENTS.md`, which pi appends to the prompt. That is the surface for
 // per-workspace instruction; this file is not.
 
-// The workspace's templates, listed directly — folder and files read at chat
-// creation (`readTemplates` in templates.ts) and frozen with the prompt, same
-// snapshot behaviour as the memory blocks. Present only when the workspace has
-// templates at all.
+// The workspace's templates — folder and file list read at chat creation
+// (`readTemplates` in templates.ts) and frozen with the prompt, same snapshot
+// behaviour as the memory blocks. Skipped entirely when the workspace has none.
+//
+// The list IS the section. It used to carry three more sentences — what kind of
+// file each covers, that you should seed from one, that nothing substitutes
+// placeholders so copy it verbatim. A file list plus "check these" says all of
+// it: the agent can read a template and see for itself what is in it, and
+// "copy it" is what using a template means.
 const TEMPLATES = (t: { folder: string; files: string[] }) => `# Templates
 
-The user keeps file templates in \`${t.folder}/\`:
+In \`${t.folder}/\`. Check them when creating a new file.
 
-${t.files.map((f) => `- \`${f}\``).join('\n')}
-
-When you create a file of a kind one of these covers — meeting notes, a weekly review — seed it from the template. **Copy the template verbatim** — nothing in Shockwave substitutes placeholders — then fill it in.`;
+${t.files.map((f) => `- \`${f}\``).join('\n')}`;
 
 const MARKDOWN = `# Markdown supported
 
@@ -388,34 +416,25 @@ Skills live at \`<cwd>/.agents/skills/<skill-name>/SKILL.md\`. They are scanned 
 // sections — it is NOT derivable from `tools`, so every caller must pass it (see
 // `rebuildSystemPrompt` in index.ts, which forwards it for exactly this reason).
 export function buildShockwaveHelper(
-  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, memory, templates }:
-    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; memory?: string; templates?: { folder: string; files: string[] } } = {},
+  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, memory, templates, platform = process.platform }:
+    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; memory?: string; templates?: { folder: string; files: string[] }; platform?: string } = {},
 ): string {
   return [
     BOUNDARIES(scratchDir),
     ...(unattended ? [UNATTENDED] : []),
     // No tool list here — the model receives every tool's real definition from
-    // pi. See the block above GUIDELINES for why a prose copy was removed.
-    GUIDELINES(tools),
-    // Only when the tool is actually in this run's set — the section tells the
-    // agent to reach for it by name, which is worse than useless if it's absent.
+    // pi. See the block above SECRETS for why a prose copy was removed.
+    OPERATING_SYSTEM(platform),
+    SECRETS,
     // Telegram and cron only. On the desktop nothing parses a file path out of a
     // reply, so documenting the syntax there would have the agent announce a
     // delivery that never happens.
     ...(isCompanionSource(source) ? [SENDING_FILES] : []),
-    // Same gate, and additionally on holding `send_message`: the section is a
-    // how-to for that tool's two options, so a run without it would be reading an
-    // instruction it cannot follow. Same rule as REACHING_THE_USER and LINK_GRAPH.
-    ...(isCompanionSource(source) && tools.some((t) => t.name === 'send_message') ? [SPEAKING] : []),
-    WORKSPACE,
     WIKILINKS,
-    ASSOCIATION,
     // Gated on `grep` for the same reason `REACHING_THE_USER` is gated on
     // `send_message`: this section IS a how-to for that tool — it hands over a
     // regex to run with it. A memory run has neither the tool nor any reason to
     // walk the graph, and would be reading an instruction it cannot follow.
-    ...(tools.some((t) => t.name === 'grep') ? [LINK_GRAPH] : []),
-    EXTENDING_GRAPH,
     ...(tools.some((t) => t.name === 'memory') ? [MEMORY] : []),
     // Skipped entirely when the workspace has no templates (folder unset,
     // missing, or holding no .md files) — a heading over nothing reads as an

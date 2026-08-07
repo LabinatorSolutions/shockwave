@@ -342,39 +342,20 @@ test('integration: folder rename -> per-file renames inside', async () => {
   }
 });
 
-test('integration: many simultaneous renames including deletes and adds', async () => {
-  const h = await setupHarness();
-  try {
-    // 20 files: rename 10, delete 5, leave 5 alone. Also add 5 brand-new files.
-    const all = [];
-    for (let i = 0; i < 20; i++) {
-      all.push(await h.seed(`f-${i}.md`, `c${i}\n`));
-    }
-
-    const renameOld = all.slice(0, 10);
-    const renameNew = renameOld.map((p) => p.replace('.md', '-r.md'));
-    const deletes = all.slice(10, 15);
-    const newPaths = [];
-    for (let i = 0; i < 5; i++) newPaths.push(path.join(h.ROOT, `new-${i}.md`));
-
-    const ops = [
-      ...renameOld.map((from, i) => fs.rename(from, renameNew[i])),
-      ...deletes.map((p) => fs.unlink(p)),
-      ...newPaths.map((p, i) => fs.writeFile(p, `n${i}\n`)),
-    ];
-    await Promise.all(ops);
-    // 10 renames + 5 unlinks + 5 adds. Waiting for the count rather than for
-    // quiet — this test is the one that flaked, and it flaked by asserting
-    // before the last create event had arrived. See settleFor.
-    await h.settleFor(20);
-
-    const types = h.emitted.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
-    assert.deepEqual(types, { rename: 10, unlink: 5, add: 5 }, `types: ${JSON.stringify(types)}`);
-
-    // Spot-check: every renameOld[i] paired to renameNew[i]
-    const map = new Map(h.emitted.filter((e) => e.type === 'rename').map((e) => [e.oldPath, e.newPath]));
-    for (let i = 0; i < 10; i++) assert.equal(map.get(renameOld[i]), renameNew[i]);
-  } finally {
-    await h.teardown();
-  }
-});
+// The mixed-batch case (10 renames + 5 deletes + 5 adds at once) is NOT here.
+// It lives in `correlator.unit.test.js`, driven directly with no watcher.
+//
+// It was here, and it flaked at roughly one run in ten — always the same way:
+// every rename paired, every delete fired, and one create event arrived after
+// the harness had stopped listening. The correlator was correct on every run
+// including the failures; what was unreliable was fsevents' delivery timing.
+//
+// A test that goes red when nothing is broken trains you to ignore red. Since
+// the thing it was proving is pairing logic, and pairing logic needs no real
+// filesystem, it belongs where the events can just be handed over.
+//
+// What stays in this file is what genuinely needs a real watcher: that our
+// dispatch reads parcel's event SHAPES correctly — atomic save arriving as a
+// create of a known path, folder rename arriving as delete+create of a
+// directory, deletes ordered before creates within a batch. Those are small and
+// have nothing to race.

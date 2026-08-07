@@ -60,26 +60,28 @@ export function makeSendMessageTool(
     // reaches chats that already exist — the system prompt is frozen when a chat
     // is created and cannot be revised for it afterwards.
     //
-    // The trigger list is the load-bearing part and the reason this is long. Those
-    // phrases name a DESTINATION, not a description, and without the mapping the
-    // agent writes the answer down or says it into a chat nobody is reading. That
-    // is the failure the section was written for, and it is worst on an unattended
-    // run where the reply has no reader at all.
+    // Two sentences: what it is, and when to reach for it. The trigger list is
+    // the load-bearing half — those phrases name a DESTINATION, not a
+    // description, and without the mapping the agent writes the answer down or
+    // says it into a chat nobody is reading.
+    //
+    // It reached 1,249 chars before being cut to this. What went, and why none
+    // of it was doing work:
+    //
+    //   - A paragraph on the /voice setting. The agent cannot read it, cannot
+    //     set it, and cannot see which form a reply took. The schema has ONE
+    //     parameter, so there is no way to act on any of that — a rule needs
+    //     something the model could otherwise do wrong.
+    //   - "If it fails, say so rather than treating the task as done." A failed
+    //     send already returns `isError: true` carrying the reason. The result
+    //     says it; the description repeating it adds nothing.
+    //   - Justification prose — "take them literally", "a message not sent is a
+    //     message that did not happen". That is an argument for the rule, aimed
+    //     at whoever is reading the source. The rule is the part that ships.
     description:
-      'Send a message to the user on Telegram. This is the ONLY way to reach them outside the chat '
-      + 'you are in — they receive it as a Telegram DM.\n\n'
-      + '"Send me", "notify me", "let me know", "ping me", "remind me", "tell me when" ALL MEAN THIS '
-      + 'TOOL. Take them literally: the user is asking to be reached, not asking you to write it down '
-      + 'or say it in a chat they may not be looking at. If a request ends in one of those phrases, '
-      + 'calling this is the last thing you do.\n\n'
-      + 'It matters most on scheduled and unattended runs, where nobody reads your reply at all — '
-      + 'there, a message that is not sent is a message that did not happen.\n\n'
-      + 'Whether they get it as writing, as a voice note, or both is THEIR setting, '
-      + 'and you have no say in it — write the message and it is delivered the way they asked. If they '
-      + 'want that changed ("talk to me from now on", "stop sending voice notes"), tell them to send '
-      + '/voice text, /voice voice or /voice both; you cannot set it yourself.\n\n'
-      + 'If sending fails (Telegram is not connected), say so in your reply rather than treating the '
-      + 'task as done.',
+      'Send the user a Telegram DM — the only way to reach them outside this chat.\n\n'
+      + '"Send me", "notify me", "let me know", "ping me", "remind me", "tell me when" all mean CALL '
+      + 'THIS, not write it down.',
     promptSnippet: 'Message the user on Telegram (a result or an alert), spoken aloud if they want that.',
     parameters: {
       type: 'object',

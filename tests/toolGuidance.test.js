@@ -32,29 +32,27 @@ const searchChats = makeChatSearchTool(
 
 test('send_message carries the reach-me trigger phrases', () => {
   // The failure without them: "send me the summary when it's done" gets written
-  // into a file, or said into a chat nobody is reading. Worst on an unattended
-  // run, where the reply has no reader at all — which is why that consequence is
-  // pinned too, not just the phrase list.
+  // into a file, or said into a chat nobody is reading.
   const d = sendMessage.description;
   for (const phrase of ['"Send me"', '"notify me"', '"let me know"', '"ping me"', '"remind me"', '"tell me when"']) {
     assert.ok(d.includes(phrase), `send_message no longer maps ${phrase}`);
   }
-  assert.ok(d.includes('ALL MEAN THIS TOOL'));
-  assert.ok(d.includes('a message that is not sent is a message that did not happen'));
+  assert.ok(d.includes('CALL THIS'));
 });
 
-test('send_message still says the delivery mode is not the agent\'s to choose', () => {
-  // Separate from the triggers and separately load-bearing: the tool had an
-  // `output` argument once, the agent passed `both` where the setting said
-  // `text`, and the user got a voice note they had switched off.
+test('send_message describes nothing the agent cannot act on', () => {
+  // This description reached 1,249 chars and was cut to ~190. What went was not
+  // wrong, it was INERT — and inert text in a tool description is the kind of
+  // bloat that accumulates because every sentence looks defensible on its own.
+  //
+  // The test is the rule, not the wording: a tool taking ONE string should not
+  // describe a setting it cannot read, cannot set, and cannot observe the result
+  // of, nor restate what a failed call already returns.
   const d = sendMessage.description;
-  assert.ok(d.includes('THEIR setting'));
-  // And it must not claim a SCOPE the setting doesn't have. It said "for this
-  // workspace" while the mode really was per-workspace, and that scope was the
-  // bug — see agent-core/voiceReply.ts.
-  assert.ok(!/for this workspace/.test(d), 'the reply mode is app-level, not per workspace');
-  assert.ok(d.includes('/voice text'));
+  assert.ok(!/\/voice|voice note|spoken/.test(d), 'the voice setting is back — the agent has no way to act on it');
+  assert.ok(!/isError|treating the task as done/.test(d), 'a failed send already returns the reason');
   assert.ok(!/\boutput\b/.test(d), 'the removed `output` argument is being described again');
+  assert.ok(d.length < 400, `description is ${d.length} chars — it grew back`);
 });
 
 test('search_chats carries the refer-back trigger phrases', () => {
@@ -70,11 +68,18 @@ test('search_chats carries the refer-back trigger phrases', () => {
 });
 
 test('both tools describe WHEN to reach for them, not only HOW to call them', () => {
-  // The generalisation, cheap to state and the thing actually worth holding: a
-  // description that only documents arguments is a description the model reads
-  // after it has already decided not to call the tool.
+  // The generalisation worth holding: a description that only documents
+  // arguments is one the model reads after it has already decided not to call
+  // the tool.
+  //
+  // This used to assert `length > 400`, which was a mistake worth recording —
+  // a LENGTH FLOOR MEASURES THE WRONG THING. It passed while send_message
+  // carried 1,249 chars of inert prose about a setting it cannot touch, and it
+  // would have failed the cut that removed it. Pin the trigger phrases, which
+  // are what actually make a tool get used; a description can be short and
+  // complete, and long and useless.
   for (const [name, tool] of [['send_message', sendMessage], ['search_chats', searchChats]]) {
     const d = tool.description;
-    assert.ok(d.length > 400, `${name}'s description is short enough that the "when" was probably cut`);
+    assert.ok(/mean CALL THIS|SEARCH FIRST/.test(d), `${name} no longer says when to reach for it`);
   }
 });

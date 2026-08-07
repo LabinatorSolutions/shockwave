@@ -1,8 +1,28 @@
-// The default file set every workspace gets — one manifest, one function.
+// The default file set every workspace gets — the manifest, and the two
+// functions that write it.
 //
-// These are FILES, not settings, on purpose: the user can read, edit, diff, and
-// sync them like anything else in the workspace, and the agent can too. Same
-// reasoning that keeps SOUL.md a file rather than a preference.
+// ── The rule for this folder ────────────────────────────────────────────────
+//
+// One module per seeded file, named after it, exporting `<X>_FILENAME` and
+// `DEFAULT_<X>`. No exceptions — including the two whose default is the empty
+// string, which is exactly where the rule earns itself: `DEFAULT_MEMORY = ''`
+// has somewhere to say that empty is deliberate, where a bare `''` in the
+// manifest below read as an unwritten stub.
+//
+// This replaced a split with no rule behind it. `soul.ts` held SOUL and AGENTS
+// (plus their filenames, plus `readSoul`), while `files.ts` held IGNORE,
+// GITIGNORE and the two memory filenames — so where a default lived was a
+// coin-toss, and the odd one out was named `AGENTS_STUB` while its three
+// neighbours were `DEFAULT_*`.
+//
+// `readSoul` stays in `soul.ts` and is re-exported here: `DEFAULT_SOUL` is the
+// one default that is also a RUNTIME FALLBACK, returned in memory for a
+// workspace that has no SOUL.md, so it has a consumer beyond this manifest.
+//
+// ── These are FILES, not settings, on purpose ───────────────────────────────
+//
+// The user can read, edit, diff and sync them like anything else in the
+// workspace, and so can the agent.
 //
 // WHEN THIS RUNS
 //   - `createWorkspaceRepo` only — a repo the user just created through the app.
@@ -12,10 +32,10 @@
 //
 // NOT on clone / adopt / set-up-here (`ensureCheckout`). Cloning means adopting
 // someone else's repo, and the sync engine commits and pushes on its next tick —
-// so scaffolding there would push our whole manifest into a repo the user may not own
-// and may share. `.gitignore` is the sharpest: adding one changes git's behavior
-// for every collaborator. Clone stays untouched; the manual action is how you
-// opt in.
+// so scaffolding there would push our whole manifest into a repo the user may not
+// own and may share. `.gitignore` is the sharpest: adding one changes git's
+// behavior for every collaborator. Clone stays untouched; the manual action is
+// how you opt in.
 //
 // It deliberately does NOT run on workspace activation. Writing to the user's
 // folder every time they switch workspaces is the wrong shape: silent, repeated,
@@ -28,29 +48,20 @@
 
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { DEFAULT_SOUL, SOUL_FILENAME, AGENTS_FILENAME, AGENTS_STUB } from './soul.js';
 
-// Ripgrep honors `.ignore` independently of .gitignore. pi's `grep` tool spawns
-// ripgrep with a hardcoded `--hidden` (see createGrepToolDefinition in
-// pi-coding-agent), which makes it descend into `.git/` — so a workspace-wide
-// search returns binary blobs from .git/objects, burning context and skewing
-// file counts. `.ignore` is the only lever we have from outside pi, and it's the
-// standard ripgrep convention rather than a workaround bolted into our code.
-export const IGNORE_FILENAME = '.ignore';
-const DEFAULT_IGNORE = `# Search-tool ignores (ripgrep). Not a git file.
-# The agent's grep searches hidden paths, so exclude git internals.
-.git/
-`;
+import { SOUL_FILENAME, DEFAULT_SOUL, readSoul } from './soul.ts';
+import { AGENTS_FILENAME, DEFAULT_AGENTS } from './agents.ts';
+import { MEMORY_FILENAME, DEFAULT_MEMORY } from './memory.ts';
+import { USER_FILENAME, DEFAULT_USER } from './user.ts';
+import { IGNORE_FILENAME, DEFAULT_IGNORE } from './ignore.ts';
+import { GITIGNORE_FILENAME, DEFAULT_GITIGNORE } from './gitignore.ts';
 
-// Deliberately minimal. This is a markdown workspace — syncing everything is the
-// point, so only OS droppings are excluded. Notably NOT .shockwave/: it carries
-// workspace.json (bookmarks, daily-note + template config) and workspace skills,
-// all of which SHOULD travel between machines.
-export const GITIGNORE_FILENAME = '.gitignore';
-const DEFAULT_GITIGNORE = `.DS_Store
-._*
-Thumbs.db
-`;
+export { SOUL_FILENAME, DEFAULT_SOUL, readSoul } from './soul.ts';
+export { AGENTS_FILENAME, DEFAULT_AGENTS } from './agents.ts';
+export { MEMORY_FILENAME, DEFAULT_MEMORY } from './memory.ts';
+export { USER_FILENAME, DEFAULT_USER } from './user.ts';
+export { IGNORE_FILENAME, DEFAULT_IGNORE } from './ignore.ts';
+export { GITIGNORE_FILENAME, DEFAULT_GITIGNORE } from './gitignore.ts';
 
 export interface DefaultFile {
   name: string;
@@ -59,24 +70,11 @@ export interface DefaultFile {
   purpose: string;
 }
 
-// The two memory files are seeded EMPTY, deliberately. Their content is written
-// by the agent through the `memory` tool, which appends `§`-delimited entries —
-// so a stub with prose in it would parse as the agent's first memory and be
-// carried into every prompt until something removed it. Zero bytes reads as an
-// empty store everywhere (`parseEntries('')` is `[]`), and seeding them at all
-// is only so they show up in the workspace as somewhere the agent writes.
-//
-// They are in this manifest, which means "Reset to defaults" blanks them along
-// with everything else. That is the accepted cost of having them here — the
-// renderer names them in its confirmation for that reason.
-export const MEMORY_FILENAME = 'MEMORY.md';
-export const USER_FILENAME = 'USER.md';
-
 export const DEFAULT_FILES: DefaultFile[] = [
   { name: SOUL_FILENAME, content: `${DEFAULT_SOUL}\n`, purpose: "The agent's identity for this workspace" },
-  { name: AGENTS_FILENAME, content: AGENTS_STUB, purpose: 'Your project-specific instructions to the agent' },
-  { name: MEMORY_FILENAME, content: '', purpose: 'What the agent has learned about working here' },
-  { name: USER_FILENAME, content: '', purpose: 'What the agent has learned about you' },
+  { name: AGENTS_FILENAME, content: DEFAULT_AGENTS, purpose: 'Your project-specific instructions to the agent' },
+  { name: MEMORY_FILENAME, content: DEFAULT_MEMORY, purpose: 'What the agent has learned about working here' },
+  { name: USER_FILENAME, content: DEFAULT_USER, purpose: 'What the agent has learned about you' },
   { name: IGNORE_FILENAME, content: DEFAULT_IGNORE, purpose: 'Paths the agent should skip when searching' },
   { name: GITIGNORE_FILENAME, content: DEFAULT_GITIGNORE, purpose: 'Paths git should not track' },
 ];

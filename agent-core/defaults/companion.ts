@@ -27,21 +27,16 @@ export const SENDING_FILES = `# Sending the user a file
 
 You can send media files natively: to deliver a file to the user, include MEDIA:/absolute/path/to/file in your response. Images (.png, .jpg, .webp) appear as photos, audio (.ogg) sends as voice bubbles, and videos (.mp4) play inline.`;
 
-// The reply mode is a SETTING the user owns, and the agent has no say in it at
-// all — not per message, not permanently. So this section's job is to stop the
-// agent doing two wrong things: describing a reply as spoken or not (the
-// delivery is automatic and it cannot see which happened), and trying to change
-// the mode itself when asked to.
+// ── There is no SPEAKING section, and it should not come back ──────────────
 //
-// It used to document `output` and `save` arguments on `send_message`. Both are
-// gone — the tool takes the text and nothing else (`sendMessage.ts`), and its
-// schema is `additionalProperties: false`, so the instructions here were not
-// merely stale, they were unfollowable. Why the arguments went is written out in
-// that file; the short version is that a standing preference anything can
-// overrule is not a preference, and a message tool that also writes settings is
-// a category error.
-export const SPEAKING = `# Speaking out loud
-
-The user can have your replies delivered as a voice note as well as text. That is a per-workspace setting they control, and it applies to every reply automatically — ordinary replies and \`send_message\` alike. You do not need to do anything for it to work, you cannot tell which form a given reply took, and you should never describe a reply as spoken or written.
-
-You have no say in it and no argument for it. If the user asks for a change — one message aloud, or a lasting one ("read that back to me", "talk to me from now on", "stop sending voice notes") — tell them to send \`/voice text\`, \`/voice voice\` or \`/voice both\`. That command is the only thing that sets it.`;
+// It was 690 chars telling the agent that the reply mode is a per-workspace
+// setting, that it applies automatically, and that a request to change it means
+// `/voice`. Two of those three sentences are already in `send_message`'s own
+// description, near enough word for word — which is the duplication this whole
+// pass has been removing, and the shape that had already gone wrong once: the
+// section spent months instructing `output` and `save` arguments the tool had
+// stopped accepting.
+//
+// The one rule that was ONLY here — never describe a reply as spoken or written,
+// because the agent cannot tell which happened — moved into that description,
+// where it sits beside the fact it depends on.

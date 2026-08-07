@@ -152,3 +152,56 @@ test('cleared timer: rename does not fire stray unlink later', async () => {
   await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(emitted, [{ type: 'rename', oldPath: '/a.md', newPath: '/b.md' }]);
 });
+
+// ── The mixed batch: renames, deletes and adds arriving together ────────────
+//
+// This case lived in `correlator.integration.test.js`, driving a real
+// @parcel/watcher over a real tmp directory, and it FLAKED at roughly one run
+// in ten. The failure was always the same shape:
+//
+//     types: {"rename":10,"add":4,"unlink":5}   — expected add: 5
+//
+// Every rename paired and every delete fired; one create event simply arrived
+// after the harness stopped listening. The correlator was right every time —
+// what was unreliable was fsevents' delivery timing, which is not the thing
+// under test.
+//
+// A test that goes red when nothing is broken is worse than no test: it trains
+// you to ignore red, and then it cannot tell you when something real breaks.
+// So the bulk case moved here, where the events are handed over directly and
+// there is no clock in it. The integration file keeps the SMALL cases — single
+// rename, atomic save, folder rename — which is what actually needs a real
+// watcher to prove: that our dispatch reads parcel's event shapes correctly.
+// Those are the ones with nothing to race.
+
+test('mixed batch: 10 renames + 5 deletes + 5 adds, arriving together', async () => {
+  const { corr, emitted } = setup({ graceMs: 50 });
+
+  const renamed = Array.from({ length: 10 }, (_, i) => `/f-${i}.md`);
+  const deleted = Array.from({ length: 5 }, (_, i) => `/f-${i + 10}.md`);
+  for (const [i, p] of [...renamed, ...deleted].entries()) corr.onPathSeen(p, String(2000 + i), `h${i}`);
+
+  // Deletes before creates — the order `watcherDispatch.handleBatch` imposes, so
+  // an unlink is always buffered before the add that might pair with it.
+  for (const p of [...renamed, ...deleted]) corr.onPathGone(p);
+  renamed.forEach((p, i) => corr.onPathAppeared(p.replace('.md', '-r.md'), String(2000 + i), `h${i}`));
+  for (let i = 0; i < 5; i++) corr.onPathAppeared(`/new-${i}.md`, String(9000 + i), `n${i}`);
+
+  // The 5 unpaired unlinks are still inside the grace window and emit nothing yet.
+  const beforeGrace = emitted.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
+  assert.deepEqual(beforeGrace, { rename: 10, add: 5 }, `before grace: ${JSON.stringify(beforeGrace)}`);
+
+  await new Promise((r) => setTimeout(r, 120));
+
+  const types = emitted.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
+  assert.deepEqual(types, { rename: 10, add: 5, unlink: 5 }, `after grace: ${JSON.stringify(types)}`);
+
+  // Each rename paired with ITS OWN new path — a count alone would pass while
+  // ten renames were shuffled among each other.
+  const pairs = new Map(emitted.filter((e) => e.type === 'rename').map((e) => [e.oldPath, e.newPath]));
+  for (const p of renamed) assert.equal(pairs.get(p), p.replace('.md', '-r.md'));
+
+  // And the deletes are the files that were deleted, not whatever was left over.
+  const unlinked = emitted.filter((e) => e.type === 'unlink').map((e) => e.path).sort();
+  assert.deepEqual(unlinked, [...deleted].sort());
+});
