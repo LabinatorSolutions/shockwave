@@ -138,11 +138,29 @@ export function makeDailyNoteTool(workspacePath: string, timezone?: string): any
   return {
     name: 'daily_note',
     label: 'Daily Note',
+    // THE description of what a daily note is. It has to carry that on its own:
+    // there is no longer a prompt section about daily notes, deliberately (see
+    // the note where `DAILY_NOTES` used to be in `defaults/helper.ts` — most of
+    // it was one workspace's journaling style, which is not ours to impose).
+    //
+    // What belongs here is only what the APP knows: that the journal is one file
+    // per day, that it is the same file the calendar button opens, that the name
+    // is computed from two settings and must never be guessed, and which words
+    // mean this file rather than a new one. How entries should be written is the
+    // user's business, stated in their own AGENTS.md if they care.
+    //
+    // The trigger words are load-bearing and are the reason this is not two
+    // sentences: "log this", "add this to today's" name a DESTINATION, and
+    // without them the agent writes a sensible-looking new file instead. That
+    // failure is what the deleted section's trigger list was for, and it is the
+    // one part of it that was genuinely about routing to an app feature.
     description: [
-      "Find the user's daily note (journal / diary) for a date, and create it if asked.",
-      'Returns the workspace-relative path, whether it already exists, and the naming settings used.',
-      'Always use this instead of guessing a filename — the name comes from a per-workspace format setting and the folder from another, and a guess silently creates a second note alongside the real one.',
-      'Omit `date` for today. Pass `create: true` only when you are about to write into it.',
+      "The user's daily note — their journal. One file per day, and the same file the app's calendar button opens.",
+      'This resolves that file for a date and creates it from their template when it does not exist yet.',
+      'Returns the workspace-relative path, whether it already existed, and the naming settings used.',
+      '**Always use this instead of guessing a filename.** The name comes from a per-workspace format setting and the folder from another (slashes in the format are folder boundaries, so `YYYY/MM/DD` files notes under year and month folders). A guessed name does not fail loudly — it quietly creates a second note beside the real one and the user finds out days later.',
+      '"Journal", "daily note", "diary", "today\'s note", "log this", "add this to today\'s" all mean this file: resolve it here rather than creating somewhere new.',
+      'Omit `date` for today. To read a past day, pass that `date` with `create: false`, so asking what was written last Monday cannot leave an empty note dated last Monday.',
     ].join(' '),
     promptSnippet: "Resolve the user's daily note for a date (default today), optionally creating it from their template.",
     parameters: {
@@ -154,7 +172,7 @@ export function makeDailyNoteTool(workspacePath: string, timezone?: string): any
         },
         create: {
           type: 'boolean',
-          description: "Create the note if it doesn't exist, seeded from the user's configured template. Default false, so reading an old day never leaves an empty file behind.",
+          description: "Create the note if it doesn't exist, seeded from the user's configured template. Defaults to TRUE — the usual reason to resolve a daily note is to write in it. Pass false when you are only reading, so asking what was written on a past day cannot leave an empty note dated that day.",
         },
       },
       additionalProperties: false,
@@ -188,9 +206,22 @@ export function makeDailyNoteTool(workspacePath: string, timezone?: string): any
           };
         }
 
-        if (!params?.create) {
+        // Creation is the DEFAULT — only an explicit `create: false` opts out.
+        // Written as `!== false` rather than `?? true` so a client that sends
+        // `null` for an omitted boolean (strict providers do) still creates.
+        //
+        // The default used to be false, on the reasoning that asking what was
+        // written last Monday must not leave an empty file dated last Monday.
+        // That failure is real but it is the rarer one, and it is visible — a
+        // stray dated note can be seen and deleted. The common case is writing,
+        // and there the old default cost a round-trip and invited a worse
+        // outcome: an agent that reads "call again with create: true" can
+        // instead reach for `write` and make the file itself, which skips the
+        // user's template silently. Passing `create: false` on a read is one
+        // argument; recovering a note that never got its template is not.
+        if (params?.create === false) {
           return {
-            content: [{ type: 'text', text: `There is no daily note for ${iso} yet. It would be \`${at.relPath}\`. Call again with create: true to make it.\nSettings: ${where}.` }],
+            content: [{ type: 'text', text: `There is no daily note for ${iso} yet. It would be \`${at.relPath}\`. Call again without create: false to make it.\nSettings: ${where}.` }],
             details,
           };
         }

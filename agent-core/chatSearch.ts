@@ -60,8 +60,20 @@ export function makeChatSearchTool(host: ChatSearchHost, ctx: () => { workspaceI
   return {
     name: 'search_chats',
     label: 'Search Chats',
+    // The second sentence is the WHEN, and it is here rather than in the system
+    // prompt for the same reason `send_message`'s trigger list is: it is about
+    // one tool, the model reads it at the call site, and this text is rebuilt at
+    // every session boot where the prompt is frozen when a chat is created.
+    //
+    // It is also the sentence that makes the tool get used at all. Everything
+    // else describes HOW to call it; without a mapping from what the user
+    // actually says, the agent answers "what did we decide about X" from an
+    // empty hand or asks them to repeat themselves. That failure is the quietest
+    // of its kind — nothing errors, no wrong file appears, the agent simply does
+    // not remember a conversation you both had, which reads as normal.
     description: [
       'Search earlier conversations in this workspace — what the user told you before, what was decided, what you already tried.',
+      'SEARCH FIRST when the user refers back: "what did we decide about…", "you said last week…", "did I already ask you to…", "how did we do this before". They are telling you the answer is in a conversation you both had — answering from nothing, or asking them to repeat it, is the one wrong move.',
       'Three ways to call it: pass `query` to search; pass `chatId` and `around` to read more of a chat you found; pass nothing to list recent chats.',
       'Search returns whole conversations, each with the matching passage, the messages around it, and how that chat opened and ended.',
       'Only what the user and the agent said is searched — tool output is not. The current chat is never returned; you can already see it.',

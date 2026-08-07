@@ -31,7 +31,7 @@ import { TOOL_CATALOG } from './tools.js';
 
 export { readSoul, SOUL_FILENAME, AGENTS_FILENAME, AGENTS_STUB, DEFAULT_SOUL } from './soul.js';
 export { buildShockwaveHelper } from './helper.js';
-export { TOOL_CATALOG, DENIED, formatToolList, activeToolNames, deniedReason } from './tools.js';
+export { TOOL_CATALOG, DENIED, activeToolNames, deniedReason } from './tools.js';
 
 export interface PromptOpts {
   unattended?: boolean;

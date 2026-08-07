@@ -7,13 +7,15 @@
 //
 // EDITING: each section below is its own named `const` string so you can hand-
 // edit one concern without hunting through a wall of text. `buildShockwaveHelper`
-// at the bottom composes them in order. The only interpolated piece is the tool
-// list (from `tools.ts`) — everything else is literal prose.
+// at the bottom composes them in order. Almost all of it is literal prose — the
+// only interpolated values are the scratch-pad path, the timezone, and the
+// workspace's template list. It does NOT restate what any tool does; see the
+// block above GUIDELINES.
 
 // `ToolDescriptor` is type-only and must say so: this module is loaded straight
 // off source by `node --test`, which strips types rather than resolving them, so
 // a type in a value import is a missing export at runtime.
-import { TOOL_CATALOG, formatToolList } from './tools.ts';
+import { TOOL_CATALOG } from './tools.ts';
 import type { ToolDescriptor } from './tools.ts';
 import { SENDING_FILES, SPEAKING, isCompanionSource } from './companion.ts';
 
@@ -66,44 +68,66 @@ Anything the user frames as a single future moment — "remind me tonight at 6:5
 Two things to get right:
 
 - **Registration takes about a minute** (the file has to reach GitHub, and the scheduler re-reads it on a cycle). Don't schedule a one-time job less than ~2 minutes out — do it immediately instead, or pick a later time and say so.
-- **A run has no user in it.** If the point of the job is to tell the user something, the prompt must say so explicitly — see "Reaching the user" below. Otherwise the run just quietly writes a chat nobody is looking at.
+- **A run has no user in it.** If the point of the job is to tell the user something, the prompt must say so explicitly — write "send the user a message …" into it, so the future run reaches out with \`send_message\` instead of quietly writing a chat nobody is looking at.
 
 A run starts a brand-new chat, so it sees the current workspace and your latest SOUL. Runs execute on the companion server, not this machine — the app doesn't have to be open. Like any cron, a moment that passes while the server is down is simply missed.`;
 
-const REACHING_THE_USER = `# Reaching the user
+// ── `REACHING_THE_USER` moved into the tool, not deleted ────────────────────
+//
+// It was 909 chars explaining what `send_message` is for: that it is the only
+// way to reach the user outside the current chat, that "send me / notify me /
+// ping me / remind me / tell me when" all mean CALL IT rather than write it
+// down, and that on an unattended run a message not sent is a message that did
+// not happen. Every word of that is about one tool, so it now lives in that
+// tool's description (`agent-core/sendMessage.ts`), where the model reads it at
+// the call site and where an edit reaches chats that already exist — this file
+// is frozen into a chat when the chat is created and cannot be revised for it.
+//
+// Nothing was dropped except one sentence that was never about this tool: the
+// advice to write "send the user a message …" into a `cron.json` prompt. That
+// belongs to writing cron jobs, and `SCHEDULED_RUNS` above already says it.
 
-\`send_message\` delivers a message to the user directly (Telegram). It is the only way to reach them outside the chat you're in.
+// ── There is no "Available tools" section, and adding one back is a regression ─
+//
+// There was one. It listed every catalog entry with a one-line description of
+// our own and closed with "This is the complete set — there are no others."
+//
+// The model already has that list. Every tool pi runs — its own builtins and the
+// ones we register as `customTools` — is sent to the provider as a tool
+// definition carrying its name, its full description and its parameter schema.
+// A prose list beside it is a SECOND copy of facts that already arrive, and the
+// two are maintained by different hands: ours was a sentence per tool, pi's
+// `grep` description carries the truncation limits and every argument.
+//
+// It had already drifted, which is what settled it. The catalog's `send_message`
+// line documented an `output` argument — text / voice / both — for months after
+// the tool stopped accepting one, so on every Telegram chat the prompt taught an
+// argument the schema rejected. Nothing failed; the model simply read one thing
+// and could only do another.
+//
+// hermes reached the same place: it never enumerates its tools, and where it
+// writes about them it points AT the schema ("the `kanban_*` tools in your
+// schema") rather than restating it.
+//
+// What did NOT survive in the tool definitions is the advice about choosing
+// BETWEEN tools, which is ours and appears in no vendor's description — pi's own
+// `bash` snippet actually recommends the opposite ("Execute bash commands (ls,
+// grep, find, etc.)"). That moved into GUIDELINES below, where the rest of our
+// cross-cutting rules already live.
 
-**"Send me", "notify me", "let me know", "ping me", "remind me", "tell me when" — all mean \`send_message\`.** Take them literally: the user is asking to be reached, not asking you to write it down or say it in a chat they may not be looking at. If a request ends in one of those phrases, the last thing you do is call \`send_message\`.
-
-This matters most on scheduled and unattended runs, where nobody sees your reply at all — there, a message that isn't sent is a message that didn't happen. When you write a \`cron.json\` prompt whose purpose is to inform the user, say "send the user a message …" in the prompt itself so the future run knows to reach out.
-
-If sending fails (Telegram isn't connected), say so in your reply rather than treating the task as done.`;
-
-// The closing paragraph is about choosing BETWEEN tools, so it only makes sense
-// when `bash` is one of the choices. A run without it (a review run)
-// was being told to "reach for bash" for anything the other tools don't cover —
-// naming a tool it does not have, which is the same failure `REACHING_THE_USER`
-// is gated against below, and it reads as though the run is unrestricted.
-const TOOLS = (tools: ToolDescriptor[]) => {
+// A guideline naming a tool this run doesn't hold is noise at best, and at worst
+// tells the reader the run has it — so each line that names one is gated on it.
+// Nothing here restates what a tool does; these are rules about USING them that
+// no single tool's description is the right place for.
+const GUIDELINES = (tools: ToolDescriptor[]) => {
   const has = (n: string) => tools.some((t) => t.name === n);
   const searchTools = ['grep', 'find', 'ls'].filter(has);
-  const advice = has('bash') && searchTools.length
-    ? `\n\nUse ${searchTools.map((t) => `\`${t}\``).join(', ')} for searching and listing rather than shelling out through \`bash\`: they return structured, truncated output, they respect \`.gitignore\`, and they work on every platform (\`bash\` and Unix tools like \`grep\` are not available on Windows). Reach for \`bash\` to run programs, git, and anything the other tools don't cover.`
-    : '';
-  return `# Available tools
-
-${formatToolList(tools)}
-
-This is the complete set — there are no others.${advice}`;
-};
-
-// Same rule as the tool list above: a guideline about a tool this run doesn't
-// have is noise at best, and at worst tells the reader the run has it.
-const GUIDELINES = (tools: ToolDescriptor[]) => {
   const lines = [
-    ...(tools.some((t) => t.name === 'get_agent_secret')
+    ...(has('get_agent_secret')
       ? ['- Do not echo a token returned by \`get_agent_secret\` in your reply, into a file, or into a shell command that prints it. Prefer passing the token via env vars to the subprocess that needs it.']
+      : []),
+    ...(has('bash') && searchTools.length
+      ? [`- Use ${searchTools.map((t) => `\`${t}\``).join(', ')} for searching and listing rather than shelling out through \`bash\`: they respect \`.gitignore\`, and \`bash\` and Unix tools like \`grep\` are not available on Windows. Reach for \`bash\` to run programs, git, and anything the other tools don't cover.`]
       : []),
     '- Be concise in your responses.',
     '- Show file paths clearly when working with files.',
@@ -117,115 +141,128 @@ The user's workspace is a single folder on disk (your cwd). It contains \`.md\` 
 
 const WIKILINKS = `# Wiki-links
 
-A file's **basename** is its name with no folder path and no \`.md\` extension. For \`notes/projects/Foo.md\`, the basename is \`Foo\`. Wiki-links reference a file by its basename, optionally prefixed with just enough folder path to disambiguate.
+A file's **basename** is its name with no folder path and no \`.md\` extension — for \`notes/projects/Foo.md\`, the basename is \`Foo\`. Wiki-links reference a file by basename, optionally prefixed with just enough folder path to disambiguate. Resolution is case-insensitive.
 
-Inside any \`.md\` file you may see:
-
-- \`[[Some File]]\`            → the file whose basename is \`Some File\`, resolved workspace-wide.
+- \`[[Some File]]\`            → the file whose basename is \`Some File\`.
 - \`[[Some File#Heading]]\`    → same target, scrolled to that heading.
-- \`[[Some File|Display]]\`    → same target, but rendered as "Display" to the reader.
-- \`[[projects/Some File]]\`   → a path-qualified link: the \`Some File\` located under \`projects/\`.
+- \`[[Some File|Display]]\`    → same target, rendered as "Display".
+- \`[[projects/Some File]]\`   → path-qualified: the \`Some File\` under \`projects/\`.
 
-Resolution is case-insensitive on the basename (\`[[Some File]]\` and \`[[some file]]\` are the same target):
+**Two files may share a basename if they live in different folders** (\`clients/acme/Meeting.md\` and \`clients/globex/Meeting.md\` coexist). Only a same-folder collision is impossible, and the filesystem enforces that — there is no workspace-wide uniqueness rule, so a duplicate basename in another folder is fine to create.
 
-- **Bare \`[[Foo]]\`** → if exactly one file has that basename, it resolves there. If several files share the basename (this is allowed — see the next section), it prefers the one in the *same folder* as the linking file, otherwise the one with the shortest path.
-- **Path-qualified \`[[projects/Foo]]\`** → the \`Foo\` whose folder path ends with \`projects/\`. Use only as much leading path as you need to disambiguate — not the full path, and never a leading slash. If that path is stale (the file moved), resolution falls back to the bare basename so the link still resolves.
+When a basename is duplicated, a bare \`[[Meeting]]\` resolves to the copy in the **linking file's own folder**, otherwise the one with the **shortest path** — which may not be the one you meant. Path-qualify to be sure: \`[[acme/Meeting]]\`. Use only as much leading path as you need, never a leading slash; if that path goes stale because the file moved, resolution falls back to the bare basename so the link still works.
 
-Prefer a bare link when the basename is unique; add a folder prefix only to disambiguate duplicates.`;
+To rename a file, just \`mv\` it. Shockwave detects the rename by inode and rewrites the \`[[…]]\` references that resolve to it in every other file, path-qualified ones included. **Don't hand-edit references on rename.**`;
 
-const ASSOCIATION = `# Associating content with a link (indentation rule)
+// ── This section IS the rule, and the rule changed under it once already ────
+//
+// It used to say a bullet never counts as indentation ("a `-` at the start of a
+// line is still column 0") and carried a worked example proving it. That has
+// been false since `collectContext` (`src/renderer/linkIndex.ts`) grew its
+// second clause: a LIST ITEM at the link's own indent IS associated, provided no
+// blank line separates them. The prompt went on teaching the old rule, with an
+// example — `[[Topic A]]` then `- Note 2.` — asserting the opposite of what the
+// parser does. Anyone following it indented content that did not need indenting,
+// and would have read a correctly-associated file as unassociated.
+//
+// So six examples became three, chosen to cover the three ANSWERS rather than to
+// restate one: the line that does not attach, the list that does, and the blank
+// line that breaks it. The blank-line case is new here and is now the only real
+// gotcha; nothing documented it before.
+//
+// Checked by running the examples through `parseLinks` itself, not by reading
+// `collectContext` and reasoning about it. If that function changes again, this
+// text is what has to change with it — and the same rule lives in
+// `src/main/linkParser.ts`, which parity-tests against the renderer's copy.
+const ASSOCIATION = `# Associating content with a link
 
-Content under a wiki-link is associated with that link only if it's indented more than the link's line. Association is determined by leading whitespace at the start of the line. Bullets, headings, and other markdown syntax do not count as indentation — a \`-\` at the start of a line is still column 0. Bullets are fine to use, you just have to actually indent them.
+Content following a wiki-link is associated with it — and shows up as a preview under the backlink on the target's page — when either is true:
 
-Note 1 is NOT associated with Topic A:
+- it is **indented deeper** than the link's line, or
+- it is a **list item at the same indent**, with no blank line in between.
+
+Associated, indented:
 
     [[Topic A]]
-    Note 1.
+        Note 1.
 
-Note 2 is NOT associated with Topic A — the bullet doesn't indent the line:
+Associated, a list directly under it (bullets and numbered items both count):
 
     [[Topic A]]
     - Note 2.
 
-Note 3 IS associated with Topic A:
+NOT associated — a plain unindented line, and a list separated by a blank line:
 
     [[Topic A]]
-        Note 3.
+    Note 3.
 
-Notes 4 and 5 are both associated with Topic A — bullets work when they're indented:
+    [[Topic B]]
 
-    [[Topic A]]
-        - Note 4.
-        - Note 5.
+    - Note 4.`;
 
-The link can also sit on a bullet, with nested bullets associating via deeper indent:
+// `DUPLICATE_BASENAMES` was folded into `WIKILINKS` above. They answered ONE
+// question — how a link finds its file — and stated the resolution tiebreaker
+// twice in slightly different words; the old `WIKILINKS` even ended by pointing
+// at "the next section". Dropped in the merge: the note that the in-app create
+// UI auto-appends " 1" / " 2" on a same-folder collision, which describes what
+// happens when a PERSON creates a file and is nothing the agent does or can act
+// on.
 
-    - [[Topic A]]
-        - Note 6.
+// ── Cut to the two facts that stop a WORSE default ─────────────────────────
+//
+// This was a five-step research procedure. Most of it — open the central file,
+// follow its outgoing links, two hops is usually enough — is ordinary competent
+// behaviour that needs no instruction, and the one step that WAS specific to
+// this app taught a method measured at roughly 26% precision.
+//
+// A 2026-07-30 benchmark (synthetic workspaces at 10K/50K/100K files, ground
+// truth from this repo's own parser and resolver) put numbers on both halves of
+// what remains. The plain string `[[Name]]` finds **22% of real backlinks** — it
+// misses every `#heading`, `|alias` and folder-prefixed form. The full-form
+// regex has 100% recall but precision around **1/k**, k being the number of
+// files sharing that basename: 58% at k=2, 1.1% at k=70. That second half is
+// **not fixable by any regex**, because resolution depends on the LINKING file's
+// own folder and grep cannot see it — and the section above now tells the agent
+// that duplicate basenames are normal, so the case where this breaks is one we
+// actively encourage.
+//
+// Deleting the section outright would be worse than keeping it small: `grep` is
+// a tool the agent already has, so with no guidance it reaches for the plain
+// string — the 22% option. Two sentences buy the 100%-recall pattern and the
+// warning that the hits need checking.
+//
+// The real fix is an indexed backlinks tool: 294 tokens against 55,949, exact.
+// It does not exist yet. When it does, this goes.
+const LINK_GRAPH = `# Finding what links to a file
 
-When you want supporting content to actually belong to a link, indent it. As a byproduct, associated content shows up as a preview snippet under the backlink on the target's backlinks panel.
+To find files linking to \`<Name>\`, \`grep\` for \`\\[\\[([^]]*/)?<Name>\` rather than the plain string \`[[<Name>]]\` — that plain form misses every link written as \`[[<Name>#heading]]\`, \`[[<Name>|alias]]\`, or with a folder prefix, which is most of them.
 
-This rule applies to files you write from any tool — the index is rebuilt from disk on every change.`;
-
-const DUPLICATE_BASENAMES = `# Duplicate basenames are allowed
-
-Two files may share a basename as long as they live in **different folders** (\`clients/acme/Meeting.md\` and \`clients/globex/Meeting.md\` coexist fine). Only a *same-folder* collision is a hard error — the filesystem itself forbids two \`Meeting.md\` in one directory. There is no workspace-wide uniqueness requirement.
-
-When a basename is duplicated:
-
-- To **link** to a specific one, path-qualify it: \`[[acme/Meeting]]\` vs \`[[globex/Meeting]]\`. A bare \`[[Meeting]]\` resolves to the copy in the linking file's own folder, else the shortest path — which may not be the one you meant.
-- To **create** a new file, a duplicate basename in another folder is fine. Only avoid a name already taken *in the same folder* (the in-app create UI auto-appends " 1", " 2", … for that case). A descriptive name is still better than a numbered one.
-
-If you need to rename a file, just \`mv\` it. Shockwave detects the rename via inode and rewrites the \`[[…]]\` references that resolve to it in every other file automatically (path-qualified links included). Don't hand-edit references on rename.`;
-
-const LINK_GRAPH = `# Using the link graph to research
-
-Wiki-links are bidirectional in effect (Shockwave maintains a backlink index). When the user asks about something:
-
-1. Open the central file (find by basename).
-2. Follow every \`[[…]]\` it points to (outgoing).
-3. Find files that point at it with the \`grep\` tool, pattern \`\\[\\[([^]]*/)?<Name>\` (the \`([^]]*/)?\` matches both bare \`[[<Name>]]\` and path-qualified \`[[folder/<Name>]]\` links).
-4. Two hops is usually enough surrounding context.`;
+**Treat the hits as candidates, not answers.** A wiki-link resolves by the linking file's own folder, which no pattern can see, so when several files share this basename some matches belong to one of the others. Check where each hit lives before counting it.`;
 
 const EXTENDING_GRAPH = `# Extending the graph
 
 When you write or update content, add wiki-links wherever there's an obvious connection. You may reference a file that doesn't exist yet — \`[[New Topic]]\` is valid as an unresolved link in the editor. If the conversation calls for that file to actually exist, **create it** (only avoid a name already used in the same folder), give it a short opening paragraph, and link it.`;
 
-// Included only when `daily_note` survives the tool filter, same rule as
-// REACHING_THE_USER: a section that tells the agent to call a tool by name is
-// worse than nothing when the tool isn't there.
+// ── There is no `DAILY_NOTES` section, and it is not coming back ────────────
 //
-// The trigger list is the point of this section. "Add this to my journal" is a
-// destination, not a description, and without the mapping the agent writes a
-// sensible-looking new file instead — which is the same failure "send me" had
-// before REACHING_THE_USER existed.
+// It was 3,175 chars — the largest section in the prompt — and most of it was
+// one person's journaling method: record verbatim, stamp every entry with the
+// time, append rather than replace, match the file's existing convention. That
+// is a convention, not app behaviour. Shipping it in the system prompt imposed
+// it on every workspace, including the ones that never open a daily note.
 //
-// `hasOpenFile` is desktop-only; off it, there is no UI to show a file in.
-const DAILY_NOTES = (hasOpenFile: boolean) => `# Daily notes (the journal)
-
-The user keeps a **daily note** — one file per day, the workspace's journal. The app has a calendar button that opens today's; \`daily_note\` resolves the same file.
-
-Its name comes from a format string the user chose and its folder from a second setting, both per workspace (\`.shockwave/workspace.json\`, under \`dailyNote\` — readable and editable like any other file, and the user changes it in Settings → Daily Notes). Slashes in the format are folder boundaries, so \`YYYY/MM/DD\` files notes under year and month folders.
-
-**Never construct a daily note's filename yourself.** Call \`daily_note\` — it applies both settings and tells you whether the file already exists. A guessed name doesn't fail loudly; it quietly creates a second note beside the real one, and the user finds out days later.
-
-## When the user means the daily note
-
-**"Journal", "daily note", "diary", "today's note", "log this", "add this to today's"** — all mean today's daily note. Take them as a destination: resolve it with \`create: true\` and add to it.
-
-**"Save this" / "write this down" / "keep this"** with no destination named means the daily note too. But if the conversation is already about a particular file — you just edited it, or the user pointed you at it — that file is what they mean. Prefer the obvious subject over the journal, and ask if there genuinely isn't one.
-
-**"What did I write yesterday / on the 12th / last Monday"** is the read direction: work out the calendar date, call \`daily_note\` with \`date\` and **no** \`create\`, and read it. Don't create a file for a day the user is only asking about — an empty note dated last Monday is worse than an honest "nothing there".
-
-## Writing into it
-
-**Add to the note; never replace it.** Read it first and append, or edit the section you're adding to. A daily note usually already has the user's own writing in it, and it is the one file where overwriting costs the most.
-
-**Record what the user said WORD FOR WORD. Never summarize, condense, paraphrase, tidy up the grammar, or "clean up" a dictated ramble.** This is the user's journal, not your notes about it — they are capturing their own thinking, and the exact wording is the thing being kept. A four-sentence thought does not become one better sentence. If they dictated it, the transcript is the entry. You may add structure *around* the entry (a heading, a bullet, a link) but not inside their words. When they explicitly ask you to write a summary, that request is itself the content — write the summary they asked for, and don't apply this rule to it.
-
-**Stamp every entry with the time.** Head it with the local time, e.g. \`**2:45 PM**\`, so the day reads in order and they can see when a thought landed. **Run \`date\` to get it — you are told today's date but not the time of day, so any time you write without checking is invented.** One \`date\` call covers a whole turn.
-
-Match what's already in the file: if the day's entries are bullets under a heading, add a bullet in that shape; if the note already has a timestamp convention, follow that one instead of introducing a second.${hasOpenFile ? '\n\nAfter you write to it, call `open_file` so the user can see it.' : ''}`;
+// The app's actual business here is: resolve the right filename, and don't let
+// the agent guess one. Both live in `daily_note`'s own definition
+// (`agent-core/dailyNoteTool.ts`) — the description carries "always use this
+// instead of guessing a filename … a guess silently creates a second note
+// alongside the real one", and the RESULT text carries "read it before writing,
+// and add to it rather than replacing what is there" at the exact moment it
+// applies. The trigger words are in the description's first line too ("the
+// user's daily note (journal / diary)").
+//
+// A workspace that wants a house style for its journal states it in its own
+// `AGENTS.md`, which pi appends to the prompt. That is the surface for
+// per-workspace instruction; this file is not.
 
 // The workspace's templates, listed directly — folder and files read at chat
 // creation (`readTemplates` in templates.ts) and frozen with the prompt, same
@@ -268,6 +305,27 @@ Do NOT use (they'll render as raw text):
 // adds is the part the tool description cannot know: that these are two real
 // files in the user's workspace, which the user can open and edit, and which the
 // agent must therefore not treat as a private store.
+// A TRIGGER MAPPING, not a description of the tool — `search_chats` already
+// describes its three call shapes in its own definition, and that is how to use
+// it, not when to reach for it. Same gap `REACHING_THE_USER` and `DAILY_NOTES`
+// were written to close, and the same shape of fix: the user names a
+// DESTINATION ("what did we decide") and without the mapping the agent answers
+// from what's in front of it.
+//
+// This one fails the most quietly of the three. "Send me" not sending is
+// visible; a note landing in the wrong file is visible; an agent that simply
+// doesn't remember a conversation you both had reads as normal behaviour.
+// `EARLIER_CHATS` lived here for about a day and moved into `search_chats`'s
+// own description (`agent-core/chatSearch.ts`). It was written as a section on
+// the reasoning that a tool description covers HOW to call a tool and the prompt
+// covers WHEN — which turned out to be a distinction without a difference. The
+// model reads both, the tool description is the one it reads at the call site,
+// and it is the one an edit can still reach for a chat already underway.
+//
+// Same move as `REACHING_THE_USER` above, and `DAILY_NOTES` and
+// `# Creating skills` below. The rule they all follow: what a single tool is FOR
+// belongs with that tool. What stays in this file is what no single tool owns.
+
 const MEMORY = `# Memory
 
 You keep two files at the workspace root:
@@ -281,38 +339,64 @@ Write them with the \`memory\` tool rather than editing the files directly — i
 
 They are ordinary files the user can open and edit. If they have written something there themselves, it is theirs — work with it, don't tidy it away.`;
 
-const SKILLS = `# Creating skills
+// ── USING skills. hermes' `## Skills (mandatory)` header, copied ────────────
+//
+// This is the header hermes puts directly above its skill index
+// (`build_skills_system_prompt` in `agent/prompt_builder.py`). We had NOTHING
+// equivalent: pi appends its own `<available_skills>` list after our prompt,
+// introduced by one soft line — "use the read tool to load a skill's file when
+// the task matches its description" — and that was the whole instruction.
+//
+// The gap that closes is the one a capable model creates by itself: it reads
+// "code-review skill", concludes it already knows how to review code, skips the
+// file, and misses the conventions the skill existed to carry. hermes' answer is
+// the last clause — the skill defines how it is done HERE — and that is the
+// sentence doing the work.
+//
+// It matters more here than there: review runs write skills unattended, so we
+// spend model time generating skills the agent was barely told to read.
+//
+// Copied verbatim except where hermes names something we don't have:
+//   - `skill_view(name)` → `read`. pi loads a skill with the read tool.
+//   - Dropped the paragraph about loading the `hermes-agent` skill for questions
+//     about hermes itself. No such skill.
+//   - Dropped `<available_skills>` and the index — pi emits its own list, after
+//     this, from the paths `skillLibrary.ts` resolves at boot.
+const USING_SKILLS = `# Skills (mandatory)
 
-If the user asks you to create a skill, "remember this for next time," or capture a workflow as a reusable skill, do it. Otherwise, if you think a skill *would* be useful but the user didn't ask, propose it in one sentence and wait for confirmation before writing any files.
+Before replying, scan your available skills (listed below). If a skill matches or is even partially relevant to your task, you MUST load it with \`read\` and follow its instructions. Err on the side of loading — it is always better to have context you don't need than to miss critical steps, pitfalls, or established workflows. Skills contain specialized knowledge — API endpoints, tool-specific commands, and proven workflows that outperform general-purpose approaches. Load the skill even if you think you could handle the task with basic tools.
 
-Skills live at:
+Skills also encode the user's preferred approach, conventions, and quality standards for tasks like code review, planning, and testing — load them even for tasks you already know how to do, because the skill defines how it should be done here.
 
-    <cwd>/.agents/skills/<skill-name>/SKILL.md
+If a skill has issues, fix it with \`manage_skill\` (action \`patch\`). If a skill you loaded was missing steps, had wrong commands, or needed pitfalls you discovered, update it before finishing.
 
-A skill is a folder with a \`SKILL.md\` file — YAML frontmatter on top, markdown body below:
+Only proceed without loading a skill if genuinely none are relevant to the task.`;
 
-    ---
-    name: skill-name
-    description: What this skill does and when to use it. List specific trigger phrases ("Use when the user mentions X, Y, or Z…"). Be concrete — a weak description never fires.
-    ---
+// ── WHEN to save one. hermes' `SKILLS_GUIDANCE`, copied ─────────────────────
+//
+// hermes carries this in its system prompt; we had the same content only in
+// `MANAGE_SKILL_DESCRIPTION`. Mirroring hermes means it lives in both places,
+// and the two say the same thing on purpose — this is the trigger, the tool
+// description is the how.
+//
+// Copied verbatim except:
+//   - `skill_manage` → `manage_skill`, our name for the same tool.
+//   - Dropped hermes' `## Skill Safety Rule` (its four `[SKILL_PRUNED]` points).
+//     That is a protocol for recovering skills lost to hermes' context
+//     compaction; pi does not prune skills and has no such marker, so the whole
+//     block would describe a state that cannot occur.
+//
+// The offer-and-confirm rule that used to sit in our own version of this is not
+// dropped — it moves to `MANAGE_SKILL_DESCRIPTION`, which is where hermes keeps
+// it ("After difficult/iterative tasks, offer to save as a skill… Confirm with
+// user before creating").
+const SAVING_SKILLS = `# Saving what you learn as a skill
 
-    # Skill Name
+After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with \`manage_skill\` so you can reuse it next time.
 
-    Imperative instructions. Step-by-step where order matters.
+When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with \`manage_skill\` (action \`patch\`) — don't wait to be asked. Skills that aren't maintained become liabilities.
 
-## Frontmatter rules
-
-- \`name\`: ≤64 chars, lowercase letters / digits / hyphens only, no leading/trailing or consecutive hyphens. Folder name must match. Cannot be "claude" or "anthropic".
-- \`description\`: ≤1024 chars. This is the *only* signal that decides whether the skill loads at runtime — so it must cover both what it does AND when to use it. Err toward listing trigger phrases. Compare: "Helps with PDFs." (won't fire) vs. "Extracts text from PDFs, fills forms, merges files. Use when the user mentions PDFs, forms, or document extraction." (fires).
-
-## Body
-
-- Keep \`SKILL.md\` under ~500 lines. Use imperative phrasing ("Run \`x\`", not "You can run \`x\`").
-- For supporting material, put files next to \`SKILL.md\`: \`scripts/\` for code the skill runs via bash, \`references/\` for longer docs the body links to, \`assets/\` for templates. Reference them with relative paths from \`SKILL.md\`.
-
-## After you create one
-
-Skills are scanned at session boot. After writing the files, tell the user to click the circular-arrow (counter-clockwise) icon in the **upper-left of the chat window** to start a new session — that's what clears the chat and loads the new skill on the next message.`;
+Skills live at \`<cwd>/.agents/skills/<skill-name>/SKILL.md\`. They are scanned at session boot, so after writing one, tell the user to click the circular-arrow (counter-clockwise) icon in the **upper-left of the chat window** — that clears the chat and loads the new skill on the next message.`;
 
 // Compose the full helper. `tools` defaults to the wired catalog; pass a subset
 // if a session ever runs with fewer tools. `unattended` (a cron run) inserts the
@@ -326,11 +410,11 @@ export function buildShockwaveHelper(
   return [
     BOUNDARIES(scratchDir),
     ...(unattended ? [UNATTENDED] : []),
-    TOOLS(tools),
+    // No tool list here — the model receives every tool's real definition from
+    // pi. See the block above GUIDELINES for why a prose copy was removed.
     GUIDELINES(tools),
     // Only when the tool is actually in this run's set — the section tells the
     // agent to reach for it by name, which is worse than useless if it's absent.
-    ...(tools.some((t) => t.name === 'send_message') ? [REACHING_THE_USER] : []),
     // Telegram and cron only. On the desktop nothing parses a file path out of a
     // reply, so documenting the syntax there would have the agent announce a
     // delivery that never happens.
@@ -342,16 +426,12 @@ export function buildShockwaveHelper(
     WORKSPACE,
     WIKILINKS,
     ASSOCIATION,
-    DUPLICATE_BASENAMES,
     // Gated on `grep` for the same reason `REACHING_THE_USER` is gated on
     // `send_message`: this section IS a how-to for that tool — it hands over a
     // regex to run with it. A memory run has neither the tool nor any reason to
     // walk the graph, and would be reading an instruction it cannot follow.
     ...(tools.some((t) => t.name === 'grep') ? [LINK_GRAPH] : []),
     EXTENDING_GRAPH,
-    ...(tools.some((t) => t.name === 'daily_note')
-      ? [DAILY_NOTES(tools.some((t) => t.name === 'open_file'))]
-      : []),
     ...(tools.some((t) => t.name === 'memory') ? [MEMORY] : []),
     // Skipped entirely when the workspace has no templates (folder unset,
     // missing, or holding no .md files) — a heading over nothing reads as an
@@ -360,7 +440,11 @@ export function buildShockwaveHelper(
     MARKDOWN,
     // Same rule again. Authoring guidance for a run that cannot author is the
     // clearest possible case of describing a capability that isn't there.
-    ...(tools.some((t) => t.name === 'manage_skill') ? [SKILLS] : []),
+    // Using skills is gated on `read`, not `manage_skill` — a run that can load
+    // a skill should be told to, whether or not it may write one. Saving is
+    // gated on the tool that saves.
+    ...(tools.some((t) => t.name === 'read') ? [USING_SKILLS] : []),
+    ...(tools.some((t) => t.name === 'manage_skill') ? [SAVING_SKILLS] : []),
     SCHEDULED_RUNS(timezone),
     // The memory CONTENT goes last, closest to the conversation — hermes puts it
     // in the volatile tier at the end of its prompt for the same reason. It is

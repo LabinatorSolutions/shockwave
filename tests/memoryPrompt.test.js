@@ -70,8 +70,10 @@ test('buildMemoryPrompt carries the run context, not the conversation', () => {
 
 // ── The tool description ─────────────────────────────────────────────────────
 
-test('all five labelled paragraphs survive, in order', () => {
-  const labels = ['HOW:', 'WHEN:', 'IF FULL:', 'TARGETS:', 'SKIP:'];
+test('all six labelled paragraphs survive, in order', () => {
+  // PHRASING is ours; the other five are hermes'. It sits after WHEN because it
+  // governs how you write what WHEN told you to save.
+  const labels = ['HOW:', 'WHEN:', 'PHRASING:', 'IF FULL:', 'TARGETS:', 'SKIP:'];
   let cursor = -1;
   for (const label of labels) {
     const at = MEMORY_TOOL_DESCRIPTION.indexOf(label);
@@ -97,6 +99,29 @@ test('the priority order and the point of the whole feature survive', () => {
   assert.ok(MEMORY_TOOL_DESCRIPTION.includes('The best memory stops the user repeating themselves.'));
   // The boundary against the other process, stated from this side.
   assert.ok(MEMORY_TOOL_DESCRIPTION.includes('Reusable procedures belong in a skill, not memory.'));
+});
+
+test('a memory is a fact, never a standing order', () => {
+  // The failure this prevents is the one that cannot be seen from inside a later
+  // chat: an imperative memory is indistinguishable from an instruction the user
+  // just gave, and it sits ABOVE the conversation, so it can outrank what they
+  // are actually asking for. Both worked examples are pinned because the
+  // contrast is what carries the rule — the abstract sentence alone reads as
+  // style advice.
+  assert.ok(MEMORY_TOOL_DESCRIPTION.includes('declarative facts, not instructions to yourself'));
+  assert.ok(MEMORY_TOOL_DESCRIPTION.includes("'User prefers concise responses' ✓ — 'Always respond concisely' ✗."));
+  assert.ok(MEMORY_TOOL_DESCRIPTION.includes('override what the user is asking for then'));
+});
+
+test('SKIP carries the staleness TEST, not just the category', () => {
+  // The category ("task progress, completed-work logs") only classifies cases
+  // already named. The test classifies the ones nobody listed, which is what
+  // keeps a fixed budget from filling with commit SHAs and 'Phase 2 done' and
+  // pushing out the facts worth keeping.
+  assert.ok(MEMORY_TOOL_DESCRIPTION.includes('If a fact will be stale in a week, it does not belong in memory.'));
+  assert.ok(MEMORY_TOOL_DESCRIPTION.includes('commit SHAs'));
+  // Still inside SKIP, where the rest of the do-not-save rules live.
+  assert.ok(MEMORY_TOOL_DESCRIPTION.indexOf('stale in a week') > MEMORY_TOOL_DESCRIPTION.indexOf('SKIP:'));
 });
 
 test('the one substitution was made, and nothing hermes-only came with it', () => {

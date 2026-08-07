@@ -49,21 +49,52 @@ function canonical(cwd: string, p: string): string[] {
   return out;
 }
 
+// hermes-agent's `SKILL_MANAGE_SCHEMA["description"]` (`tools/skill_manager_tool.py`),
+// copied, and the ONE place skill-authoring guidance lives. hermes keeps it here
+// rather than in its system prompt; we used to carry a 1,934-char
+// `# Creating skills` section as well, saying much of this a second time and
+// contradicting it on the one decision both addressed (the prompt said propose
+// and wait, this said create when a complex task succeeded). That section is gone
+// — mirroring hermes — and the offer-and-confirm rule it carried is folded in
+// below, which is where hermes states it too.
+//
+// Deviations, each because hermes names something we don't have:
+//   - Path is ours (`<cwd>/.agents/skills/`), not `~/.hermes/skills/`.
+//   - No `delete` action, so hermes' `absorbed_into` paragraph is dropped whole.
+//     See the note in `manageSkill.ts`: hermes' delete serves a curator we don't
+//     have.
+//   - `skill_view()` → `read`. pi has no skill-viewing tool.
+//   - Dropped the 57-char description-truncation rule. That exists because hermes
+//     truncates its own skill index; pi's `formatSkillsForPrompt` emits the
+//     description whole, so the advice would be false here.
+//   - Dropped the pinned-skill paragraph and `hermes curator unpin` — no curator.
+//
+// The closing read-only-roots sentence is OURS and has no hermes equivalent. It
+// stays because pi keeps exactly one skill per name and the `.agents` copy wins,
+// emitting a collision diagnostic nothing surfaces — so without it the agent can
+// shadow a skill the user uploaded just by choosing its name. Verified against pi
+// directly; `manageSkill.ts` enforces it, and this is where the agent is told.
 const MANAGE_SKILL_DESCRIPTION =
-  'Create or update a skill — your reusable, saved procedures for recurring task '
-  + 'types. This validates the file before writing it, so use it rather than '
-  + 'writing SKILL.md by hand.\n\n'
-  + "Actions: create (a new skill — the full SKILL.md), patch (targeted "
-  + 'find-and-replace, PREFERRED for fixes), edit (full SKILL.md rewrite — major '
-  + 'overhauls only), write_file (add a supporting file under references/, '
-  + 'templates/, scripts/ or assets/), remove_file.\n\n'
-  + 'A SKILL.md needs YAML frontmatter with `name` (matching the skill folder) and '
-  + 'a specific `description` covering what it does AND when to use it, then a '
-  + 'markdown body: trigger conditions, numbered steps with exact commands, '
-  + 'pitfalls, and verification steps.\n\n'
-  + 'Create when a complex task succeeded, you overcame a tricky error, or you '
-  + 'discovered a reusable workflow worth keeping. Patch a skill the moment you '
-  + 'find it outdated or wrong — do not wait to be asked.\n\n'
+  'Manage skills (create, update). Skills are your procedural memory — reusable '
+  + 'approaches for recurring task types. New skills go to '
+  + '`<cwd>/.agents/skills/<skill-name>/SKILL.md`. This validates the file before '
+  + 'writing it, so use it rather than writing SKILL.md by hand.\n\n'
+  + 'Actions: create (full SKILL.md + optional category), patch '
+  + '(old_string/new_string — preferred for fixes), edit (full SKILL.md rewrite — '
+  + 'major overhauls only), write_file, remove_file.\n\n'
+  + 'Create when: complex task succeeded (5+ calls), errors overcome, '
+  + 'user-corrected approach worked, non-trivial workflow discovered, or user asks '
+  + 'you to remember a procedure.\n'
+  + 'Update when: instructions stale/wrong, OS-specific failures, missing steps or '
+  + 'pitfalls found during use. If you used a skill and hit issues not covered by '
+  + 'it, patch it immediately.\n\n'
+  + 'After difficult/iterative tasks, offer to save as a skill. Skip for simple '
+  + 'one-offs. Confirm with user before creating.\n\n'
+  + 'Good skills: trigger conditions, numbered steps with exact commands, pitfalls '
+  + 'section, verification steps. Frontmatter needs `name` (matching the skill '
+  + 'folder) and a `description` covering what it does AND when to use it — the '
+  + 'description is the only signal that decides whether the skill loads, so keep '
+  + 'the trigger in it. Use `read` on an existing skill to see format examples.\n\n'
   + 'You can only write your own skills. Skills the user provided, and the ones '
   + 'built into the app, are read-only to you — including a NEW skill whose name '
   + 'matches one of theirs, because yours would take precedence over it. '

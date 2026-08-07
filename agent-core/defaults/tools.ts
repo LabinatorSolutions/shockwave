@@ -1,11 +1,12 @@
 // Single source of truth for the agent's tool set.
 //
-// `TOOL_CATALOG` is BOTH the allowlist passed to pi (`tools:` in
-// createAgentSession) and the list rendered into the prompt's "Available tools"
-// section. One list, so the prompt can't claim a tool pi doesn't have — or miss
-// one it does.
+// `TOOL_CATALOG` is the allowlist passed to pi (`tools:` in createAgentSession),
+// and that is now its only job — it decides MEMBERSHIP, nothing else. It used to
+// also be rendered into an "Available tools" section of the system prompt; that
+// section is gone, because pi already sends the model every tool's real
+// definition (see the note on `ToolDescriptor` below).
 //
-// That drift was real: the catalog listed 7 while pi ran 8. pi discovers
+// Bounding the set is still the point. pi discovers
 // extensions by SCANNING <userDataDir>/pi-agent/extensions/ (unconditional —
 // see discoverAndLoadExtensions in pi's loader), so a `resolve_link` extension
 // file written by a build we'd since deleted the source for kept registering
@@ -119,45 +120,61 @@ export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string
   },
 };
 
+/**
+ * A catalog entry is a NAME and where it comes from. There is deliberately no
+ * description field.
+ *
+ * There was one, and it was rendered into an "Available tools" section of the
+ * system prompt. The model already receives every tool's real name, description
+ * and parameter schema as a tool definition — pi sends its builtins and our
+ * `customTools` alike — so the prose list was a second, thinner copy of facts
+ * that already arrive, maintained separately and therefore drifting: the
+ * `send_message` entry advertised an `output` argument for months after the tool
+ * stopped accepting one. The prompt taught an argument the schema rejected, and
+ * nothing anywhere failed.
+ *
+ * So a tool is documented in exactly ONE place — its own definition — and the
+ * catalog decides only membership. If you want the agent to know what a tool
+ * does, write it in that tool's `description`, where the model actually reads it.
+ */
 export interface ToolDescriptor {
   name: string;
-  desc: string;
   origin: 'builtin' | 'custom';
 }
 
 export const TOOL_CATALOG: ToolDescriptor[] = [
-  { name: 'read', origin: 'builtin', desc: 'Read file contents.' },
-  { name: 'bash', origin: 'builtin', desc: 'Execute bash commands. Use for running programs and git — prefer grep/find/ls for searching.' },
-  { name: 'edit', origin: 'builtin', desc: 'Make precise file edits with exact text replacement, including multiple disjoint edits in one call.' },
-  { name: 'write', origin: 'builtin', desc: 'Create or overwrite files.' },
-  { name: 'grep', origin: 'builtin', desc: 'Search file contents for a pattern (regex or literal), with optional glob filter and context lines. Respects .gitignore. Use this instead of shelling out to grep.' },
-  { name: 'find', origin: 'builtin', desc: 'Find files by glob pattern (e.g. `**/*.md`). Respects .gitignore.' },
-  { name: 'ls', origin: 'builtin', desc: 'List directory contents.' },
-  { name: 'list_agent_secrets', origin: 'custom', desc: 'List available API tokens by name and purpose.' },
-  { name: 'get_agent_secret', origin: 'custom', desc: 'Read one API token by name.' },
+  { name: 'read', origin: 'builtin' },
+  { name: 'bash', origin: 'builtin' },
+  { name: 'edit', origin: 'builtin' },
+  { name: 'write', origin: 'builtin' },
+  { name: 'grep', origin: 'builtin' },
+  { name: 'find', origin: 'builtin' },
+  { name: 'ls', origin: 'builtin' },
+  { name: 'list_agent_secrets', origin: 'custom' },
+  { name: 'get_agent_secret', origin: 'custom' },
   // Opens a tab in the app UI — only a desktop chat has one, so `DENIED` refuses
   // it elsewhere and tells the agent what to reach for instead.
-  { name: 'open_file', origin: 'custom', desc: 'Open a file in the app UI (a new tab) so the user can see it. Use when the user asks you to open, show, or display a file. The path is workspace-relative; only files the app can display (.md, images, video, .excalidraw) can be opened.' },
+  { name: 'open_file', origin: 'custom' },
   // Every source: a desktop chat can DM the user too (it routes through the
   // companion, which holds the bot token).
-  { name: 'send_message', origin: 'custom', desc: "Send the user a message on Telegram. Use to reach them proactively — a finished job, or something that needs their attention. `output` picks how that one message is delivered — `text`, `voice` (audio only), or `both`." },
+  { name: 'send_message', origin: 'custom' },
   // Speech to text. Every source: a recording in the workspace is as likely to
   // need reading on the desktop as one sent over Telegram.
-  { name: 'transcribe', origin: 'custom', desc: 'Transcribe an audio or video file into text with timestamps and speaker labels. Writes a transcript file and returns its path. Use whenever you need to know what was said in a recording.' },
+  { name: 'transcribe', origin: 'custom' },
   // Every source: "add this to my journal" is as likely over Telegram as in the
   // app, and a scheduled run that writes a daily summary needs it too.
-  { name: 'daily_note', origin: 'custom', desc: "Find the user's daily note (journal) for a date — today by default — and create it from their template if asked. Returns the workspace-relative path. Use this instead of guessing a filename: the name and folder come from per-workspace settings." },
+  { name: 'daily_note', origin: 'custom' },
   // The agent's memory of earlier conversations in this workspace.
-  { name: 'search_chats', origin: 'custom', desc: 'Search earlier chats in this workspace — what the user told you before, what was decided, what you already tried. Pass `query` to search, `chatId` + `around` to read more of one, or nothing to list recent chats. Results carry dates; prefer recent ones when they disagree.' },
+  { name: 'search_chats', origin: 'custom' },
   // Every source. The memory pass exists because an agent forgets to save
   // unprompted, not because saving is a background-only act — "remember that I
   // hate long replies" has to work the moment it is said, in the chat where it
   // was said. hermes puts its memory tool in the ordinary toolset for exactly
   // this reason and treats the background pass as the safety net.
-  { name: 'memory', origin: 'custom', desc: "Save a durable fact about the user (`user`) or about working in this workspace (`memory`). Use it the moment you learn a preference, a correction, or a stable fact — don't wait to be asked. Actions: add, replace, remove, or an `operations` batch applied atomically." },
+  { name: 'memory', origin: 'custom' },
   // Every source, like hermes: one validated way to author a skill, whoever is
   // asking. The guards inside it differ by caller, not the tool.
-  { name: 'manage_skill', origin: 'custom', desc: 'Create or update one of your own skills — validated before it is written, so use it rather than editing a SKILL.md by hand. Actions: create, patch (preferred for fixes), edit, write_file, remove_file. Skills the user provided and the ones built into the app are read-only to you.' },
+  { name: 'manage_skill', origin: 'custom' },
 ];
 
 /** The allowlist handed to pi as `tools:` — covers builtin AND custom names.
@@ -181,8 +198,6 @@ export function deniedReason(tool: string, source: string | undefined): string |
   return `\`${tool}\` is not available here: ${entry.per?.[tool] ?? entry.reason}`;
 }
 
-// Render the catalog as the markdown bullet list used in the "Available tools"
-// section of the helper prompt.
-export function formatToolList(tools: ToolDescriptor[] = TOOL_CATALOG): string {
-  return tools.map((t) => `- \`${t.name}\`: ${t.desc}`).join('\n');
-}
+// There is no `formatToolList` any more. It rendered the catalog as a bullet
+// list for the prompt's "Available tools" section; both are gone — see the note
+// on `ToolDescriptor` above.
