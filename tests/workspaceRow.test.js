@@ -4,11 +4,13 @@
 // `settingsStore.overlayLocal` built the renderer's shape inline, so the tested
 // projection was fiction and the real one had no coverage at all. That is how
 // `voiceReply` reached the settings page as undefined — added to the tested copy,
-// absent from the one that ran.
+// absent from the one that ran. (That field is gone from here entirely now: the
+// Telegram reply mode is app-level, an ordinary setting rather than a property of
+// a workspace — see agent-core/voiceReply.ts.)
 //
 // A workspace comes from two sources and this is where they meet: identity from
-// the companion (id, name, repo, reply mode) and machine-local state from
-// userData (checkout path, sync toggle).
+// the companion (id, name, repo) and machine-local state from userData (checkout
+// path, sync toggle).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,28 +37,12 @@ test('an absent sync flag reads as syncing', () => {
   assert.equal(projectWorkspaceRow({ syncEnabled: undefined }).syncEnabled, true);
 });
 
-// ── the reply mode ───────────────────────────────────────────────────────────
-
-test('voiceReply survives the projection', () => {
-  // The whole reason this test file now points at the live function.
-  assert.equal(projectWorkspaceRow({ voiceReply: 'voice' }).voiceReply, 'voice');
-  assert.equal(projectWorkspaceRow({ voiceReply: 'both' }).voiceReply, 'both');
-});
-
-test('an unrecognized reply mode reads as text', () => {
-  // Plain text on the companion, written by two things (`/voice`, the settings
-  // page), so junk must not reach the UI as a mode nothing renders.
-  for (const junk of [undefined, null, '', 'Voice', 'audio', 0]) {
-    assert.equal(projectWorkspaceRow({ voiceReply: junk }).voiceReply, 'text', String(junk));
-  }
-});
-
 // ── the rest of the shape ────────────────────────────────────────────────────
 
 test('repo is owner/name and a null path survives', () => {
   const row = projectWorkspaceRow({
     id: 'w1', name: 'Notes', path: null,
-    repoOwner: 'acme', repoName: 'widgets', syncEnabled: true, voiceReply: 'text',
+    repoOwner: 'acme', repoName: 'widgets', syncEnabled: true,
   });
   assert.equal(row.repo, 'acme/widgets');
   assert.equal(row.path, null);   // "exists, not checked out on this machine"

@@ -45,10 +45,14 @@ test('send_message carries the reach-me trigger phrases', () => {
 
 test('send_message still says the delivery mode is not the agent\'s to choose', () => {
   // Separate from the triggers and separately load-bearing: the tool had an
-  // `output` argument once, the agent passed `both` to a workspace set to
+  // `output` argument once, the agent passed `both` where the setting said
   // `text`, and the user got a voice note they had switched off.
   const d = sendMessage.description;
-  assert.ok(d.includes('THEIR setting for this workspace'));
+  assert.ok(d.includes('THEIR setting'));
+  // And it must not claim a SCOPE the setting doesn't have. It said "for this
+  // workspace" while the mode really was per-workspace, and that scope was the
+  // bug — see agent-core/voiceReply.ts.
+  assert.ok(!/for this workspace/.test(d), 'the reply mode is app-level, not per workspace');
   assert.ok(d.includes('/voice text'));
   assert.ok(!/\boutput\b/.test(d), 'the removed `output` argument is being described again');
 });

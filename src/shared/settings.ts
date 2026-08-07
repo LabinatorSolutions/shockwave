@@ -53,10 +53,6 @@ export interface WorkspaceEntry {
    *  projection — it used to leak up here and get negated three more times in
    *  the one switch that renders it. */
   syncEnabled: boolean;
-  /** How the agent's Telegram replies come back for this workspace. Lives on the
-   *  companion's workspace row, not in the checkout, because `/voice` is a slash
-   *  command — answered from that database with no checkout prepared. */
-  voiceReply: VoiceReply;
 }
 
 /** `'text'` — text only. `'voice'` — a voice note only. `'both'` — voice and text. */
@@ -275,6 +271,15 @@ export interface Settings {
      *  ElevenLabs: the voice id, with `modelId` chosen separately. */
     voiceId?: string;
     modelId?: string;
+    /** How the agent's Telegram replies come back: text, a voice note, or both.
+     *  **App-level** — the bot has one active workspace at a time and it is
+     *  chosen independently of the desktop's, so a per-workspace value meant
+     *  Settings wrote a mode the bot never read. Under `speech` because it is the
+     *  speaking direction's Telegram knob, mirroring
+     *  `transcription.echoTelegramTranscript` on the listening side. Unset ⇒
+     *  `text` (`normalizeVoiceReply` in `agent-core/voiceReply.ts`, which also
+     *  names the stored path). */
+    telegramReply?: VoiceReply;
   };
   /** Vendor slug -> API key, shared by both directions: pick one vendor for both
    *  and you enter its key once. Present in MAIN only; the renderer gets
@@ -293,6 +298,9 @@ export interface Settings {
    *  defaults live in `agent-core/chatNotice.ts` and are applied at the point of
    *  use (the companion's `telegram/commands.ts`, and this page for display). */
   telegram?: { chatNotice?: ChatNotice };
+  //  (How Telegram REPLIES come back is `speech.telegramReply`, not here — it is
+  //  the speaking direction's knob, mirroring `transcription.echoTelegramTranscript`
+  //  on the listening side.)
   // The one unified system timezone (synced). The companion uses it for cron
   // schedules and the agent's "current date"; the desktop uses it for display.
   // IANA name, e.g. "America/New_York"; default "UTC".

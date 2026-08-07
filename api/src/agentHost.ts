@@ -17,6 +17,7 @@ import { getDb } from './db.js';
 import * as store from './store.js';
 import { mintToken } from './oauth.js';
 import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
+import { nextRuns } from './scheduler.js';
 import { OPEN_FILE_STUB } from './openFileStub.js';
 import { voiceConfigOf } from '../../agent-core/voiceProviders.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
@@ -41,16 +42,15 @@ export function makeCompanionRuntime(pool: PgPool, key: Buffer) {
     // Proactively DM the user on Telegram. The bot token lives here, so this
     // host sends directly; the desktop's copy of the tool posts to /telegram/send.
     //
-    // Built per session rather than once, because the reply mode is per WORKSPACE
-    // and the host is built once per process — so the tool has to be told which
-    // workspace this turn belongs to in order to read that preference. It cannot
-    // write it; that is `/voice`. The chat travels with it for the same reason in
-    // reverse: each bubble is recorded against the conversation that sent it, so
+    // Built per session rather than once, because the CHAT has to travel with the
+    // tool: each bubble is recorded against the conversation that sent it, so
     // replying to one comes back HERE rather than to whatever chat the bot was
-    // last pointed at.
-    extraTools: ({ chatId, workspaceId, workspacePath }) => [
+    // last pointed at. (It used to carry the workspace too, for the reply mode —
+    // that is app-level now and the delivery end reads it for itself. The tool
+    // still cannot write it; that is `/voice`.)
+    extraTools: ({ chatId, workspacePath }) => [
       makeSendMessageTool((text, opts) => sendTelegramMessage(pool, key, text, {
-        ...opts, chatId, workspaceId, workDir: workspacePath,
+        ...opts, chatId, workDir: workspacePath,
       })),
       // Registered so the catalog the prompt lists and the tools pi holds are the
       // same set. It cannot work here and says so; the gate refuses the call
@@ -77,6 +77,28 @@ export function makeCompanionRuntime(pool: PgPool, key: Buffer) {
       searchChats: (o) => store.searchChatMessages(db, o.workspaceId, o.query, o.limit, o.sort, o.excludeChatId),
       readChat: (o) => store.readChatWindow(db, o.chatId, o.around, o.window),
       recentChats: (o) => store.recentChats(db, o.workspaceId, o.limit, o.excludeChatId),
+    },
+    // The `cron` tool's `status`. Same two halves the desktop's panel shows and
+    // `GET /workspace/:id/cron/state` serves — history from the table, next-run
+    // from croner in memory — read in-process here rather than over HTTP.
+    //
+    // Both are merged by job name, and a job appears if EITHER half knows it: a
+    // brand-new job has a next run and no history, a job that ran and was then
+    // removed has history and no next run. Reporting only the intersection would
+    // hide exactly the two cases the agent asks about.
+    cronStatus: async (workspaceId: string) => {
+      const history = await store.getCronState(db, workspaceId);
+      const next = nextRuns(workspaceId);
+      const names = new Set<string>([...history.map((h: any) => h.jobName), ...Object.keys(next)]);
+      return [...names].map((name) => {
+        const h = history.find((x: any) => x.jobName === name);
+        return {
+          name,
+          nextRunAt: next[name] ?? null,
+          lastRunAt: h?.lastRunAt ?? null,
+          lastError: h?.lastError ?? null,
+        };
+      });
     },
   };
   const runtime = createAgentRuntime(host);

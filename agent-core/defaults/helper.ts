@@ -8,9 +8,8 @@
 // EDITING: each section below is its own named `const` string so you can hand-
 // edit one concern without hunting through a wall of text. `buildShockwaveHelper`
 // at the bottom composes them in order. Almost all of it is literal prose — the
-// only interpolated values are the scratch-pad path, the timezone, and the
-// workspace's template list. It does NOT restate what any tool does; see the
-// block above GUIDELINES.
+// only interpolated values are the scratch-pad path and the workspace's template
+// list. It does NOT restate what any tool does; see the block above GUIDELINES.
 
 // `ToolDescriptor` is type-only and must say so: this module is loaded straight
 // off source by `node --test`, which strips types rather than resolving them, so
@@ -39,38 +38,23 @@ const UNATTENDED = `# Unattended run
 
 You are running on a schedule with no user present. You will not receive a reply, so do not ask for confirmation or wait for input. Use your judgment, complete the task described, and finish. You may create, edit, and — when the task requires it — move or delete files inside the workspace without asking. This overrides the "ask first" boundary above for this run. Your changes are committed automatically after the run.`;
 
-// `tz` is the one system timezone (`settings.timezone`). It is baked into the
-// prompt, which is fine — it is static. The CURRENT TIME deliberately is not:
-// the assembled prompt is part of pi's session cache key, so a timestamp in it
-// would miss the cache on every turn. Hence the instruction to run `date`, which
-// costs one tool call only on the turns that actually need to know the time.
-const SCHEDULED_RUNS = (tz?: string) => `# Scheduled runs (cron)
-
-You can schedule yourself to run unattended. Schedules live in \`cron.json\` at the workspace root — a JSON array you can read and edit like any other file. Each entry:
-
-    { "name": "nightly-triage", "schedule": "0 2 * * *", "prompt": "…", "enabled": true }
-
-- \`name\` — unique within the file, stable. Each run opens as its own chat titled after the job; renaming a job orphans its run history.
-- \`schedule\` — either a standard 5-field cron expression for something recurring, **or** an ISO datetime (\`"2026-03-14T18:50:00"\`) for a one-time run. Both are evaluated in ${tz ? `\`${tz}\`` : 'the one system timezone'}.
-- \`prompt\` — sent to a fresh chat each run; make it self-contained (it won't see earlier runs).
-- \`enabled\` — set \`false\` to pause a job without deleting it.
-- \`once\` — set \`true\` for a one-time job. It runs once and then **deletes its own entry** from \`cron.json\`. Omit it (the default) for anything recurring.
-
-## One-time jobs
-
-Anything the user frames as a single future moment — "remind me tonight at 6:50", "check on this tomorrow morning", "ping me in an hour" — is a one-time job: an ISO datetime schedule plus \`"once": true\`. Write the datetime as an absolute wall-clock time in the user's timezone; work out what "tonight" or "tomorrow" means from the current date rather than storing a relative phrase.
-
-**${tz ? `Schedules are evaluated in \`${tz}\`. Write the datetime in that zone` : 'Schedules are evaluated in the one system timezone (Settings → General)'}, and run \`date\` before you write one.** You are told today's date but not the time of day, so "in an hour" and "tonight at 6:50" are unanswerable without checking — and a datetime that lands in the past is accepted silently and simply never fires.
-
-    { "name": "remind-call-dentist", "schedule": "2026-03-14T18:50:00", "once": true,
-      "prompt": "Send the user a message reminding them to call the dentist." }
-
-Two things to get right:
-
-- **Registration takes about a minute** (the file has to reach GitHub, and the scheduler re-reads it on a cycle). Don't schedule a one-time job less than ~2 minutes out — do it immediately instead, or pick a later time and say so.
-- **A run has no user in it.** If the point of the job is to tell the user something, the prompt must say so explicitly — write "send the user a message …" into it, so the future run reaches out with \`send_message\` instead of quietly writing a chat nobody is looking at.
-
-A run starts a brand-new chat, so it sees the current workspace and your latest SOUL. Runs execute on the companion server, not this machine — the app doesn't have to be open. Like any cron, a moment that passes while the server is down is simply missed.`;
+// ── `SCHEDULED_RUNS` moved into the `cron` tool ────────────────────────────
+//
+// It was 2,608 chars and the largest section in this file: the cron.json schema,
+// the field list, cron-vs-datetime syntax, one-time jobs, the ~1 minute
+// registration delay, and the warning that a run has no user in it. All of it is
+// needed only while writing a schedule, and none of it was enforced — the prompt
+// warned that a past datetime "is accepted silently and simply never fires",
+// which is the tell: prose was standing in for a check.
+//
+// It is now `agent-core/cronTool.ts`, where the rules are enforced rather than
+// described, and where an edit reaches chats that already exist. The timezone
+// interpolation went with it: `process.env.TZ` is set from the same setting in
+// every host, so `date` already answers in the user's zone and the tool names it
+// per call.
+//
+// Same rule as `REACHING_THE_USER`, `DAILY_NOTES` and `# Creating skills` below:
+// what a single tool is for belongs with that tool.
 
 // ── `REACHING_THE_USER` moved into the tool, not deleted ────────────────────
 //
@@ -85,7 +69,7 @@ A run starts a brand-new chat, so it sees the current workspace and your latest 
 //
 // Nothing was dropped except one sentence that was never about this tool: the
 // advice to write "send the user a message …" into a `cron.json` prompt. That
-// belongs to writing cron jobs, and `SCHEDULED_RUNS` above already says it.
+// belongs to writing cron jobs, and the `cron` tool's description says it.
 
 // ── There is no "Available tools" section, and adding one back is a regression ─
 //
@@ -404,8 +388,8 @@ Skills live at \`<cwd>/.agents/skills/<skill-name>/SKILL.md\`. They are scanned 
 // sections — it is NOT derivable from `tools`, so every caller must pass it (see
 // `rebuildSystemPrompt` in index.ts, which forwards it for exactly this reason).
 export function buildShockwaveHelper(
-  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, timezone, memory, templates }:
-    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; timezone?: string; memory?: string; templates?: { folder: string; files: string[] } } = {},
+  { tools = TOOL_CATALOG, unattended = false, source, scratchDir, memory, templates }:
+    { tools?: ToolDescriptor[]; unattended?: boolean; source?: string; scratchDir?: string; memory?: string; templates?: { folder: string; files: string[] } } = {},
 ): string {
   return [
     BOUNDARIES(scratchDir),
@@ -445,7 +429,6 @@ export function buildShockwaveHelper(
     // gated on the tool that saves.
     ...(tools.some((t) => t.name === 'read') ? [USING_SKILLS] : []),
     ...(tools.some((t) => t.name === 'manage_skill') ? [SAVING_SKILLS] : []),
-    SCHEDULED_RUNS(timezone),
     // The memory CONTENT goes last, closest to the conversation — hermes puts it
     // in the volatile tier at the end of its prompt for the same reason. It is
     // rendered from disk once, when the chat is created, and frozen with the

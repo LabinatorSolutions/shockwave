@@ -44,7 +44,7 @@ const HELP = [
   '/workspaces — list workspaces',
   '"/workspace <number>" — switch to that workspace from /workspaces (starts a fresh chat there)',
   '/btw <question> — ask about this chat itself; works while the agent is busy and does not interrupt it',
-  '"/voice <text|voice|both>" — how I reply in this workspace; on its own it shows the current setting',
+  '"/voice <text|voice|both>" — how I reply; on its own it shows the current setting',
   '/status — which workspace and chat, and whether the agent is working',
   '/help — this',
 ].join('\n');
@@ -227,15 +227,19 @@ export async function handleCommand(
 
     case 'voice': {
       // Answered from the database like every other command — no checkout, no
-      // turn, no agent. That is the whole reason the mode lives on the workspace
-      // row rather than in the workspace's own files.
-      const ws = await activeWorkspace(db);
-      if (!ws) { await reply('No workspace is set. Try /workspaces.'); return true; }
+      // turn, no agent. That is the whole reason the mode lives in a settings row
+      // rather than in a workspace's own files.
+      //
+      // No workspace is named, and none is looked up: the mode is app-level, so
+      // it applies wherever the bot happens to be pointed. It used to be per
+      // workspace, and the reply said so — which was the honest rendering of a
+      // setting the desktop wrote against a DIFFERENT workspace than this one.
+      const current = await store.getVoiceReply(db);
 
       const arg = (rest[0] ?? '').toLowerCase();
       if (!arg) {
         await reply([
-          `I reply with ${VOICE_REPLY_LABELS[ws.voiceReply]} in ${ws.name}.`,
+          `I reply with ${VOICE_REPLY_LABELS[current]}.`,
           '',
           `Change it with ${VOICE_REPLY_MODES.map((m) => `/voice ${m}`).join(', ')}.`,
         ].join('\n'));
@@ -250,8 +254,8 @@ export async function handleCommand(
 
       // `setVoiceReply` announces on the feed itself, so the desktop learns about
       // this without having asked — see `announce` in store.ts.
-      await store.setVoiceReply(db, ws.id, arg as VoiceReply);
-      await reply(`Replying with ${VOICE_REPLY_LABELS[arg as VoiceReply]} in ${ws.name} from now on.`);
+      await store.setVoiceReply(db, arg as VoiceReply);
+      await reply(`Replying with ${VOICE_REPLY_LABELS[arg as VoiceReply]} from now on.`);
       return true;
     }
 

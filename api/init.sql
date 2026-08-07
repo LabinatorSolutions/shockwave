@@ -353,3 +353,40 @@ DELETE FROM secret_value
 -- Lives here rather than in the workspace's checkout because `/voice` is a slash
 -- command, and those are answered from this database with no checkout prepared.
 ALTER TABLE workspace ADD COLUMN IF NOT EXISTS voice_reply text NOT NULL DEFAULT 'text';
+
+-- ...and then it stopped being per-workspace. The reply mode is app-level now,
+-- one `setting` row under `speech.telegramReply` (VOICE_REPLY_SETTING_PATH in
+-- agent-core/voiceReply.ts). Being on the workspace row was only ever about not
+-- being in the checkout — a settings row satisfies that identically — while the
+-- SCOPE it implied was a silent trap: the bot's active workspace
+-- (telegram_account.active_workspace_id) is chosen independently of the
+-- desktop's, so the settings page wrote a mode the bot never read.
+--
+-- N values collapse to one, so the seed picks the workspace whose value the bot
+-- was actually obeying, then any non-default value as a fallback. A workspace
+-- deliberately left on 'text' seeds nothing: 'text' is what unset already means,
+-- and writing a row for it would only make an unset setting look chosen.
+DO $$
+DECLARE seed text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'workspace' AND column_name = 'voice_reply') THEN
+    IF NOT EXISTS (SELECT 1 FROM setting WHERE key = 'speech.telegramReply') THEN
+      SELECT w.voice_reply INTO seed
+        FROM workspace w
+        JOIN telegram_account t ON t.active_workspace_id = w.id;
+      IF seed IS NULL OR seed = 'text' THEN
+        SELECT voice_reply INTO seed
+          FROM workspace WHERE voice_reply IN ('voice', 'both')
+          ORDER BY sort_order LIMIT 1;
+      END IF;
+      IF seed IN ('voice', 'both') THEN
+        INSERT INTO setting (key, value, type, updated_at)
+        VALUES ('speech.telegramReply', seed, 'string',
+                (EXTRACT(EPOCH FROM now()) * 1000)::bigint)
+        ON CONFLICT (key) DO NOTHING;
+      END IF;
+    END IF;
+    ALTER TABLE workspace DROP COLUMN voice_reply;
+  END IF;
+END $$;

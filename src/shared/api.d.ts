@@ -482,11 +482,6 @@ export interface ShockwaveApi {
     setUpHere(opts: { id: string; workspacePath: string }): Promise<WorkspaceSetupResult>;
     remove(opts: { id: string }): Promise<{ ok: boolean; error?: string }>;
     forgetLocal(opts: { id: string }): Promise<{ ok: boolean }>;
-    /** How this workspace's Telegram replies come back — the same setting the
-     *  bot's `/voice` command changes, on the companion's workspace row. Main
-     *  re-pushes the workspace list after, so the page updates from the store
-     *  rather than from local state. */
-    setVoiceReply(id: string, mode: 'text' | 'voice' | 'both'): Promise<{ ok: boolean }>;
     /** The default file set (SOUL.md, AGENTS.md, .ignore, .gitignore) and which
      *  are absent from this checkout. */
     listFiles(opts: { workspacePath: string }): Promise<{ ok: boolean; files?: Array<{ name: string; purpose: string }>; missing?: string[]; error?: string }>;

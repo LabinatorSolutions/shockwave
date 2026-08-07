@@ -25,20 +25,19 @@ import { OPEN_FILE_TOOL } from './openFileExtension.js';
 // The desktop's `send_message`: same tool the companion offers, but the sending
 // happens over there — the bot token never leaves the companion. Without this, a
 // chat started in Telegram and continued here couldn't answer on Telegram.
-// The reply MODE lives on the companion, on the workspace row, so this side
-// resolves nothing — it forwards the workspace id and lets the server read the
-// preference it already owns. Delivery and synthesis are over there too: the bot
-// token and ffmpeg are both companion-only.
+// The reply MODE is a setting on the companion, so this side resolves nothing and
+// sends nothing about it — the server reads it at the delivery end. Delivery and
+// synthesis are over there too: the bot token and ffmpeg are both companion-only.
 //
 // The CHAT id goes with it so the companion can record which conversation each
 // bubble came from: replying to it on Telegram then continues THIS chat, rather
 // than whichever one the bot was last pointed at.
-function makeDesktopSendTool(workspaceId: string, chatId: string) {
+function makeDesktopSendTool(chatId: string) {
   return makeSendMessageTool(async (text) => {
     try {
-      // No `output`: text or voice is the workspace's setting, read at the
-      // delivery end. The agent has no say in it and nothing here can pass one.
-      const res = await api.post('/telegram/send', { text, workspaceId, chatId });
+      // No `output`: text or voice is the user's setting, read at the delivery
+      // end. The agent has no say in it and nothing here can pass one.
+      const res = await api.post('/telegram/send', { text, chatId });
       if (!res?.ok) return { ok: false, error: res?.error || 'Could not send the message.' };
       return { ok: true };
     } catch (e: any) {
@@ -98,7 +97,7 @@ export function initDesktopAgent(deps: {
   const host: AgentHost = {
     builtinDir: deps.builtinDir,
     machine: os.hostname(),
-    extraTools: ({ chatId, workspaceId }) => [OPEN_FILE_TOOL, makeDesktopSendTool(workspaceId, chatId)],
+    extraTools: ({ chatId }) => [OPEN_FILE_TOOL, makeDesktopSendTool(chatId)],
     dataDir: () => app.getPath('userData'), // one global pi scratch dir on the desktop
     scratchDir: (chatId) => chatScratchDir(chatId),
     getVoiceConfig: deps.getVoiceConfig,
@@ -113,6 +112,29 @@ export function initDesktopAgent(deps: {
     getToken: deps.getToken,
     // Backs the same single `search_chats` tool the companion's agent gets.
     chatSearch: { searchChats: searchChatMessages, readChat: readChatWindow, recentChats },
+    // The `cron` tool's `status`. The companion owns execution, so run history
+    // and next-run live there — this asks for the same payload the cron panel
+    // already reads. Merged by name so a job shows up if either half knows it: a
+    // new job has a next run and no history, a removed one the reverse.
+    //
+    // Best-effort like the panel's own read: an unreachable companion means the
+    // agent is told status is unavailable, not that the jobs don't exist. The
+    // write half of the tool is local and keeps working offline.
+    cronStatus: async (workspaceId: string) => {
+      const state = await api.get(`/workspace/${encodeURIComponent(workspaceId)}/cron/state`);
+      const history: any[] = state?.history ?? [];
+      const next: Record<string, number | null> = state?.next ?? {};
+      const names = new Set<string>([...history.map((h) => h.jobName), ...Object.keys(next)]);
+      return [...names].map((name) => {
+        const h = history.find((x) => x.jobName === name);
+        return {
+          name,
+          nextRunAt: next[name] ?? null,
+          lastRunAt: h?.lastRunAt ?? null,
+          lastError: h?.lastError ?? null,
+        };
+      });
+    },
   };
   runtime = createAgentRuntime(host);
 }

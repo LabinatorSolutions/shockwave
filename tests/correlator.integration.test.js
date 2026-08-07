@@ -104,6 +104,34 @@ async function setupHarness() {
     }
   }
 
+  /**
+   * Wait for `n` events, THEN for quiet — for a test that knows how many it expects.
+   *
+   * `settle()` alone conflates two different things: what was emitted, and how
+   * fast. It returns after 700ms with no new event, which is a guess that the
+   * watcher is finished — and under load it is wrong. That is exactly how the
+   * batch test failed, roughly one run in ten:
+   *
+   *     types: {"rename":10,"add":4,"unlink":5}   — expected add: 5
+   *
+   * Every rename paired and every delete fired; one create event simply arrived
+   * after the window closed. The correlator was right and the harness stopped
+   * listening. Waiting for the count first removes the clock from the passing
+   * path — a slow watcher now costs seconds, not a red test.
+   *
+   * It still catches BOTH failure modes. Too few: the count never arrives and it
+   * fails on the timeout, having genuinely waited. Too many: the quiet period
+   * after the count runs anyway, so an extra event lands before the assertion.
+   */
+  async function settleFor(n, timeoutMs = 10_000) {
+    const POLL = 25;
+    const deadline = Date.now() + timeoutMs;
+    while (emitted.length < n && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL));
+    }
+    await settle();
+  }
+
   async function teardown() {
     await sub.unsubscribe();
     await fs.rm(ROOT, { recursive: true, force: true });
@@ -120,7 +148,7 @@ async function setupHarness() {
     return p;
   }
 
-  return { ROOT, corr, emitted, settle, teardown, seed };
+  return { ROOT, corr, emitted, settle, settleFor, teardown, seed };
 }
 
 test('integration: single rename emits exactly one rename event', async () => {
@@ -129,7 +157,7 @@ test('integration: single rename emits exactly one rename event', async () => {
     const a = await h.seed('a.md', 'hello a\n');
     const b = path.join(h.ROOT, 'b.md');
     await fs.rename(a, b);
-    await h.settle();
+    await h.settleFor(1);
     assert.deepEqual(h.emitted, [{ type: 'rename', oldPath: a, newPath: b }]);
   } finally {
     await h.teardown();
@@ -145,7 +173,7 @@ test('integration: batch rename of 10 files -> 10 renames, 0 unlinks, 0 adds', a
     }
     const news = olds.map((p) => p.replace(/b-(\d+)\.md$/, 'b-$1-renamed.md'));
     await Promise.all(olds.map((from, i) => fs.rename(from, news[i])));
-    await h.settle();
+    await h.settleFor(10);
 
     const counts = h.emitted.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
     assert.deepEqual(counts, { rename: 10 }, `counts: ${JSON.stringify(counts)}`);
@@ -166,7 +194,7 @@ test('integration: real delete -> unlink event after grace', async () => {
   try {
     const p = await h.seed('del.md', 'going away\n');
     await fs.unlink(p);
-    await h.settle();
+    await h.settleFor(1);
     assert.deepEqual(h.emitted, [{ type: 'unlink', path: p }]);
   } finally {
     await h.teardown();
@@ -178,7 +206,7 @@ test('integration: new file -> add event (no false rename)', async () => {
   try {
     const p = path.join(h.ROOT, 'brand-new.md');
     await fs.writeFile(p, 'fresh\n');
-    await h.settle();
+    await h.settleFor(1);
     assert.deepEqual(h.emitted, [{ type: 'add', path: p }]);
   } finally {
     await h.teardown();
@@ -198,7 +226,7 @@ test('integration: rename + simultaneous delete + simultaneous new add', async (
       fs.unlink(delPath),
       fs.writeFile(newPath, 'new file\n'),
     ]);
-    await h.settle();
+    await h.settleFor(3);
 
     const types = h.emitted.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
     assert.deepEqual(types, { rename: 1, unlink: 1, add: 1 }, `types: ${JSON.stringify(types)} emitted: ${JSON.stringify(h.emitted)}`);
@@ -243,7 +271,7 @@ test('integration: rename of identical-content files: both pair correctly', asyn
     const bRen = path.join(h.ROOT, 'iden-b-r.md');
 
     await Promise.all([fs.rename(a, aRen), fs.rename(b, bRen)]);
-    await h.settle();
+    await h.settleFor(2);
 
     const counts = h.emitted.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
     assert.deepEqual(counts, { rename: 2 }, `counts: ${JSON.stringify(counts)}`);
@@ -268,7 +296,7 @@ test('integration: file moves between subfolders', async () => {
 
     const b = path.join(h.ROOT, 'dest', 'moved.md');
     await fs.rename(a, b);
-    await h.settle();
+    await h.settleFor(1);
 
     // Filter to file events (folder events would show up as separate types only
     // when we add/remove the folders, not when we rename inside them).
@@ -335,7 +363,10 @@ test('integration: many simultaneous renames including deletes and adds', async 
       ...newPaths.map((p, i) => fs.writeFile(p, `n${i}\n`)),
     ];
     await Promise.all(ops);
-    await h.settle();
+    // 10 renames + 5 unlinks + 5 adds. Waiting for the count rather than for
+    // quiet — this test is the one that flaked, and it flaked by asserting
+    // before the last create event had arrived. See settleFor.
+    await h.settleFor(20);
 
     const types = h.emitted.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
     assert.deepEqual(types, { rename: 10, unlink: 5, add: 5 }, `types: ${JSON.stringify(types)}`);

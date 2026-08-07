@@ -9,7 +9,7 @@
 // settings page as undefined.
 //
 // A workspace is assembled from TWO sources and this is where they meet:
-//   - identity, from the companion — id, name, repo, and the reply mode
+//   - identity, from the companion — id, name, repo
 //   - machine-local, from userData — where it is checked out here, and whether
 //     it syncs on THIS machine
 //
@@ -26,10 +26,9 @@
  * with nothing failing. Absent still means syncing, which is what a workspace
  * nobody has touched should do.
  *
- * `voiceReply` is normalized rather than trusted: it is plain text on the
- * companion and two things write it (the bot's `/voice`, the settings page), so
- * an unrecognized value must read as the default instead of reaching the UI as a
- * mode nothing renders.
+ * There is no `voiceReply` here any more: the Telegram reply mode is app-level
+ * and travels as an ordinary setting (`speech.telegramReply`), not as a property
+ * of a workspace. See agent-core/voiceReply.ts.
  */
 export function projectWorkspaceRow(row) {
   return {
@@ -38,6 +37,5 @@ export function projectWorkspaceRow(row) {
     path: row.path ?? null,
     repo: `${row.repoOwner}/${row.repoName}`,
     syncEnabled: row.syncEnabled !== false,
-    voiceReply: row.voiceReply === 'voice' || row.voiceReply === 'both' ? row.voiceReply : 'text',
   };
 }

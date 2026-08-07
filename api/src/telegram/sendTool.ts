@@ -28,9 +28,6 @@ export async function sendTelegramMessage(
   key: Buffer,
   text: string,
   opts: SendOptions & {
-    /** Whose preference applies when `output` is absent. Unset ⇒ the default,
-     *  which is what a caller with no workspace in hand should get. */
-    workspaceId?: string | null;
     /** Where to write the audio file, when there is a run directory to put it
      *  beside. Purely a scratch location — nothing is read from it. */
     workDir?: string | null;
@@ -64,7 +61,7 @@ export async function sendTelegramMessage(
     // Explicit beats stored; stored beats the default. Nothing here WRITES the
     // preference — that is `/voice`, a slash command, so a message-sending path
     // is never also a settings write.
-    const mode = opts.output ?? await store.getVoiceReply(db, opts.workspaceId);
+    const mode = opts.output ?? await store.getVoiceReply(db);
 
     // This is a BOUNDARY — the one door out to Telegram — and it had no line, so
     // "who sent this?" was unanswerable. That matters most for the case it just

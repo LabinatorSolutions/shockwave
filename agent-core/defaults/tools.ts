@@ -79,7 +79,7 @@ export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string
     tools: [
       'bash', 'edit', 'write',
       'list_agent_secrets', 'get_agent_secret', 'open_file', 'send_message',
-      'transcribe', 'daily_note', 'search_chats', 'memory',
+      'transcribe', 'daily_note', 'search_chats', 'memory', 'cron',
     ],
     reason: 'this is a review run — it reads the conversation above and updates your skills, and holds `read`, `grep`, `find`, `ls` and `manage_skill` to do it. Nothing else is available. Work with what you have or say there is nothing to save.',
   },
@@ -87,7 +87,7 @@ export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string
     tools: [
       'read', 'bash', 'edit', 'write', 'grep', 'find', 'ls',
       'list_agent_secrets', 'get_agent_secret', 'open_file', 'send_message',
-      'transcribe', 'daily_note', 'search_chats', 'manage_skill',
+      'transcribe', 'daily_note', 'search_chats', 'manage_skill', 'cron',
     ],
     reason: 'this is a memory run — it looks over the conversation above for facts worth keeping and holds only the `memory` tool. Everything you need is already in front of you: the conversation, and the current memory in your prompt.',
   },
@@ -114,9 +114,19 @@ export const DENIED: Partial<Record<ToolScope, { tools: string[]; reason: string
       send_message: 'all your messages already route to Telegram automatically, so you do not need this tool. Just write your reply.',
     },
   },
+  // `cron` is denied on a cron run for hermes' rule — "cron-run sessions should
+  // not recursively schedule more cron jobs" — which they state in prose and we
+  // can enforce, because a denial here is one line. Left open it is a real
+  // shape: a job whose prompt leads it to schedule a follow-up, running
+  // unattended, with each run free to add another and nobody watching the file
+  // grow. `list`/`status` go with it; they are the same tool, and a run that
+  // cannot change the schedule has no use for reading it.
   cron: {
-    tools: ['open_file'],
+    tools: ['open_file', 'cron'],
     reason: 'there is no app window on a scheduled run — nobody is watching one. Use `send_message` if the user needs to see this now.',
+    per: {
+      cron: 'you are already inside a scheduled run, and a run that schedules more runs is how a job multiplies with nobody watching. If this work needs to repeat, say so in your reply and let the user set it up.',
+    },
   },
 };
 
@@ -175,6 +185,10 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   // Every source, like hermes: one validated way to author a skill, whoever is
   // asking. The guards inside it differ by caller, not the tool.
   { name: 'manage_skill', origin: 'custom' },
+  // Scheduling. Denied on a CRON run below — hermes' rule, and the one place we
+  // can enforce what they can only state: a scheduled run that schedules more
+  // scheduled runs is how a job quietly multiplies with nobody watching.
+  { name: 'cron', origin: 'custom' },
 ];
 
 /** The allowlist handed to pi as `tools:` — covers builtin AND custom names.

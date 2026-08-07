@@ -74,7 +74,7 @@ export function makeSendMessageTool(
       + 'calling this is the last thing you do.\n\n'
       + 'It matters most on scheduled and unattended runs, where nobody reads your reply at all — '
       + 'there, a message that is not sent is a message that did not happen.\n\n'
-      + 'Whether they get it as writing, as a voice note, or both is THEIR setting for this workspace, '
+      + 'Whether they get it as writing, as a voice note, or both is THEIR setting, '
       + 'and you have no say in it — write the message and it is delivered the way they asked. If they '
       + 'want that changed ("talk to me from now on", "stop sending voice notes"), tell them to send '
       + '/voice text, /voice voice or /voice both; you cannot set it yourself.\n\n'

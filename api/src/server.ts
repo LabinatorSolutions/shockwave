@@ -240,7 +240,8 @@ app.get('/chats/recent', handle((req) => store.recentChats(
 // will call runCronJob the same way.
 app.post('/workspace/:id/cron/:job/run', handle(async (req) => {
   const chatId = crypto.randomUUID();
-  runCronJob(pool, masterKey, agentRuntime, req.params.id, req.params.job, chatId)
+  // `manual: true` — testing a one-time job must not consume it. See runCronJob.
+  runCronJob(pool, masterKey, agentRuntime, req.params.id, req.params.job, chatId, { manual: true })
     .catch((err) => log.error({ err: err?.message, workspace: req.params.id, job: req.params.job }, 'cron run failed'));
   return { ok: true, chatId };
 }));
@@ -256,12 +257,10 @@ app.get('/workspaces', handle(() => store.listWorkspaces(db)));
 app.post('/workspaces', handle((req) => store.upsertWorkspace(db, req.body)));
 app.patch('/workspaces', handle((req) => store.updateWorkspaceOrder(db, req.body)));
 app.delete('/workspaces/:id', handle((req) => store.deleteWorkspace(db, req.params.id)));
-// How this workspace's Telegram replies come back. The same value `/voice` sets,
-// so the desktop toggle and the bot command are one setting with two front doors.
-app.post('/workspaces/:id/voice', handle(async (req) => {
-  await store.setVoiceReply(db, req.params.id, req.body?.mode);
-  return { ok: true };
-}));
+// There is no `POST /workspaces/:id/voice` any more. The Telegram reply mode is
+// app-level (`speech.telegramReply`), so the desktop writes it through the
+// ordinary `PATCH /settings` and `/voice` in the bot writes the same row — two
+// front doors onto one setting, neither of which needs a route of its own.
 
 // ── Telegram (desktop Settings triggers these companion actions) ─────────────
 // COMPANION_DOMAIN set -> a real domain (Let's Encrypt) or an ngrok host: the
@@ -295,16 +294,16 @@ app.post('/telegram/connect', handle(async (req) => {
 app.post('/telegram/disconnect', handle(async () => { await tgDisconnect(pool, masterKey); return { ok: true }; }));
 // Send a DM to the user. Backs the desktop's copy of the `send_message` agent
 // tool — the bot token is here, so the desktop asks rather than holds it.
-// `output` overrides the workspace's preference for this ONE message; absent, the
-// server reads that preference off the workspace row. There is deliberately no
-// way to CHANGE it here — that is `/voice`, so no message-sending path is also a
-// settings write.
+// The server reads the reply mode itself (`speech.telegramReply`). There is
+// deliberately no way to CHANGE it here — that is `/voice`, so no message-sending
+// path is also a settings write.
 // `output` is deliberately NOT read off the body. The desktop's copy of
 // send_message no longer offers it, and an older desktop still would — honouring
-// that would leave the agent able to overrule the workspace's voice setting from
-// one machine and not another, which is worse than either answer on its own.
+// that would leave the agent able to overrule the user's voice setting from one
+// machine and not another, which is worse than either answer on its own.
+// `workspaceId` is ignored for the same shape of reason: an older desktop still
+// sends one, and the mode it used to select is app-level now.
 app.post('/telegram/send', handle((req) => sendTelegramMessage(pool, masterKey, String(req.body?.text ?? ''), {
-  workspaceId: typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : null,
   // Which chat is speaking, so a reply to the message resumes it. Absent from an
   // older desktop — a reply to one of those simply doesn't switch.
   chatId: typeof req.body?.chatId === 'string' ? req.body.chatId : null,

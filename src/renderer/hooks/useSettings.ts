@@ -2,7 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSyncRef } from './useSyncRef';
 import { buildPatch, dropEmptyCredentials } from '../settingsDiff.js';
 import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS } from '../constants';
-import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret, VoiceReply } from '../../shared/settings';
+import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
+import { normalizeVoiceReply } from '../../../agent-core/voiceReply.js';
 
 // dailyNote + templates moved to the per-workspace WorkspaceData.
 type DailyNote = WorkspaceData['dailyNote'];
@@ -229,16 +230,13 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     if (activeWorkspacePath) await window.api.workspaceSettings.update(activeWorkspacePath, { templates: next });
   }, [activeWorkspacePath]);
 
-  // How this workspace wants Telegram replies delivered. It lives on the
-  // COMPANION's workspace row rather than in the checkout, because `/voice` sets
-  // the same value from the bot and a slash command has no checkout prepared.
+  // How Telegram replies come back. An ordinary leaf of the `speech` slice, so
+  // it needs no setter of its own — `onSpeechChange` merges it in and the diffed
+  // save sends just that key. It used to be a per-workspace write down its own
+  // IPC channel; see agent-core/voiceReply.ts for why that was wrong.
   //
-  // No local state: main re-pushes the workspace list after the write, and the
-  // page reads the mode off the active workspace entry. A second copy here would
-  // be one the bot could silently disagree with.
-  const onVoiceReplyChange = useCallback(async (id: string, next: VoiceReply) => {
-    if (id) await window.api.workspace.setVoiceReply(id, next);
-  }, []);
+  // The bot's `/voice` writes the same row and the companion announces it, so
+  // `settings:changed` re-seeds this the same as any other remote change.
 
   // Seed daily-note + templates from a loaded workspace-data object (called by
   // App's loadWorkspace). Resets to defaults when data is null.
@@ -430,6 +428,10 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
       provider: disk.speech?.provider || '',
       voiceId: disk.speech?.voiceId || '',
       modelId: disk.speech?.modelId || '',
+      // Unset ⇒ text, which is what `normalizeVoiceReply` says everywhere else.
+      // Carried through the same normalizer rather than a `|| 'text'` here, since
+      // the bot writes this row too and a value it wrote is the one to trust.
+      telegramReply: normalizeVoiceReply(disk.speech?.telegramReply),
     };
     // A MAP of flags, not a boolean — one entry per vendor that has a key stored.
     const vk: Record<string, boolean> = { ...(disk.hasVoiceKey ?? {}) };
@@ -508,7 +510,7 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange, saveOpenTabs,
-    onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onVoiceReplyChange, onTreeSortOrderChange,
+    onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSpeechChange, onVoiceKeyChange, onTelegramChange,
     onSyncChange, onTimezoneChange,

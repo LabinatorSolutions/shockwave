@@ -1,15 +1,33 @@
 // How the agent's Telegram replies come back, and the two questions every
 // delivery path asks of that.
 //
-// PURE POLICY — no disk, no store. The value itself lives on the companion, in
-// `workspace.voice_reply`, because `/voice` is a slash command: those are
-// answered straight from that database with no checkout prepared, and a file in
-// the checkout would have made changing a preference cost a clone. It also means
-// the setting is not a git-synced file the agent has to read-modify-write, and
-// not something a run's commit has to carry back.
+// PURE POLICY — no disk, no store. The value itself lives on the companion, as
+// the ordinary settings row named below. It is NOT a file in the checkout,
+// because `/voice` is a slash command: those are answered straight from that
+// database with no checkout prepared, and a file there would have made changing
+// a preference cost a clone. It also means the setting is not a git-synced file
+// the agent has to read-modify-write, and not something a run's commit carries
+// back.
 //
 // Dependency-free, so `node --test` loads it directly and both builds import it
 // without ceremony — same as `credentials.ts` and `voiceProviders.ts`.
+
+/**
+ * Where the mode is stored — ONE dotted settings path, named here because three
+ * writers and three readers have to agree on it: the bot's `/voice`, the desktop
+ * settings page, the companion's settings row, the Telegram turn, `send_message`
+ * and the settings page's own render.
+ *
+ * **App-level, not per-workspace, and that is the whole point of it living in
+ * `setting` rather than on `workspace`.** It used to be `workspace.voice_reply`,
+ * one value per workspace — and the bot's active workspace
+ * (`telegram_account.active_workspace_id`) is set independently of the desktop's,
+ * so Settings wrote the mode of a workspace the bot was not pointed at and the
+ * replies stayed text with nothing on screen able to say why. The reason the
+ * value sat on that row was never about scope: it was about not being in the
+ * checkout, and a settings row satisfies that identically.
+ */
+export const VOICE_REPLY_SETTING_PATH = 'speech.telegramReply';
 
 /**
  * - `'text'`  — text only. The default.

@@ -15,6 +15,7 @@ import {
   VOICE_PROVIDERS, voiceProvider, voiceConfigOf, providersFor, canDo,
   providerForJob, type VoiceJob, type VoiceProvider,
 } from '../../../agent-core/voiceProviders.js';
+import { normalizeVoiceReply } from '../../../agent-core/voiceReply.js';
 
 // Settings page for voice, in both directions.
 //
@@ -167,9 +168,6 @@ export default function VoiceSection({
   hasVoiceKey,
   onSpeechChange,
   onVoiceKeyChange,
-  voiceReply,
-  onVoiceReplyChange,
-  hasWorkspace,
 }: any) {
   // Resolved through the SAME functions the microphone, Telegram and the agent
   // use — `voiceConfigOf` folds `hasVoiceKey` in for us, so the page cannot show
@@ -177,6 +175,10 @@ export default function VoiceSection({
   const config = voiceConfigOf({ transcription, speech, hasVoiceKey });
   const assigned = (job: VoiceJob) => providerForJob(config, job);
   const keyStored = (slug: string) => !!hasVoiceKey?.[slug];
+
+  // Unset ⇒ text, through the same normalizer the delivery end uses — the bot
+  // writes this row too, so what the page shows must be what a turn would read.
+  const replyMode = normalizeVoiceReply(speech?.telegramReply);
 
   const speakSlug = assigned('speak');
   const speak = speakSlug ? voiceProvider(speakSlug)! : null;
@@ -529,16 +531,22 @@ export default function VoiceSection({
 
       <SettingsDivider />
 
+      {/* NOT per-workspace, and it used to say it was. The bot answers in one
+          workspace at a time and that choice is made on the Telegram page, quite
+          separately from whichever workspace this window has open — so a
+          per-workspace mode meant this control wrote a value the bot never read,
+          and the replies stayed text with nothing on screen able to explain it.
+          See agent-core/voiceReply.ts. Nothing to gate on a workspace either,
+          which is why there is no "open a workspace to set this" state. */}
       <SettingsGroup
-        title="Telegram replies — this workspace"
+        title="Telegram replies"
         description="Voice alone can't be skimmed or searched, so pick it knowingly."
       >
         <Field>
           <FieldLabel htmlFor="voice-reply-mode">Reply with</FieldLabel>
           <Select
-            value={['text', 'voice', 'both'].includes(voiceReply) ? voiceReply : 'text'}
-            onValueChange={(next) => onVoiceReplyChange?.(next)}
-            disabled={!hasWorkspace}
+            value={replyMode}
+            onValueChange={(next) => updateSpeak({ telegramReply: next })}
           >
             <SelectTrigger id="voice-reply-mode" className="w-full">
               <SelectValue />
@@ -549,19 +557,22 @@ export default function VoiceSection({
               <SelectItem value="both">Voice and text</SelectItem>
             </SelectContent>
           </Select>
+          {/* The agent CANNOT change this — `send_message`'s own description tells
+              it to answer "send /voice text|voice|both" and says it cannot set the
+              mode itself. This line claimed the opposite for as long as it
+              existed, sending the user to ask for something the agent is
+              instructed to refuse. */}
           <FieldDescription>
-            {!hasWorkspace
-              ? 'Open a workspace to set this.'
-              : 'Or just ask the agent to talk to you — it can change this itself.'}
+            Or send the bot <code className="font-mono">/voice</code> — it changes the same setting.
           </FieldDescription>
         </Field>
         {/* The gate is a provider AND its key, so the instruction has to name
             whichever half is missing. Saying "pick a provider" to someone who
             already picked one is the wrong next step. */}
-        {voiceReply !== 'text' && !speakSlug && (
+        {replyMode !== 'text' && !speakSlug && (
           <p className="text-xs text-muted-foreground">Pick a speaking provider above, or replies stay text.</p>
         )}
-        {voiceReply !== 'text' && !!speakSlug && !keyStored(speakSlug) && (
+        {replyMode !== 'text' && !!speakSlug && !keyStored(speakSlug) && (
           <p className="text-xs text-muted-foreground">
             Add your {speak?.label ?? speakSlug} key above, or replies stay text.
           </p>

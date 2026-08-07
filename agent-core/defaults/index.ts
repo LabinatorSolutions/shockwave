@@ -42,10 +42,15 @@ export interface PromptOpts {
   /** The agent's own directory for this chat, named in the Boundaries section. */
   scratchDir?: string;
   /**
-   * The one system timezone (`settings.timezone`) — named in Scheduled runs so
-   * the agent writes one-time schedules in the zone the scheduler evaluates them
-   * in. Static, so baking it into the cached prompt is safe; the current TIME is
-   * deliberately not here (it would miss the session cache every turn).
+   * Accepted and no longer used by the prompt.
+   *
+   * It named the zone in the Scheduled-runs section so the agent wrote one-time
+   * schedules in the zone the scheduler evaluates them in. That section is now
+   * the `cron` tool, which is handed the timezone directly and states it per
+   * call — a live value rather than one frozen into the chat.
+   *
+   * Kept on the type because every caller passes it and removing it is churn
+   * with no behaviour behind it; drop it when something else here needs a zone.
    */
   timezone?: string;
   /**
@@ -104,7 +109,6 @@ function helperFor(opts: PromptOpts): string {
     unattended: opts.unattended,
     source: opts.source,
     scratchDir: opts.scratchDir,
-    timezone: opts.timezone,
     memory: opts.memory,
     templates: opts.templates,
   });

@@ -282,7 +282,7 @@ export default function App() {
     onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange, saveOpenTabs,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
-    onSpeechChange, onVoiceKeyChange, onVoiceReplyChange, onTelegramChange,
+    onSpeechChange, onVoiceKeyChange, onTelegramChange,
     onSyncChange, onTimezoneChange,
   } = useSettings({
     activeWorkspacePath: workspacePath,
@@ -2575,8 +2575,6 @@ export default function App() {
         onSpeechChange={onSpeechChange}
         hasVoiceKey={hasVoiceKey}
         onVoiceKeyChange={onVoiceKeyChange}
-        voiceReply={workspaces.find((w: any) => w.id === activeWorkspaceId)?.voiceReply ?? 'text'}
-        onVoiceReplyChange={(mode: any) => onVoiceReplyChange(activeWorkspaceId ?? '', mode)}
         sync={sync}
         onSyncChange={onSyncChange}
         timezone={timezone}

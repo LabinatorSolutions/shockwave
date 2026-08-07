@@ -18,7 +18,7 @@ import { cronRead, cronRunNow } from './api/cron.js';
 import { listChats, listPinned, pinnedChatIds, searchChats, getMessages, openChat as openChatApi, deleteChat, setChatTitle, setChatPinned, postEvent } from './api/chats.js';
 import {
   getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed,
-  createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled, setWorkspaceVoiceReply,
+  createWorkspace, removeWorkspace, setUpHere as wsSetUpHere, forgetLocal as wsForgetLocal, setSyncEnabled,
 } from './api/workspaces.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isWatchIgnored, isTreeHidden } from './pathResolver.js';
 import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../../agent-core/defaults/files.js';
@@ -1915,15 +1915,6 @@ async function stopEngineForWorkspace(id: string) {
 
 // Removal is its own call, not a settings save that happens to omit an id.
 // That's both what the user action actually is, and what stops a stale renderer
-// How this workspace's Telegram replies come back. Writes the companion's
-// workspace row — the same value `/voice` sets on the bot — then re-pushes the
-// list, so the page updates from the store rather than from local state.
-ipcMain.handle('workspace:setVoiceReply', async (_evt, { id, mode }) => {
-  await setWorkspaceVoiceReply(id, mode);
-  await notifyWorkspacesChanged();
-  return { ok: true };
-});
-
 // list from deleting a workspace it never knew about — see `updateWorkspaces`.
 // Nothing on disk is touched: not the checkout, not the GitHub repo.
 ipcMain.handle('workspace:remove', async (_evt, { id }) => {

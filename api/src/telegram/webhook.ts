@@ -715,7 +715,8 @@ interface PreparedRun {
   /** Carried rather than re-read: the settings read happens in prepareRun, which
    *  now runs on the other side of the fan-out from the turn that needs this. */
   timezone: string | undefined;
-  /** How this workspace wants replies delivered, off the workspace row. */
+  /** How the user wants replies delivered. App-level, so it rides along with the
+   *  settings read rather than being a second query keyed on the workspace. */
   voiceReply: VoiceReply;
 }
 
@@ -765,9 +766,10 @@ async function prepareRun(
   const apiKey = (ca.providerKeys ?? {})[ca.provider] ?? '';
   let wsBuiltinSkills: Record<string, any> = {};
   try { wsBuiltinSkills = JSON.parse(await fs.readFile(path.join(dir, '.shockwave', 'workspace.json'), 'utf8'))?.builtinSkills ?? {}; } catch { /* defaults */ }
-  // How this workspace wants replies delivered. Straight off the workspace row —
-  // `/voice` writes it there, so there is no file to read and no checkout needed.
-  const voiceReply = normalizeVoiceReply(ws.voiceReply);
+  // How the user wants replies delivered. An ordinary settings leaf, already in
+  // the object read above — `/voice` writes that same row, so there is no file to
+  // read and no checkout needed.
+  const voiceReply = normalizeVoiceReply(settings.speech?.telegramReply);
 
   if (existing) {
     // Events during boot go to the feed only; agentSend re-points the session at
@@ -795,8 +797,8 @@ async function runTurnInner(
 
   // The only two folders a file may be sent from: the workspace the agent is
   // working in, and where its own attachments were saved.
-  // The workspace's reply mode, read once in prepareRun off the checkout this turn
-  // is running in. Absent `speak` is what `text` means — see makeTelegramSink.
+  // The reply mode, read once in prepareRun with the rest of the settings.
+  // Absent `speak` is what `text` means — see makeTelegramSink.
   const sink = makeTelegramSink(client, dm, [dir, chatFilesDir(chatId)], {
     speak: speaks(voiceReply)
       // A PARTIAL reading reports false, so the sink writes the words after all:

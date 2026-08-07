@@ -41,6 +41,18 @@ async function dropJob(dir: string, jobName: string): Promise<void> {
 export async function runCronJob(
   pool: PgPool, key: Buffer, runtime: any,
   workspaceId: string, jobName: string, chatId: string,
+  // A MANUAL run — the panel's Run button, or POST …/cron/:job/run.
+  //
+  // The only thing it changes is disposal. A one-time job deletes its own entry
+  // when it fires, and this function is shared with the scheduler, so pressing
+  // Run on a reminder set for tonight used to consume it: the test ran, the
+  // entry vanished, and tonight nothing happened. Nobody was told, because from
+  // the outside a manual run and the real one are the same run.
+  //
+  // Trying it out must not be the same act as spending it. A manual run does
+  // everything else identically — same checkout, same turn, same check-in — and
+  // leaves the schedule alone.
+  opts: { manual?: boolean } = {},
 ): Promise<CronRunResult> {
   const db = getDb(pool);
   const workspaces = await store.listWorkspaces(db);
@@ -124,7 +136,10 @@ export async function runCronJob(
   // either way (croner is done with a date pattern once it passes), so skipping
   // this on failure wouldn't re-run anything; it would just leave a dead line in
   // cron.json for the user to clean up.
-  if (job.once) await dropJob(dir, jobName);
+  //
+  // NOT on a manual run: that is someone testing the job, and the scheduled
+  // moment hasn't come. See the note on `opts.manual` above.
+  if (job.once && !opts.manual) await dropJob(dir, jobName);
 
   const stamp = new Date().toISOString();
   // Shared with the Telegram path — deterministic check-in, git-fixer on a

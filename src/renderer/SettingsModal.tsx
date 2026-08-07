@@ -131,8 +131,6 @@ export default function SettingsModal({
   onSpeechChange,
   hasVoiceKey,
   onVoiceKeyChange,
-  voiceReply,
-  onVoiceReplyChange,
   sync,
   onSyncChange,
   timezone,
@@ -345,9 +343,6 @@ export default function SettingsModal({
               onSpeechChange={onSpeechChange}
               hasVoiceKey={hasVoiceKey}
               onVoiceKeyChange={onVoiceKeyChange}
-              voiceReply={voiceReply}
-              onVoiceReplyChange={onVoiceReplyChange}
-              hasWorkspace={!!workspacePath}
             />
           )}
           {effectiveActive === SETTINGS_SECTIONS.UPDATES && (

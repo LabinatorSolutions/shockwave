@@ -27,6 +27,7 @@ import { makeSkillTools } from './skillTool.js';
 import { makeMemoryTool } from './memoryTool.js';
 import { readTemplates } from './templates.js';
 import { makeChatSearchTool, type ChatSearchHost } from './chatSearch.js';
+import { makeCronTool, type CronStatusReader } from './cronTool.js';
 import { imagesOf } from './messageImages.js';
 
 export type Emit = (event: any) => void;
@@ -103,6 +104,17 @@ export interface AgentHost {
   onError?(chatId: string, message: string): void;
   /** Backs the `search_chats` tool. Omit and the tool isn't offered. */
   chatSearch?: ChatSearchHost;
+  /**
+   * Backs the `cron` tool's `status` action — per-job next run, last run, last
+   * error. Optional, and the tool is still offered without it: the write half
+   * needs only the workspace folder, so `create`/`update`/`remove`/`list` work
+   * anywhere, and `status` alone says it is unavailable here.
+   *
+   * A host call because the answer lives where the scheduler does: the companion
+   * reads `cron_state` and croner's in-memory next-run directly, the desktop asks
+   * it over HTTP. Same split as `chatSearch`.
+   */
+  cronStatus?: CronStatusReader;
 }
 
 export interface RunOpts {
@@ -419,6 +431,13 @@ export function createAgentRuntime(host: AgentHost) {
     // config is read off disk per call, so a settings change mid-chat is picked
     // up without a reboot.
     const dailyNoteTools = [makeDailyNoteTool(workspacePath, timezone)];
+    // Built per session for the same reason: `cron.json` is THIS workspace's, and
+    // the timezone the schedule is evaluated in is this run's. `readStatus` is
+    // whatever the host can answer — absent on a host that can't, which costs
+    // only the `status` action.
+    const cronTools = [makeCronTool(workspacePath, {
+      timezone, workspaceId, readStatus: host.cronStatus,
+    })];
     // Built per session because the skill roots are THIS workspace's, and
     // because a review run's read-before-write state must not be shared with
     // any other run. On a review run this also returns a `read` that wraps pi's
@@ -446,7 +465,7 @@ export function createAgentRuntime(host: AgentHost) {
     const { session } = await createAgentSession({
       cwd: workspacePath, agentDir, model: modelObj, thinkingLevel: level as any,
       authStorage, modelRegistry, sessionManager, resourceLoader,
-      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...dailyNoteTools, ...skillTools, ...memoryTools, ...extraTools],
+      customTools: [...tokenTools, ...searchTools, ...transcribeTools, ...dailyNoteTools, ...cronTools, ...skillTools, ...memoryTools, ...extraTools],
       tools: allowed,
     });
 

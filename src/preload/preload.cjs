@@ -557,12 +557,6 @@ contextBridge.exposeInMainWorld('api', {
      *  vanished — the repo is still valid, so the identity must survive.
      *  @param {{ id: string }} opts @returns {Promise<{ ok: boolean }>} */
     forgetLocal: (opts) => ipcRenderer.invoke('workspace:forgetLocal', opts),
-    /** How this workspace's Telegram replies come back: 'text' | 'voice' | 'both'.
-     *  The same setting the bot's /voice command changes, on the companion's
-     *  workspace row. Main re-pushes the workspace list after.
-     *  @param {string} id @param {'text'|'voice'|'both'} mode
-     *  @returns {Promise<{ ok: boolean }>} */
-    setVoiceReply: (id, mode) => ipcRenderer.invoke('workspace:setVoiceReply', { id, mode }),
     /** The workspace default file set and which of them are missing here.
      *  @param {{ workspacePath: string }} opts
      *  @returns {Promise<{ ok: boolean, files?: Array<{name: string, purpose: string}>, missing?: string[], error?: string }>} */

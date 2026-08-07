@@ -8,7 +8,7 @@ import { seal, unseal } from './crypto.js';
 import { publishSettingsChanged } from './feed.js';
 import { logger } from './log.js';
 import {
-  normalizeVoiceReply, DEFAULT_VOICE_REPLY, type VoiceReply,
+  normalizeVoiceReply, VOICE_REPLY_SETTING_PATH, type VoiceReply,
 } from '../../agent-core/voiceReply.js';
 import {
   isSettingsSecretKey, SETTINGS_SECRET_OWNER, AGENT_SECRET_FIELDS, isOAuthOwnedField,
@@ -399,7 +399,6 @@ export async function listWorkspaces(db: Db) {
   return rows.map((r) => ({
     id: r.id, name: r.name, repoOwner: r.repoOwner, repoName: r.repoName,
     defaultBranch: r.defaultBranch, sortOrder: r.sortOrder,
-    voiceReply: normalizeVoiceReply(r.voiceReply),
   }));
 }
 
@@ -410,19 +409,31 @@ export async function getWorkspace(db: Db, id: string) {
 }
 
 /**
- * How this workspace's Telegram replies come back. Normalized on read, because
- * the column is plain text and `/voice` is not the only thing that could write it.
+ * How the agent's Telegram replies come back. **One value for the whole install**
+ * — see VOICE_REPLY_SETTING_PATH for why it stopped being per-workspace.
+ *
+ * Read straight off the `setting` row rather than through `readSettings`, because
+ * every caller here has a `Db` and not the master key, and this leaf holds no
+ * credential. Normalized on the way out because the column is plain text and
+ * more than one thing writes it (`/voice`, and an ordinary settings PATCH from
+ * the desktop).
  */
-export async function getVoiceReply(db: Db, workspaceId: string | null | undefined): Promise<VoiceReply> {
-  if (!workspaceId) return DEFAULT_VOICE_REPLY;
-  const row = await getWorkspace(db, workspaceId);
-  return normalizeVoiceReply(row?.voiceReply);
+export async function getVoiceReply(db: Db): Promise<VoiceReply> {
+  const rows = await db.select({ value: setting.value }).from(setting)
+    .where(eq(setting.key, VOICE_REPLY_SETTING_PATH));
+  return normalizeVoiceReply(rows[0]?.value);
 }
 
-export async function setVoiceReply(db: Db, workspaceId: string, mode: VoiceReply): Promise<void> {
-  await db.update(workspace)
-    .set({ voiceReply: normalizeVoiceReply(mode) })
-    .where(eq(workspace.id, workspaceId));
+/** `/voice` in the bot. The desktop writes the same row via `PATCH /settings`,
+ *  so both front doors land in one place and `announce()` tells the other. */
+export async function setVoiceReply(db: Db, mode: VoiceReply): Promise<void> {
+  const value = normalizeVoiceReply(mode);
+  await db.insert(setting)
+    .values({ key: VOICE_REPLY_SETTING_PATH, value, type: 'string', updatedAt: now() })
+    .onConflictDoUpdate({
+      target: setting.key,
+      set: { value, type: 'string', updatedAt: now() },
+    });
   announce();
 }
 

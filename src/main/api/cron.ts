@@ -7,6 +7,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { api } from './client.js';
 import { readLocalSettings, getWorkspaceLocal } from './localSettings.js';
+// `scheduleLabel` is the SAME check the `cron` tool writes through
+// (`agent-core/cronValidate.ts`), not a second opinion — the panel calling a job
+// fine while the tool refuses to write it would be worse than either answer
+// alone. It lives there rather than here because this file imports the companion
+// client, which imports electron, so nothing in it is loadable by `node --test`.
+import { scheduleLabel } from '../../../agent-core/cronValidate.js';
 
 const EMPTY = {
   activeWorkspace: null as string | null, exists: false, fileError: null as string | null,
@@ -52,7 +58,12 @@ export async function cronRead(): Promise<any> {
     // truthy-but-wrong value in a hand-edited file shouldn't label a recurring
     // job as something that disposes of itself after one run.
     once: j?.once === true,
-    invalid: null,
+    // Was hardcoded `null`, so the one place a broken job could reach a human
+    // was wired to a constant: `CronModal.tsx` renders this as a red pill and
+    // never had anything to render. A job that can never fire looked exactly
+    // like one that runs nightly, and the only other trace was a `log.warn` on
+    // the companion.
+    invalid: scheduleLabel(j),
     nextRunAt: next[j?.name] ?? null,
     lastRunAt: history[j?.name]?.lastRunAt ?? null,
     lastError: history[j?.name]?.lastError ?? null,
