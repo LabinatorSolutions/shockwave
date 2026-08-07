@@ -4,7 +4,7 @@ A simple notes app with a built-in AI agent that organizes everything and does w
 
 For non-technical note-takers who want AI agents with smart features — like memory, self-improvement — but without the setup hassle.
 
-[macOS · Windows · Linux · **Download ↓**](#install)
+[**Download ↓** · macOS · Windows · Linux](#install)
 
 ---
 
