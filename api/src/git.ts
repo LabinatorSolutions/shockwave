@@ -24,6 +24,11 @@ const log = logger('git');
 
 export { WORK_BASE };
 
+/** How far back a fresh checkout can see. Best-effort, cut once at clone time —
+ *  see the deepen step in cloneFresh for why it is a second command and not a
+ *  `--shallow-since` on the clone itself. */
+const HISTORY_WINDOW = '7.days';
+
 // Plain remote — NO credentials. `git clone <url>` and `git remote set-url` both
 // persist whatever URL they're given into <dir>/.git/config, and <dir> is the
 // agent's own working directory for the turn, so a PAT embedded here is a file
@@ -290,6 +295,32 @@ export async function cloneFresh(
     maxBuffer: 32 * 1024 * 1024,
     env: gitEnv(pat),
   });
+  // Then reach back HISTORY_WINDOW, best-effort. The clone above is the whole
+  // saving, and it leaves the agent holding a repo whose history starts today —
+  // `git log` shows one commit, `git blame` attributes every line to it, and
+  // "when did this change and why" has no answer. That is most of what looking
+  // something up in a repo consists of, and an unattended run has no way to ask
+  // for it: the guards are command-line `-c` and don't persist, so the checkout's
+  // config carries no credential helper and any fetch the AGENT starts against a
+  // private origin fails with no way to authenticate.
+  //
+  // This CANNOT be folded into the clone as `--shallow-since`. A repo with no
+  // commits inside the window fails the clone outright — `fatal: error processing
+  // shallow info: 4`, and no directory is created — so a workspace nobody touched
+  // for a week would stop cloning entirely and every run against it would break.
+  // As a SECOND step the identical error is harmless: the clone has already
+  // succeeded, so the failure costs the extra history and nothing else, and what
+  // is left is exactly the depth=1 checkout that shipped before this line. Hence
+  // the bare catch — there is no state to repair and nothing a caller could do.
+  //
+  // The boundary is cut HERE and nothing moves it afterwards: prepareCheckout's
+  // reuse fetch and refreshPristine both deliberately carry no depth, so they
+  // preserve it. So a queued folder's window counts from when it was STOCKED
+  // rather than from when a chat claimed it. Bounded rather than sliding — the
+  // pool refreshes hourly and folders age out on scratchTtlDays — so it corrects
+  // itself, and widening it is a matter of changing one constant.
+  await git(dir, ['fetch', `--shallow-since=${HISTORY_WINDOW}`, 'origin', branch], auth)
+    .catch((e) => log.info({ dir, err: errStr(e) }, 'no history in window — staying at depth 1'));
   await git(dir, ['config', 'user.name', 'Shockwave Cron']);
   await git(dir, ['config', 'user.email', 'cron@shockwave.local']);
 }

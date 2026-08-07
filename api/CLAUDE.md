@@ -146,6 +146,26 @@ The fix is not a rule saying "call the other one" — a rule in a document is a 
 
 Neither can be mistaken for saving a run's work, because neither claims to. `checkInWithFixer` is the only place they are composed into a landing, and it is therefore the only thing there is to call. **A fourth agent path cannot get this wrong** — not because it is told not to, but because the wrong function no longer exists.
 
+### A fresh checkout clones at depth 1, then reaches back 7 days
+
+`cloneFresh` runs two commands, and the split is the point:
+
+```
+git clone --depth=1 …                    always succeeds, fast
+git fetch --shallow-since=7.days …       best-effort, failure costs only the history
+```
+
+A depth-1 checkout leaves the agent holding a repo whose history starts today — `git log` shows one commit, `git blame` blames all of it on that commit, and *"when did this change and why"* has no answer. An unattended run cannot ask for more either: `guards()` are command-line `-c` and **do not persist into the clone's config**, so the checkout carries no credential helper and any fetch the *agent* starts against a private origin fails with nothing to authenticate with. Whatever history it is going to have, it has to be given at clone time.
+
+**The window cannot be a `--shallow-since` on the clone itself.** A repo with no commits inside it fails the clone outright — `fatal: error processing shallow info: 4`, no directory created — so a workspace nobody touched for a week would stop cloning entirely and every run against it would break. As a *second* step the identical error is harmless: the clone has already succeeded, so the failure costs the extra history and nothing else, and what remains is exactly the depth-1 checkout that shipped before. Hence the bare catch — there is no state to repair.
+
+`HISTORY_WINDOW` is one constant in `git.ts`. Two properties worth knowing:
+
+- **One edit covers both paths.** `cloneFresh` has exactly two callers — the inline clone in `prepareCheckout` and the queue's stocking in `checkoutPool.ts` — which is why the deepen lives there and not in `prepareCheckout`.
+- **The boundary is cut at clone time and nothing moves it.** The reuse fetch and `refreshPristine` both carry no depth, so they preserve it — meaning a queued folder's window counts from when it was **stocked**, not from when a chat claimed it. Bounded rather than sliding: the pool refreshes hourly and folders age out on `scratchTtlDays`.
+
+Blame and old file contents beyond the window are still unreachable, and deliberately so — closing that needs a privileged deepen the agent can *request*, not a credential it holds.
+
 ### Reusing a checkout: `fetch` (no `--depth`) then a GUARDED `reset --hard`
 
 **`--depth=1` belongs on the clone and NOWHERE else.** On the initial clone it is the whole saving. On a fetch into an existing checkout it saves nothing — a fetch only ever transfers objects we don't already have (measured: 3, for a one-file change in a 200-file repo) — and it rewrites `.git/shallow` so the remote branch arrives as its own root commit with no link to what we hold.
