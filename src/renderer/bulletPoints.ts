@@ -5,12 +5,26 @@ import { RangeSetBuilder } from '@codemirror/state';
 // swallows the whole `bullet [ ]` range, so decorating the bullet here would
 // collide with that decoration.
 //
-// The `(\s+|$)` (vs a bare `\s+`) also matches an EMPTY list item — a marker
-// alone at end of line (`-` with no trailing content). CommonMark treats that
-// as a valid empty list item, and trailing whitespace on a blank bullet is
-// fragile (easily stripped), so `- ` and `-` must render the bullet identically
-// — otherwise the same blank bullet flips between `•` and a raw `-`.
-const LIST_RE = /^(\s*)([-*+])(\s+|$)(?!\[[ xX]\])/;
+// The trailing `\s+` is REQUIRED — a bare `-` at end of line is not a bullet.
+//
+// It used to be `(\s+|$)`, which drew a bullet for a lone marker too, on the
+// reasoning that CommonMark counts `-` alone as a valid empty list item and that
+// the trailing space on a blank bullet is easily stripped. The cost was a lie
+// told on every list you start: type `-` and a bullet appears, type the first
+// letter and the line is `-h`, which is not a list — so the bullet vanishes.
+// The editor promised a list and then took it back, one keystroke later.
+//
+// No other markdown editor draws a bullet for a lone `-` (Obsidian, Notion,
+// Bear, Typora all wait for the space), and none of them auto-inserts the space
+// either. Requiring it puts us with them, and means a bullet on screen is always
+// a real list item.
+//
+// The stripped-whitespace case it was protecting against costs an EMPTY bullet
+// rendering as `-` until you type in it — cosmetic, transient, and nothing in
+// this app strips trailing whitespace (only an external editor would). Pressing
+// Enter is unaffected: `listContinue` inserts the marker WITH its space, so the
+// new line matches immediately.
+const LIST_RE = /^(\s*)([-*+])(\s+)(?!\[[ xX]\])/;
 
 class BulletWidget extends WidgetType {
   eq() { return true; }
