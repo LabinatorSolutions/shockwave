@@ -68,6 +68,26 @@ const MARGIN = 0.6;
 const FIRST_PIECE_CHARS = 50;
 
 /**
+ * The first piece is never shorter than this, whatever break is available.
+ *
+ * Separate from `MIN_FILL` because it is answering a different question. That one
+ * asks "is this break worth using for a piece of this size?"; this one says the
+ * OPENER in particular may not be small, because it is the only piece whose length
+ * sizes every piece after it — the ladder is built from how long it plays.
+ *
+ * Without it the floor for the opener is `MIN_PIECE_CHARS` against a budget of 50,
+ * i.e. 25 characters — five above the shortest clip permitted anywhere. Replies
+ * opening with a short sentence hit that constantly ("Yes, that's the problem." is
+ * 24), and a 24-character opener buffers 1.4s, which gives the second piece a
+ * 37-character budget, which buffers barely more. Measured over nine real-shaped
+ * replies, that compounding cost a whole extra bubble on a third of them.
+ *
+ * 30 and not more because the plateau is flat: every value from 30 to 50 produced
+ * the identical split, and the existing clause-break test opens with 34 characters.
+ */
+const FIRST_PIECE_MIN = 30;
+
+/**
  * Below this, a script is spoken as ONE piece. A twelve-second answer split into
  * five and seven is two bubbles where one would do — the wait it saves is shorter
  * than the wait it costs to tap twice.
@@ -100,33 +120,44 @@ const MIN_FILL = 0.5;
 const MIN_PIECE_CHARS = 20;
 
 /**
- * How far past the budget a break may be reached for. Unbounded, this walks to
- * the first sentence end ANYWHERE — and a bulleted list or a git error can run
- * hundreds of characters without one, which is how a "five second" piece came out
- * over a minute long.
+ * How far past the budget a sentence end is worth AIMING for. It bounds which
+ * sentence the piece tries to end on; it never severs one.
  */
 const OVERSHOOT = 2;
+
+/**
+ * The longest run of text treated as one unbreakable sentence — about 24 seconds
+ * of speech.
+ *
+ * Sentences are atomic, but "text with no terminal punctuation" is not the same
+ * thing as "a sentence", and the difference has to be drawn somewhere or there is
+ * no bound at all. A bulleted list, a stack trace or a git error can run hundreds
+ * of characters without a full stop, which is how a "five second" piece once came
+ * out over a minute long.
+ *
+ * 400 is chosen to sit clear above real prose rather than close to it: the longest
+ * genuine sentence in the measured replies is 243 characters, and English rarely
+ * goes past ~300. So this bounds the pathological case without ever being the
+ * thing that decides where an ordinary reply breaks — which is the whole point,
+ * since anything past it is broken at a clause and that is what we are avoiding.
+ */
+const LONGEST_SENTENCE = 400;
 
 /** A sentence end: terminal punctuation, any closing quote or bracket, then space. */
 const SENTENCE_END = /[.!?…]["'’”)\]]*(?:\s|$)/g;
 
 /**
- * Where an EARLY piece may break: the ends above, plus a comma, semicolon, colon
- * or dash.
+ * A comma, semicolon, colon or dash — the least bad place to break a sentence
+ * that has to be broken.
  *
- * Once the budget is large this is off, because a whole sentence is worth waiting
- * for and there are plenty of them to choose from. While it is small, there
- * aren't — and the cost of missing is not a clumsy break, it is a silence.
- * Measured: a second piece wanted ~53 characters and the nearest sentence end was
- * at 69, which overran its window by 25ms. Prose offers a comma far more often
- * than a full stop, so this is the granularity that makes a small budget
- * reachable at all.
+ * **This is not a way to make a piece fit its budget.** It is reached in exactly
+ * one situation: a single sentence longer than the vendor accepts in one request,
+ * where the choice is a clumsy break or no audio at all. Every other piece ends
+ * where a sentence ends. It used to be a general alternative — any small budget
+ * could break at a comma — and the result was a quarter of all clips stopping
+ * mid-thought.
  */
 const CLAUSE_END = /(?:[.!?…,;:]["'’”)\]]*(?:\s|$))|(?:\s[—–-]\s)/g;
-
-/** Budgets at or below this may break at a clause; larger ones want a sentence.
- *  ~9 seconds of speech — by then the ladder has room to reach a full stop. */
-const CLAUSE_UNDER = 150;
 
 /**
  * Split `text` into the pieces it should be spoken in, in order.
@@ -159,8 +190,7 @@ export function splitForSpeech(text: string, maxChars?: number | null): string[]
     // sent. That overlap is real time and it belongs in the window.
     const window = slackMs + makeMs(prevChars);
     const budget = Math.min(i === 0 ? FIRST_PIECE_CHARS : budgetFor(window), cap);
-    // Clause breaks are allowed while the budget is SMALL — see CLAUSE_END.
-    const [piece, remainder] = splitOnce(rest, budget, cap, budget <= CLAUSE_UNDER);
+    const [piece, remainder] = splitOnce(rest, budget, cap, i === 0);
     // Can't make progress (a budget of zero, or a cap that leaves nothing) — stop
     // rather than loop. The caller still gets everything taken so far.
     if (!piece) break;
@@ -223,61 +253,82 @@ function budgetFor(slackMs: number): number {
  * Take one piece off the front of `text`, aiming for `budget` characters and
  * never exceeding `cap`.
  *
- * Preference order: the last break at or before the budget that is worth using →
- * the first break just PAST it → a line break → a word boundary → a hard cut. The
- * hard cut only happens for text with no spaces in it at all, which is not prose.
+ * **A SENTENCE IS ATOMIC.** Every piece ends where a sentence ends, and the ONLY
+ * thing that overrides that is a single sentence longer than the vendor will
+ * accept in one request — a hard API limit, where the alternative is not a
+ * clumsier break but no audio at all.
  *
- * "Worth using" is the floor: a break below `MIN_PIECE_CHARS`, or below half the
- * budget, is skipped in favour of reaching forward — otherwise an opening "Hi."
- * becomes a voice note of its own.
+ * The budget therefore sizes a piece by choosing how many sentences it holds, not
+ * by choosing where to cut. That is the whole reason it is a target and not a
+ * rule: a piece routinely runs past it, because the sentence it is in the middle
+ * of has not finished.
+ *
+ * Two things this cost, both of them deliberate, both measured before being
+ * accepted. The first sound is slower on a reply whose opening sentences are long
+ * — there is no 50-character clip to be had in "Not quite." followed by 243
+ * characters without a full stop, so that reply waits for the whole thing. And a
+ * piece can be much larger than its budget for the same reason. Breaking mid
+ * sentence buys back both, and it is not worth it: a clip that stops at "I'll
+ * start by pulling the" is not a faster answer, it is a broken one.
+ *
+ * "Worth using" is the floor: a sentence end below `MIN_PIECE_CHARS`, or below
+ * half the budget, is passed over so the piece takes the NEXT sentence too —
+ * otherwise an opening "Hi." becomes a voice note of its own. The opener may not
+ * fall below `FIRST_PIECE_MIN`; see the note there for why it is its own number.
  */
-function splitOnce(text: string, budget: number, cap: number, first: boolean): [string, string] {
+function splitOnce(text: string, budget: number, cap: number, isFirst: boolean): [string, string] {
   if (text.length <= budget) return [text.trim(), ''];
 
-  // Bounded on both sides: never past the vendor's limit, and never more than
-  // OVERSHOOT budgets forward, so text with no punctuation for hundreds of
-  // characters can't turn a three-second piece into a minute of audio.
+  // How far forward a sentence end is worth waiting for while still aiming at the
+  // budget. Past this the piece simply takes whatever sentence it is inside of —
+  // `reach` bounds the AIM, never the sentence.
   const reach = Math.min(Math.floor(budget * OVERSHOOT), cap, text.length);
-  const points = breakPoints(text.slice(0, reach), first);
-  // A break far below the budget is skipped in favour of reaching forward. That
-  // matters MOST on the first piece, not least: everything after it is sized from
-  // how long it plays, so an opener that grabs the first comma it sees starves the
-  // whole ladder. Measured, a 27-character opening sentence drove every following
-  // piece to the minimum — a stutter of tiny clips instead of a reply.
-  const floor = Math.max(MIN_PIECE_CHARS, budget * MIN_FILL);
+  // A sentence end far below the budget is passed over in favour of taking another
+  // sentence. That matters MOST on the first piece, not least: everything after it
+  // is sized from how long it plays, so an opener of a few characters starves the
+  // whole ladder. Measured, a 24-character opening sentence cost an extra bubble on
+  // a third of replies.
+  const floor = Math.max(isFirst ? FIRST_PIECE_MIN : 0, MIN_PIECE_CHARS, budget * MIN_FILL);
 
+  // A line break ends a piece too — a list item or a heading carries no terminal
+  // punctuation, and it is a boundary the writer put there on purpose.
+  const stops = (limit: number) => {
+    const head = text.slice(0, limit);
+    return [...new Set([...marks(head, SENTENCE_END), ...marks(head, /\n+/g)])].sort((a, b) => a - b);
+  };
+
+  const near = stops(reach);
   let cut = 0;
-  for (const p of points) if (p <= budget && p >= floor) cut = p;   // last usable one at/under budget
-  if (!cut) cut = points.find((p) => p > budget && p >= floor) ?? 0; // else the first one past it
+  for (const p of near) if (p <= budget && p >= floor) cut = p;    // last usable one at/under budget
+  if (!cut) cut = near.find((p) => p > budget && p >= floor) ?? 0; // else the first one past it
+  // Nothing within reach — so this sentence runs long. Take the whole of it rather
+  // than sever it. This is the line that makes a sentence atomic: the old code fell
+  // to a word boundary here and cut mid-phrase.
+  const limit = Math.min(cap, LONGEST_SENTENCE);
+  if (!cut) cut = stops(limit).find((p) => p >= Math.min(floor, limit)) ?? 0;
 
-  const window = text.slice(0, budget);
-  if (cut <= 0) {
-    const nl = window.lastIndexOf('\n');
-    if (nl > 0) cut = nl + 1;
-  }
-  if (cut <= 0) {
-    const sp = window.lastIndexOf(' ');
-    cut = sp > 0 ? sp + 1 : budget;
+  // Only reachable for a run with no sentence end inside `limit` — one sentence
+  // over the vendor's cap (where the request would be rejected outright and the
+  // audio lost) or a stretch of non-prose. Broken at a clause if there is one,
+  // else a word boundary, else the limit.
+  if (!cut) {
+    const head = text.slice(0, limit);
+    // The floor applies here too. Taking the LAST clause end unconditionally is how
+    // "Done." became a five-character voice note in front of a 500-character one:
+    // the only clause end in range was the full stop at 6, and using it starved the
+    // ladder as surely as any other runt would.
+    const usable = marks(head, CLAUSE_END).filter((p) => p >= Math.min(floor, limit));
+    cut = usable.length ? usable[usable.length - 1] : 0;
+    if (!cut) { const sp = head.lastIndexOf(' '); cut = sp > 0 ? sp + 1 : Math.min(limit, text.length); }
   }
 
   return [text.slice(0, cut).trim(), text.slice(cut).trim()];
 }
 
-/** Every place a piece may end, in order, within `text`. */
-function breakPoints(text: string, allowClause: boolean): number[] {
-  const re = new RegExp((allowClause ? CLAUSE_END : SENTENCE_END).source, 'g');
+/** Every index just past a match of `re` in `text`, in order. */
+function marks(text: string, re: RegExp): number[] {
+  const r = new RegExp(re.source, 'g');
   const out: number[] = [];
-  for (const m of text.matchAll(re)) out.push(m.index + m[0].length);
-  // A line break ends a piece too — a list or a heading has no terminal
-  // punctuation, and without this those break only on a word boundary.
-  for (const m of text.matchAll(/\n+/g)) out.push(m.index + m[0].length);
-  return [...new Set(out)].sort((a, b) => a - b);
-}
-
-/** Index just past the first sentence end at or after `from`, or 0 if there is none. */
-function nextSentenceEnd(text: string, from: number): number {
-  const re = new RegExp(SENTENCE_END.source, 'g');
-  re.lastIndex = from;
-  const m = re.exec(text);
-  return m ? m.index + m[0].length : 0;
+  for (const m of text.matchAll(r)) out.push(m.index + m[0].length);
+  return out;
 }

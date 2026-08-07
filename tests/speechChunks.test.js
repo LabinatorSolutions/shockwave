@@ -62,18 +62,38 @@ test('breaks land at the end of a sentence, never mid-word', () => {
   }
 });
 
-test('the first piece may break at a clause, because that wait is the only uncovered one', () => {
-  // Synthesis costs about a second per 46 characters, so reaching for the next
-  // sentence end is paid in silence before anything is heard at all. Here the
-  // opening clause ends at a colon and the next sentence end is far past it.
+test('a sentence is never broken at a comma, however badly the budget wants it', () => {
+  // THE promise. A colon sits at 34 characters, right where a five-second opener
+  // wants to end, and the sentence it belongs to runs on for another 200. The old
+  // splitter took the colon. Waiting is the cost of not being cut off mid-thought.
   const opening = 'Here is the plan for this evening:';
-  const pieces = splitForSpeech(`${opening} ${sentences(30)}`, null);
-  assert.ok(pieces[0].endsWith(':'), `expected a clause break, got ${JSON.stringify(pieces[0])}`);
-  // And the floor still applies to it: a clause ending after a handful of
-  // characters is skipped, because an opener that grabs the first comma it sees
-  // starves every piece sized from how long it plays.
-  const tiny = splitForSpeech(`So: ${sentences(30)}`, null);
-  assert.ok(!tiny[0].endsWith(':'), `took a runt clause break: ${JSON.stringify(tiny[0])}`);
+  for (const script of [`${opening} ${sentences(30)}`, `${opening} ${sentences(30, 200)}`]) {
+    for (const piece of splitForSpeech(script, null)) {
+      assert.match(piece, /[.!?]$/, `broke mid-sentence: ${JSON.stringify(piece.slice(-50))}`);
+    }
+  }
+});
+
+test('a run with no sentence end in it is still bounded', () => {
+  // Sentences are atomic, but a stack trace or a bulleted list is not a sentence.
+  // Without a ceiling this is what made a "five second" piece a minute long.
+  const blob = `${'word '.repeat(400).trim()}. ${sentences(10)}`;
+  const pieces = splitForSpeech(blob, null);
+  assert.ok(pieces[0].length <= 400, `unbounded piece: ${pieces[0].length} chars`);
+  assert.equal(pieces.join(' ').replace(/\s+/g, ' '), blob.replace(/\s+/g, ' '));
+});
+
+test('the opener is never a runt, whatever break is on offer', () => {
+  // Everything after the first piece is sized from how long it PLAYS, so an
+  // opener that grabs the first comma it sees starves the whole ladder — measured,
+  // a 24-character opening sentence cost an extra bubble on a third of replies.
+  // The third has no sentence end and no clause end anywhere near the budget, so
+  // it lands on the word-boundary tier — which the floor governs too.
+  const rambling = `Done. ${'and then it kept going on '.repeat(20)}finally.`;
+  for (const script of [`So: ${sentences(30)}`, `Yes. ${sentences(30)}`, rambling]) {
+    const first = splitForSpeech(script, null)[0];
+    assert.ok(first.length >= 30, `runt opener: ${JSON.stringify(first)}`);
+  }
 });
 
 test('no piece is shorter than about two seconds of speech', () => {
@@ -122,14 +142,13 @@ test('the ladder grows — a long answer is a handful of pieces, not a column of
   assert.ok(pieces[5].length > pieces[1].length * 4, 'the ladder should climb quickly');
 });
 
-test('a sentence longer than the budget overshoots — but only so far', () => {
-  // Running long beats cutting a sentence in two. Running UNBOUNDED does not:
-  // text with no punctuation for hundreds of characters is exactly how a
-  // "five second" piece once came out over a minute long, so the reach is capped
-  // at twice the budget and falls back to a word boundary past that.
-  const long = `${'word '.repeat(200).trim()}. ${sentences(10)}`;
+test('a long sentence is kept whole, well past the budget', () => {
+  // The budget picks how many sentences a piece holds, not where to cut one. A
+  // 250-character sentence is five times the opening budget and still ships whole.
+  const long = `${'word '.repeat(50).trim()}. ${sentences(10)}`;
   const pieces = splitForSpeech(long, null);
-  assert.ok(pieces[0].length <= seconds(3) * 2 + 1, `overshot too far: ${pieces[0].length} chars`);
+  assert.ok(pieces[0].endsWith('.'), `severed the sentence: ${JSON.stringify(pieces[0].slice(-50))}`);
+  assert.ok(pieces[0].length > 240, `expected the whole sentence, got ${pieces[0].length} chars`);
   assert.equal(pieces.join(' ').replace(/\s+/g, ' '), long.replace(/\s+/g, ' '));
 });
 
