@@ -1656,6 +1656,28 @@ export default function App() {
     });
   }, [companionVersion, openSettings]);
 
+  // ...and when the server is the stale side, the dialog that fixes it opens
+  // itself. The toast alone is bottom-right chrome you can miss and dismiss,
+  // while every write is being refused — this is the one condition worth taking
+  // focus for, because the fix is a single button and nothing saves until it's
+  // pressed. Three guards, each answering the reason it was removed:
+  //   - `bootDone` — the version arrives on the first feed open, which beats the
+  //     first paint; the old one opened over a launching app.
+  //   - keyed by version in a ref, so the repeat pushes a reconnect produces
+  //     can't re-open what the user just cancelled.
+  //   - `companion-older` only — `companion-newer` means THIS app is stale and
+  //     this dialog can't fix it, so that direction stays with its toast.
+  // The toast and the sidebar icon stay either way: the dialog is dismissible,
+  // so it announces, it doesn't hold the state.
+  const autoOpenedUpdateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!bootDone || companionVersion?.status !== 'companion-older') return;
+    const key = `${companionVersion.companion}→${companionVersion.desktop}`;
+    if (autoOpenedUpdateRef.current === key) return;
+    autoOpenedUpdateRef.current = key;
+    setCompanionUpdate({ desktop: companionVersion.desktop, companion: companionVersion.companion });
+  }, [bootDone, companionVersion]);
+
   // ---- remember which files are open, per workspace ----
   //
   // Gated on `tabsReadyForWsRef`, which loadWorkspace clears on entry and sets

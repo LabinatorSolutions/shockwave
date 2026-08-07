@@ -11,8 +11,9 @@ const INSTALL_CMD = 'curl -fsSL https://raw.githubusercontent.com/stephengpope/s
 // reconnect after the companion's restart and pushes `api:companionUpdated`
 // (App.tsx toasts it). Nothing here waits, polls, or blocks; an earlier
 // version owned a polling loop behind a non-dismissable overlay, and one hung
-// health check locked the entire app. Rendered by App.tsx (boot check) and
-// CompanionSection (manual).
+// health check locked the entire app. Rendered by App.tsx — which opens it from
+// the version toast's button AND automatically once the companion classifies as
+// older — and by CompanionSection (manual).
 export default function CompanionUpdateDialog({
   open,
   onClose,
