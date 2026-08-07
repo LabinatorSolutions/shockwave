@@ -1,13 +1,3 @@
-# The compose PROJECT name — what groups these six containers in `docker compose
-# ls` and in Docker Desktop, and the prefix on every container and volume they
-# create. Unset, it derives from the project directory's basename, which is the
-# install dir (`shockwave-companion`) on a real box but `api` in this repo — so
-# a dev machine grouped the whole stack under the name of ONE service inside it,
-# and shared that generic name with any other project in a directory called api.
-# Pinned here rather than left to the directory: identical to what a real install
-# already computes, so it changes nothing there.
-name: shockwave-companion
-
 services:
   postgres:
     image: postgres:16-alpine
