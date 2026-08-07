@@ -156,37 +156,11 @@ A file's **basename** is its name with no folder path and no \`.md\` extension �
 - \`[[Some File|Display]]\`    → same target, rendered as "Display".
 - \`[[projects/Some File]]\`   → path-qualified: the \`Some File\` under \`projects/\`.
 
-**Two files may share a basename if they live in different folders** (\`clients/acme/Meeting.md\` and \`clients/globex/Meeting.md\` coexist). Only a same-folder collision is impossible, and the filesystem enforces that — there is no workspace-wide uniqueness rule, so a duplicate basename in another folder is fine to create.
-
-When a basename is duplicated, a bare \`[[Meeting]]\` resolves to the copy in the **linking file's own folder**, otherwise the one with the **shortest path** — which may not be the one you meant. Path-qualify to be sure: \`[[acme/Meeting]]\`. Use only as much leading path as you need, never a leading slash; if that path goes stale because the file moved, resolution falls back to the bare basename so the link still works.
+Two files can share a basename in different folders — creating one is fine. A bare \`[[Meeting]]\` then resolves to the copy in the linking file's own folder, else the shortest path, which may not be the one you meant. Path-qualify to be sure: \`[[acme/Meeting]]\`.
 
 To rename a file, just \`mv\` it. Shockwave detects the rename by inode and rewrites the \`[[…]]\` references that resolve to it in every other file, path-qualified ones included. **Don't hand-edit references on rename.**
 
-## What attaches to a link
-
-Content following a wiki-link is associated with it — and shows up as a preview under the backlink on the target's page — when either is true:
-
-- it is **indented deeper** than the link's line, or
-- it is a **list item at the same indent**, with no blank line in between.
-
-Associated, indented:
-
-    [[Topic A]]
-        Note 1.
-
-Associated, a list directly under it (bullets and numbered items both count):
-
-    [[Topic A]]
-    - Note 2.
-
-NOT associated — a plain unindented line, and a list separated by a blank line:
-
-    [[Topic A]]
-    Note 3.
-
-    [[Topic B]]
-
-    - Note 4.
+Content indented under a link, or a list directly beneath it with no blank line between, is associated with that link and shows as a preview under the backlink.
 
 ## Finding what links to a file
 
@@ -196,7 +170,7 @@ To find files linking to \`<Name>\`, \`grep\` for \`\\[\\[([^]]*/)?<Name>\` rath
 
 ## Adding links as you write
 
-When you write or update content, add wiki-links wherever there's an obvious connection. You may reference a file that doesn't exist yet — \`[[New Topic]]\` is valid as an unresolved link in the editor. If the conversation calls for that file to actually exist, **create it** (only avoid a name already used in the same folder), give it a short opening paragraph, and link it.`;
+Add wiki-links wherever there's an obvious connection. \`[[New Topic]]\` is valid before the file exists; create it if the conversation calls for it.`;
 
 // `DUPLICATE_BASENAMES` and `ASSOCIATION` were both folded into `WIKILINKS`.
 // Three sections, one subject: how a wiki-link behaves. Duplicates stated the
@@ -282,7 +256,7 @@ When you write or update content, add wiki-links wherever there's an obvious con
 // placeholders so copy it verbatim. A file list plus "check these" says all of
 // it: the agent can read a template and see for itself what is in it, and
 // "copy it" is what using a template means.
-const TEMPLATES = (t: { folder: string; files: string[] }) => `# Templates
+const TEMPLATES = (t: { folder: string; files: string[] }) => `# File Templates
 
 In \`${t.folder}/\`. Check them when creating a new file.
 

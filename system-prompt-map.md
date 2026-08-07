@@ -1,5 +1,5 @@
 SYSTEM PROMPT — WORKING LIST
-2026-08-06.  Prompt is now 117 lines / 7,611 chars.  Was 246 / 19,088.
+2026-08-06.  Prompt is now 91 lines / 6,455 chars.  Was 246 / 19,088.
 
 
 =========================================================================
@@ -47,6 +47,16 @@ TOOL DESCRIPTIONS
   [x] manage_skill      copied from hermes
   [x] daily_note        rewritten to stand alone
 
+REVIEWED, KEPT
+  [x] # Markdown supported        940   what the app can render
+  [x] # Boundaries                605   where the agent may write and delete
+  [x] # Unattended run            439   tells a scheduled run nobody is here
+  [x] # Operating system          207   platform, gated
+  [x] # File Templates             94   trimmed, renamed
+  [x] # Secrets                    77   the token rule
+  [x] # Sending the user a file   260   the MEDIA:/path syntax
+  [x] # Wiki-links            3,094 -> 1,938  trimmed
+
 CODE
   [x] workspaceFiles/     one module per seeded file, DEFAULT_<X> naming
   [x] cron-parser         removed, imported nowhere
@@ -59,43 +69,15 @@ GATES: 595/595 tests, both typechecks clean, lint 0 errors.
 TODO — SECTIONS NEVER REVIEWED
 =========================================================================
 
-Every section reviewed so far had something wrong with it.
-All paths are agent-core/ unless noted.
+One left. All paths are agent-core/ unless noted.
 
-SOMETHING SPECIFIC TO CHECK
-
-  [ ] # Wiki-links            3,094   defaults/helper.ts:150
-        now holds all four link sections — check nothing was lost or is
-        said twice
-
-  [ ] # Skills (mandatory)    1,087   defaults/helper.ts:374
-        hermes' words, lightly adapted. Read for anything that only fits
-        hermes
-
-  [ ] # Memory                  866   defaults/helper.ts:338
-        the what-to-save rules moved to memoryTool.ts. Does this repeat them?
-
-  [ ] # Saving what you learn   721   defaults/helper.ts:402
-        same as Skills — hermes' words, not yet ours
-
-JUST NEEDS READING — no known problem
-
-  [ ] # Markdown supported      940   defaults/helper.ts:288
-        what markdown the app can render
-  [ ] # Boundaries              605   defaults/helper.ts:27
-        where the agent may write and delete
   [ ] SOUL (DEFAULT_SOUL)       508   defaults/workspaceFiles/soul.ts:26
         identity and tone. Only used when a workspace has no SOUL.md
-  [ ] # Unattended run          439   defaults/helper.ts:37
-        tells a scheduled run nobody is here
-  [ ] # Templates                ~94   defaults/helper.ts:276
-        names this workspace's templates
-  [ ] # Sending the user a file 260   defaults/companion.ts:26
-        how to attach a file on Telegram
-  [ ] # Operating system        207   defaults/helper.ts:140
-        just written — read it once in place
-  [ ] # Secrets                  77   defaults/helper.ts:121
-        just written — read it once in place
+
+PARKED — hermes' text, taken as-is for now
+  # Skills (mandatory)      1,087   defaults/helper.ts:351
+  # Saving what you learn     721   defaults/helper.ts:379
+  # Memory                    866   defaults/helper.ts:315
 
 WAITING ON SOMETHING ELSE
   The backlinks guidance inside # Wiki-links deletes entirely once a real
@@ -157,12 +139,12 @@ THE PROMPT, IN ORDER
      4  # Operating system helper.ts:140                  207   always
      5  # Secrets          helper.ts:121                    77   always
      6  # Sending a file   companion.ts:26                 260   telegram/cron
-     7  # Wiki-links       helper.ts:150                 3,094   always
-     8  # Templates        helper.ts:276                   ~94   if configured
-     9  # Markdown         helper.ts:288                   940   always
-    10  # Memory           helper.ts:338                   866   always
-    11  # Skills (mand.)   helper.ts:374                 1,087   always
-    12  # Saving skills    helper.ts:402                   721   always
+     7  # Wiki-links       helper.ts:150                 1,938   always
+     8  # File Templates   helper.ts:259                   ~94   if configured
+     9  # Markdown         helper.ts:265                   940   always
+    10  # Memory           helper.ts:315                   866   always
+    11  # Skills (mand.)   helper.ts:351                 1,087   always
+    12  # Saving skills    helper.ts:379                   721   always
     13  memory blocks      memoryStore.ts:131         up to 3,575
 
   pi appends, rebuilt every boot:
@@ -172,15 +154,15 @@ THE PROMPT, IN ORDER
     17  Current working directory
 
 TOTALS
-  desktop            125 lines,  8,121 chars
-  cron / telegram    133 lines,  8,824 chars
+  desktop             99 lines,  6,965 chars
+  cron / telegram    107 lines,  7,668 chars
   + memory blocks    up to +3,575
 
 WHAT VARIES BY MACHINE
   # Unattended run     cron, review, memory only
   # Sending a file     telegram, cron only
   # Operating system   wording differs on Windows vs macOS/Linux
-  # Templates          only when the workspace has some
+  # File Templates     only when the workspace has some
   memory blocks        only when the files are not empty
 
   Everything else is identical on every run. Desktop has nothing of its own.

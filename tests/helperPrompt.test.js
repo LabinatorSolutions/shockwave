@@ -164,10 +164,19 @@ test('every NOT-associated example in the prompt really does not', () => {
 });
 
 test('the section no longer states the rule it used to get wrong', () => {
+  // The rule is now one sentence with no worked examples — and that is a
+  // CONSEQUENCE of fixing it. The four examples existed because the old rule
+  // was counterintuitive (you had to indent deliberately); now a list directly
+  // under a link attaches by itself, which is what anyone would write anyway.
+  // A rule describing a default that already does the right thing does not need
+  // to be taught, only stated.
+  //
+  // The three tests above still run the real parser, so the sentence cannot
+  // drift from the behaviour just because the examples are gone.
   const h = helperFor('desktop');
   assert.ok(!h.includes('still column 0'), 'the retired bullets-never-count rule is back');
-  assert.ok(h.includes('list item at the same indent'));
-  assert.ok(h.includes('no blank line in between'));
+  assert.ok(h.includes('Content indented under a link, or a list directly beneath it'));
+  assert.ok(h.includes('no blank line between'));
 });
 
 test('a review run gets the unattended override — nobody is there to ask', () => {
