@@ -2325,8 +2325,12 @@ export default function App() {
             read, not the chat column. The Toaster's own class swaps sonner's
             fixed positioning for absolute, so the wrapper above is the
             containing block and this is a plain gutter, not a lift over the
-            status bar. */}
-        <Toaster position="bottom-right" offset={{ bottom: 16, right: 14 }} />
+            status bar.
+
+            The right gutter is 26 because this wrapper CONTAINS the scroller,
+            so a toast's right edge lands on the scrollbar rather than beside
+            it. 14 (the visual gap we want) + ~12 (the scrollbar). */}
+        <Toaster position="bottom-right" offset={{ bottom: 16, right: 26 }} />
         </div>
 
         {workspacePath && !graphMode && activeTab && (
