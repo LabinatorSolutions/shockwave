@@ -17,14 +17,26 @@ test('a changed leaf is sent alone, siblings are not', () => {
 });
 
 test('an unchanged sub-object produces no write at all', () => {
-  const prev = { appearance: { themeMode: 'light', hideLineNumbers: true, treePanel: { content: 'recent', count: 7 } } };
+  const prev = { appearance: { themeMode: 'light', hideLineNumbers: true, treePanel: { recent: { show: true, count: 7 } } } };
   assert.deepEqual(buildPatch({ appearance: { ...prev.appearance } }, prev), {});
 });
 
 test('a nested leaf is addressed by its full dotted path', () => {
-  const prev = { appearance: { themeMode: 'light', treePanel: { content: 'recent', count: 7 } } };
-  const next = { appearance: { ...prev.appearance, treePanel: { content: 'recent', count: 12 } } };
-  assert.deepEqual(buildPatch(next, prev), { 'appearance.treePanel.count': 12 });
+  // Two levels deep, which is what the per-list tree panel settings are: each
+  // list carries its own cap, so raising one must not restate the other.
+  const prev = {
+    appearance: {
+      themeMode: 'light',
+      treePanel: { recent: { show: true, count: 7 }, daily: { show: true, count: 3 } },
+    },
+  };
+  const next = {
+    appearance: {
+      ...prev.appearance,
+      treePanel: { ...prev.appearance.treePanel, recent: { show: true, count: 12 } },
+    },
+  };
+  assert.deepEqual(buildPatch(next, prev), { 'appearance.treePanel.recent.count': 12 });
 });
 
 test('a credential is written only when it actually changes', () => {

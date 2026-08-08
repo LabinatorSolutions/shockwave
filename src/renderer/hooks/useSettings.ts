@@ -2,13 +2,17 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSyncRef } from './useSyncRef';
 import { buildPatch, dropEmptyCredentials } from '../settingsDiff.js';
 import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS } from '../constants';
-import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
+import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret, TreePanelList } from '../../shared/settings';
+import { clampPanelCount } from '../../shared/settings';
 import { normalizeVoiceReply } from '../../../agent-core/voiceReply.js';
 
 // dailyNote + templates moved to the per-workspace WorkspaceData.
 type DailyNote = WorkspaceData['dailyNote'];
 type TreePanel = Settings['appearance']['treePanel'];
 type Templates = WorkspaceData['templates'];
+// Both lists off — no panel. The pre-hydrate value and the fallback for a
+// workspace nobody has configured, in one place so the two agree.
+const TREE_PANEL_OFF: TreePanel = { recent: { show: false, count: 10 }, daily: { show: false, count: 10 } };
 type Transcription = Settings['transcription'];
 type Speech = NonNullable<Settings['speech']>;
 type SyncSettings = Settings['sync'];
@@ -21,7 +25,7 @@ type TelegramSettings = NonNullable<Settings['telegram']>;
 const DEFAULT_CANONICAL: Settings = {
   workspaces: [],
   activeWorkspaceId: null,
-  appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
+  appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, treePanel: TREE_PANEL_OFF },
   // thinkingLevel is OMITTED, not defaulted: 'medium' here was a value no DB row
   // ever held, and the agent boots unset as 'off' — so the page showed a level
   // that never ran. Unset stays unset; the field renders its placeholder.
@@ -69,7 +73,7 @@ interface UseSettingsOpts {
 export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSettingsOpts) {
   const [themeMode, setThemeMode] = useState<ThemeMode>(THEME_MODES.SYSTEM);
   const [hideLineNumbers, setHideLineNumbers] = useState(false);
-  const [treePanel, setTreePanel] = useState<TreePanel>({ content: 'off', count: 10 });
+  const [treePanel, setTreePanel] = useState<TreePanel>(TREE_PANEL_OFF);
   // Live + persisted bookmark-filter mode (single source of truth; useBookmarks
   // no longer owns this so the view can survive restarts / workspace switches).
   const [bookmarkFilterActive, setBookmarkFilterActiveState] = useState(false);
@@ -444,13 +448,22 @@ export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSett
     const tg: TelegramSettings = disk.telegram ?? {};
     const tm: ThemeMode = disk.appearance?.themeMode || THEME_MODES.SYSTEM;
     const hln = !!disk.appearance?.hideLineNumbers;
-    // Migrate the retired `dailyNotesInBookmarks` checkbox: on ⇒ daily notes panel.
+    // The two lists, each with its own on/off + cap, migrating forward through
+    // both retired shapes. Superseded rows stay in the DB, so `content`/`count`
+    // are still readable here and an older build on another machine keeps
+    // reading them — this only ever falls BACK to them, never writes them.
     const rawTp = disk.appearance?.treePanel;
+    const oldContent: string | undefined =
+      ['off', 'recent', 'daily', 'both'].includes(rawTp?.content) ? rawTp.content
+        : (disk.appearance?.dailyNotesInBookmarks ? 'daily' : undefined);
+    const oldCount = clampPanelCount(rawTp?.count);
+    const list = (raw: any, wasOn: boolean): TreePanelList => ({
+      show: typeof raw?.show === 'boolean' ? raw.show : wasOn,
+      count: clampPanelCount(raw?.count ?? oldCount),
+    });
     const tp: TreePanel = {
-      content: ['off', 'recent', 'daily', 'both'].includes(rawTp?.content)
-        ? rawTp.content
-        : (disk.appearance?.dailyNotesInBookmarks ? 'daily' : 'off'),
-      count: typeof rawTp?.count === 'number' && rawTp.count >= 1 ? Math.min(50, Math.round(rawTp.count)) : 10,
+      recent: list(rawTp?.recent, oldContent === 'recent' || oldContent === 'both'),
+      daily: list(rawTp?.daily, oldContent === 'daily' || oldContent === 'both'),
     };
     const bfa = !!disk.bookmarkFilterActive;
     const shf = !!disk.showHiddenFiles;

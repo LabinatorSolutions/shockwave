@@ -22,10 +22,22 @@ export type { ChatNotice };
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 // What the quick-access panel pinned below the file tree shows (Explorer and
-// Bookmarks views alike). 'both' lists Recent Files and Daily Notes as two
-// sections, with daily notes excluded from Recent Files. Lists are always
-// sorted last-modified desc and capped to `count` items each.
-export type TreePanelContent = 'off' | 'recent' | 'daily' | 'both';
+// Bookmarks views alike). The two lists are INDEPENDENT — each has its own
+// on/off and its own cap, because 3 daily notes next to 10 recent files is a
+// reasonable thing to want and the single `content` dropdown this replaced
+// couldn't express it. Both off ⇒ no panel (the retired 'off' value).
+// Lists are always sorted last-modified desc. When BOTH are shown, daily notes
+// are left out of Recent Files — they have their own section.
+export interface TreePanelList { show: boolean; count: number }
+
+/** The one 1–50 whole-number rule for a list's cap, shared by the hydrate
+ *  fallback and the settings input so a stored value and a typed one can't
+ *  disagree about what's legal. Anything unusable reads as the default 10. */
+export function clampPanelCount(n: unknown, fallback = 10): number {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v) || v < 1) return fallback;
+  return Math.min(50, v);
+}
 export type ViewMode = 'live' | 'raw';
 export type TreeSortOrder =
   | 'name-asc'
@@ -236,9 +248,16 @@ export interface WorkspaceData {
 export interface Settings {
   workspaces: WorkspaceEntry[];
   activeWorkspaceId: string | null;
-  // `treePanel` replaced the boolean `dailyNotesInBookmarks` (old true migrates
-  // to content 'daily' in useSettings.hydrateSettings).
-  appearance: { themeMode: ThemeMode; hideLineNumbers: boolean; treePanel: { content: TreePanelContent; count: number } };
+  // `treePanel` has been through two shapes; both migrate forward in
+  // useSettings.hydrateSettings, and the superseded rows are left in the DB
+  // (nothing deletes a settings row for a key that stops being written):
+  //   1. boolean `dailyNotesInBookmarks` — true ⇒ daily list on
+  //   2. `{ content: 'off'|'recent'|'daily'|'both', count }` — one cap for both
+  appearance: {
+    themeMode: ThemeMode;
+    hideLineNumbers: boolean;
+    treePanel: { recent: TreePanelList; daily: TreePanelList };
+  };
   // NOTE: `dailyNote` and `templates` are no longer global — they're per-
   // workspace, stored in `<workspace>/.shockwave/workspace.json` (see
   // `WorkspaceData` below), loaded on workspace switch.

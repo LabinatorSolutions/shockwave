@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { THEME_MODES } from '../constants.js';
+import { clampPanelCount } from '../../shared/settings.js';
 import { useCommitField } from './useCommitField';
 import { SettingsSection, SettingsGroup, SettingsDivider, NUMBER_FIELD } from './SectionUI';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
@@ -21,12 +22,43 @@ const OPTIONS = [
   { value: THEME_MODES.DARK, label: 'Dark' },
 ];
 
-const TREE_PANEL_OPTIONS = [
-  { value: 'off', label: 'Off' },
-  { value: 'recent', label: 'Recent files' },
-  { value: 'daily', label: 'Daily notes' },
-  { value: 'both', label: 'Files + Notes' },
-];
+// One row of the file-tree panel control: a checkbox that turns the list on and
+// the cap that applies to it. The two lists are configured independently, so
+// this is called twice rather than being spelled out twice.
+function TreePanelList({ id, label, list, onChange }) {
+  // Commits on blur (see useCommitField). Typed digit-by-digit, so per-keystroke
+  // writes also meant "1" and "10" both being saved on the way to "100" — and a
+  // clamp firing against each partial value.
+  const countField = useCommitField(String(list?.count ?? 10), (next) => {
+    onChange({ ...list, count: clampPanelCount(next, list?.count ?? 10) });
+  });
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <Label className="gap-2.5 text-sm font-normal">
+        <Checkbox
+          checked={!!list?.show}
+          onCheckedChange={(v) => onChange({ ...list, show: v === true })}
+        />
+        {label}
+      </Label>
+      {/* The cap is meaningless for a list that isn't shown, but it keeps its
+          slot rather than unmounting — a row that changes height on every
+          click makes the group jump under the pointer. */}
+      <Input
+        id={id}
+        className={NUMBER_FIELD}
+        type="number"
+        min={1}
+        max={50}
+        aria-label={`${label} to show`}
+        disabled={!list?.show}
+        value={countField.value}
+        onChange={(e) => countField.onChange(e.target.value)}
+        onBlur={countField.onBlur}
+      />
+    </div>
+  );
+}
 
 export default function GeneralSection({
   themeMode,
@@ -38,14 +70,6 @@ export default function GeneralSection({
   timezone,
   onTimezoneChange,
 }) {
-  // Commits on blur (see useCommitField). Typed digit-by-digit, so per-keystroke
-  // writes also meant "1" and "10" both being saved on the way to "100" — and a
-  // clamp firing against each partial value.
-  const countField = useCommitField(String(treePanel?.count ?? 10), (next) => {
-    const n = Math.round(Number(next));
-    if (!Number.isFinite(n) || n < 1) return;
-    onTreePanelChange?.({ ...treePanel, count: Math.min(50, n) });
-  });
 
   // Every IANA zone Chromium knows, so the value is always one the server can
   // actually resolve — a typo'd zone name would silently fall back to UTC on the
@@ -90,41 +114,25 @@ export default function GeneralSection({
 
       <SettingsGroup title="File tree">
         <Field>
-          <FieldLabel htmlFor="tree-panel-content">Show below the file tree</FieldLabel>
-          <Select
-            value={treePanel?.content ?? 'off'}
-            onValueChange={(v) => onTreePanelChange?.({ ...treePanel, content: v })}
-          >
-            <SelectTrigger id="tree-panel-content" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TREE_PANEL_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <FieldLabel>Show below the file tree</FieldLabel>
+          <div className="flex flex-col gap-2">
+            <TreePanelList
+              id="tree-panel-recent-count"
+              label="Recent files"
+              list={treePanel?.recent}
+              onChange={(next) => onTreePanelChange?.({ ...treePanel, recent: next })}
+            />
+            <TreePanelList
+              id="tree-panel-daily-count"
+              label="Daily notes"
+              list={treePanel?.daily}
+              onChange={(next) => onTreePanelChange?.({ ...treePanel, daily: next })}
+            />
+          </div>
           <FieldDescription>
-            A quick-access list under the file tree in the left sidebar, sorted by last modified. When showing both, daily notes are left out of recent files.
+            Quick-access lists under the file tree in the left sidebar, sorted by last modified. Each has its own limit. When both are shown, daily notes are left out of recent files.
           </FieldDescription>
         </Field>
-        {treePanel?.content !== 'off' && (
-          <Field>
-            <FieldLabel htmlFor="tree-panel-count">Items per list</FieldLabel>
-            <div>
-              <Input
-                id="tree-panel-count"
-                className={NUMBER_FIELD}
-                type="number"
-                min={1}
-                max={50}
-                value={countField.value}
-                onChange={(e) => countField.onChange(e.target.value)}
-                onBlur={countField.onBlur}
-              />
-            </div>
-          </Field>
-        )}
       </SettingsGroup>
 
       <SettingsDivider />

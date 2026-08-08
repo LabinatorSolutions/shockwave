@@ -7,6 +7,7 @@ import MediaView, { mediaKind, isOpenable, isDrawing, isMarkdown, isTextFile } f
 import DrawingView from './DrawingView';
 import type { DrawingViewHandle } from './DrawingView';
 import type { CompanionState } from '../shared/api';
+import { clampPanelCount } from '../shared/settings.js';
 import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from './renameOps.js';
 import { decideLoad } from './loadDecision.js';
 import TabStrip from './TabStrip.jsx';
@@ -502,17 +503,17 @@ export default function App() {
   }, [tree, treeSortOrder, bookmarkFilterActive, bookmarks, conflictFilterActive, conflictPaths, workspacePath]);
 
   // Sections for the quick-access panel pinned below the file tree (shown in
-  // both Explorer and Bookmarks views, per Appearance → treePanel). A daily
+  // both Explorer and Bookmarks views, per General → treePanel). A daily
   // note is any `.md` under the configured daily-note folder whose path
   // (relative to that folder, minus `.md`) strict-parses against the daily-note
-  // format. In 'both' mode daily notes are excluded from Recent Files — they
-  // have their own section. Always sorted last-modified desc (independent of
-  // the tree sort order) and capped to `count` items per section.
+  // format. When BOTH lists are on, daily notes are excluded from Recent Files
+  // — they have their own section. Always sorted last-modified desc
+  // (independent of the tree sort order) and capped per list to its own count.
   const treePanelData = useMemo(() => {
     const none = { recent: [] as any[], daily: [] as any[] };
-    if (!workspacePath || treePanel.content === 'off') return none;
-    const wantDaily = treePanel.content === 'daily' || treePanel.content === 'both';
-    const wantRecent = treePanel.content === 'recent' || treePanel.content === 'both';
+    const wantDaily = !!treePanel.daily?.show;
+    const wantRecent = !!treePanel.recent?.show;
+    if (!workspacePath || (!wantDaily && !wantRecent)) return none;
     const cleanFolder = (dailyNote.folder ?? '').replace(/^\/+|\/+$/g, '');
     const prefix = cleanFolder ? `${workspacePath}/${cleanFolder}/` : `${workspacePath}/`;
     const isDailyNote = (n) => {
@@ -530,10 +531,10 @@ export default function App() {
       if (n.id.includes('/.git/')) continue;
       const isDaily = isDailyNote(n);
       if (isDaily && wantDaily) daily.push(n);
-      if (wantRecent && !(isDaily && treePanel.content === 'both')) recent.push(n);
+      if (wantRecent && !(isDaily && wantDaily)) recent.push(n);
     }
-    const cap = (arr) => sortTreeNodes(arr, TREE_SORT_ORDERS.MODIFIED_DESC).slice(0, treePanel.count);
-    return { recent: cap(recent), daily: cap(daily) };
+    const cap = (arr, n) => sortTreeNodes(arr, TREE_SORT_ORDERS.MODIFIED_DESC).slice(0, clampPanelCount(n));
+    return { recent: cap(recent, treePanel.recent?.count), daily: cap(daily, treePanel.daily?.count) };
   }, [treePanel, workspacePath, tree, dailyNote.format, dailyNote.folder]);
   const treePanelShown = !conflictFilterActive
     && (treePanelData.recent.length > 0 || treePanelData.daily.length > 0);
@@ -2225,7 +2226,7 @@ export default function App() {
                     : 'Empty workspace'}
             </div>
           )}
-          {/* Quick-access panel (Appearance → treePanel), in-flow directly
+          {/* Quick-access panel (General → treePanel), in-flow directly
               under the tree so it scrolls with it. */}
           {treePanelShown && (
             <>
