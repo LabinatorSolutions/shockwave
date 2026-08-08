@@ -112,6 +112,13 @@ RUN chown -R node:node /app
 # root-owned otherwise, and the server runs as `node`, so every run would fail
 # with EACCES trying to create its working dir.
 RUN mkdir -p /data/agent && chown -R node:node /data
+# Traefik's dynamic config dir, for the same reason and by the same mechanism:
+# the api writes the certificate + tls.yml + router.yml here and Traefik reads
+# them, so a fresh root-owned volume would fail every write with EACCES — and
+# settleTls treats that as fatal, so the server would not start. A one-shot
+# sidecar used to chown this at runtime; owning it in the image removes the
+# sidecar and the ordering it implied.
+RUN mkdir -p /etc/traefik/dynamic && chown -R node:node /etc/traefik
 USER node
 # Fail the BUILD, not the first Telegram message, if the agent's CLIs aren't
 # usable. Run AS `node` — the user the agent's shell actually runs as — so a

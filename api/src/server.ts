@@ -24,7 +24,7 @@ import { initSweeper } from './sweeper.js';
 import { initCheckoutPool } from './checkoutPool.js';
 import { initBackgroundSweeper } from './backgroundSweeper.js';
 import { handleWebhook, connect as tgConnect, disconnect as tgDisconnect, status as tgStatus, syncCommands as tgSyncCommands, syncWebhookConfig as tgSyncWebhookConfig } from './telegram/webhook.js';
-import { configuredHost, ensureSelfSignedCert, readCertPem, removeSelfSignedCert } from './telegram/selfSigned.js';
+import { configuredHost, ensureSelfSignedCert, readCertPem, removeSelfSignedCert, writeRouter } from './tls.js';
 import { sendTelegramMessage } from './telegram/sendTool.js';
 
 const log = logger('http');
@@ -393,13 +393,16 @@ function normalizeTlsEnv(): void {
 }
 
 async function settleTls(): Promise<void> {
-  if (process.env.COMPANION_DOMAIN) {
+  const domain = process.env.COMPANION_DOMAIN || '';
+  if (domain) {
     await removeSelfSignedCert();
-    log.info('COMPANION_DOMAIN set — using Let\'s Encrypt; removed any self-signed leftovers');
+    await writeRouter(domain);
+    log.info({ domain }, 'COMPANION_DOMAIN set — using Let\'s Encrypt; removed any self-signed leftovers');
     return;
   }
   const host = configuredHost();
   await ensureSelfSignedCert(host);
+  await writeRouter('');
   log.info({ host }, 'self-signed certificate ready');
 }
 

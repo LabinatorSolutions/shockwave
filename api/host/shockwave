@@ -50,7 +50,7 @@ env_get() { grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
 # ADDR = the address the desktop connects to; DOMAIN empty means self-signed.
 # An IP in COMPANION_DOMAIN can only mean self-signed (ACME cannot issue for
 # one), so it is read as the host — the same call `normalizeTlsEnv` (server.ts)
-# and gen-router.sh make. Three places, and they must agree. The first pattern
+# and install.sh make. Three places, and they must agree. The first pattern
 # is load-bearing: it rejects anything holding a character an IP cannot have,
 # so a hostname that merely starts like one (10.0.0.1.nip.io) keeps its real
 # certificate.

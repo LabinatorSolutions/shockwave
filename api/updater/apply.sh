@@ -36,7 +36,7 @@ echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "apply: invalid tag
 # PATH: /usr/local/bin/shockwave is a symlink to it, made once at install, so
 # replacing this file IS how a command update reaches the box — no write outside
 # $COMPANION_DIR (the only thing mounted here) and no new symlink, ever.
-FILES="docker-compose.yml traefik/traefik.yml traefik/gen-router.sh updater/watch.sh updater/apply.sh host/shockwave"
+FILES="docker-compose.yml traefik/traefik.yml updater/watch.sh updater/apply.sh host/shockwave"
 # Files that are executed directly rather than via `sh <file>`, so their mode
 # matters. `curl -o` writes 644 and `mv` preserves it — without this the command
 # on PATH would land unrunnable.

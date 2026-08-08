@@ -101,27 +101,24 @@ services:
       - agent-data:/data/agent
       - updater-trigger:/trigger
 
-  # One-shot: writes the Traefik dynamic router (self-signed vs Let's Encrypt)
-  # from $COMPANION_DOMAIN into the shared config volume, then exits.
-  traefik-config:
-    image: alpine:3.20
-    environment:
-      COMPANION_DOMAIN: ${COMPANION_DOMAIN:-}
-    volumes:
-      - ./traefik/gen-router.sh:/gen-router.sh:ro
-      - traefik-dynamic:/out
-    command: ["sh", "/gen-router.sh"]
-    restart: "no"
-
   # TLS terminator + reverse proxy — the ONLY public surface. :80 redirects to
   # :443. Self-signed by default; a real Let's Encrypt cert when COMPANION_DOMAIN
-  # is set (see traefik/traefik.yml + traefik/gen-router.sh).
+  # is set (see traefik/traefik.yml).
+  #
+  # Everything in the dynamic config volume — certificate, tls.yml, router.yml —
+  # is written by the api at boot (settleTls -> api/src/tls.ts). There used to be
+  # a one-shot `traefik-config` sidecar owning router.yml alone, which meant two
+  # containers writing one directory, neither able to see the other, each
+  # re-deriving the same IP-vs-domain decision. One owner now.
+  #
+  # Traefik does NOT wait for that write. Its file provider watches the
+  # directory, so config arriving a second later is picked up — verified — and
+  # gating startup on the api's healthcheck would delay every deploy by up to a
+  # health interval to fix an ordering problem that does not exist.
   traefik:
     image: traefik:v3.3
     restart: unless-stopped
     depends_on:
-      traefik-config:
-        condition: service_completed_successfully
       api:
         condition: service_started
     environment:

@@ -97,8 +97,7 @@ Six containers:
 |---|---|
 | **postgres** | The database. Private to the Docker network, not exposed to the host. |
 | **api** | The companion itself. Bound to `127.0.0.1:8080` only — never a public surface. |
-| **traefik** | The only thing listening publicly. Terminates TLS on 443, redirects 80, proxies to the api. |
-| **traefik-config** | Writes Traefik's routing config at startup, then exits. Showing as stopped is correct. |
+| **traefik** | The only thing listening publicly. Terminates TLS on 443, redirects 80, proxies to the api. Its certificate and routing config are written by the api at startup. |
 | **updater** | Performs the one-click update from the app. Holds no network port; it watches for a file. |
 | **autoheal** | Restarts the api if its health check starts failing. |
 

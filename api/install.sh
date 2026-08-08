@@ -137,7 +137,7 @@ fi
 # ── Runtime files ───────────────────────────────────────────────────────────
 say "Fetching companion files into $DIR ..."
 $SUDO mkdir -p "$DIR/traefik" "$DIR/updater" "$DIR/host"
-for f in docker-compose.yml init.sql traefik/traefik.yml traefik/gen-router.sh updater/watch.sh updater/apply.sh host/shockwave; do
+for f in docker-compose.yml init.sql traefik/traefik.yml updater/watch.sh updater/apply.sh host/shockwave; do
   curl -fsSL "$RAW/$f" | $SUDO tee "$DIR/$f" >/dev/null || fail "failed to fetch $f"
 done
 ok "Files fetched (ref: $REF)"
@@ -169,8 +169,8 @@ env_set() {
 # COMPANION_DOMAIN leaves the server with no certificate of its own and Traefik
 # serving the throwaway one it regenerates at every startup — a new fingerprint
 # to approve after every restart. It can only mean self-signed, so treat it as
-# the address and say so. `normalizeTlsEnv` (api) and gen-router.sh make the same
-# call at runtime, for boxes whose .env already has it.
+# the address and say so. `normalizeTlsEnv` (api) makes the same call at runtime,
+# for boxes whose .env already has it.
 case "$DOMAIN" in
   # Reject non-IP characters first, so a hostname that starts like an IP
   # (10.0.0.1.nip.io) keeps its Let's Encrypt certificate.
