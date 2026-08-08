@@ -139,8 +139,11 @@ function ProviderRow({
           </>
         ) : null}
       />
-      {!saved && <FieldDescription>Get a key from {keysLink(provider)}.</FieldDescription>}
-
+      {/* Result above the helper line, never below it. "Get a key from…" only
+          renders while nothing is stored — which is exactly the state you are in
+          when you verify a key you have just pasted, since `saved` doesn't flip
+          until the companion pushes the flag back. So the one time the line is on
+          screen was the one time it separated Verify from its answer. */}
       {verifyState.status === 'error' && <ErrorMessage>{verifyState.error}</ErrorMessage>}
 
       {/* Per job, because a key really can be good for one and not another —
@@ -157,6 +160,8 @@ function ProviderRow({
           ))}
         </div>
       )}
+
+      {!saved && <FieldDescription>Get a key from {keysLink(provider)}.</FieldDescription>}
     </Field>
   );
 }

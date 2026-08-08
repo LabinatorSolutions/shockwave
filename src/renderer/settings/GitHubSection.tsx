@@ -184,6 +184,19 @@ export default function GitHubSection({ sync, onSyncChange }) {
               </>
             }
           />
+          {/* The verdict sits directly under the button that produced it, ABOVE the
+              helper text. The description is three lines here, so below it the
+              answer landed a paragraph away from the Verify you had just pressed —
+              far enough that a green line read as page furniture rather than as a
+              reply. Standing rule for every credential check: result first, then
+              the field's helper text. */}
+          {verifyState.status === 'ok' && (
+            <p className="text-xs text-success">
+              ✓ Signed in as <strong>{verifyState.login}</strong>
+              {verifyState.name ? ` (${verifyState.name})` : ''}
+            </p>
+          )}
+          {verifyState.status === 'error' && <ErrorMessage>{verifyState.error}</ErrorMessage>}
           <FieldDescription className="text-xs">
             Needs <code className="font-mono">Contents: Read and write</code>, plus{' '}
             <code className="font-mono">Administration: Write</code> to create repos.{' '}
@@ -193,13 +206,6 @@ export default function GitHubSection({ sync, onSyncChange }) {
               onClick={(e) => { e.preventDefault(); window.api.openExternal('https://github.com/settings/tokens/new'); }}
             >Create one</a>. Encrypted with your OS keychain.
           </FieldDescription>
-          {verifyState.status === 'ok' && (
-            <p className="text-xs text-success">
-              ✓ Signed in as <strong>{verifyState.login}</strong>
-              {verifyState.name ? ` (${verifyState.name})` : ''}
-            </p>
-          )}
-          {verifyState.status === 'error' && <ErrorMessage>{verifyState.error}</ErrorMessage>}
         </Field>
       </SettingsGroup>
 
