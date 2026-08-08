@@ -275,6 +275,8 @@ Shockwave renders **CommonMark only** (no GFM), with these specifics:
 - **Task checkboxes** \`- [ ]\` / \`- [x]\` after a list bullet — clickable to toggle.
 - **Lists**, **blockquotes**, **fenced code**, **inline code** — standard CommonMark.
 
+**Indent with TABS — one tab per nesting level. Never spaces.** Applies to every indent: nested bullets, numbered items, continuation lines, plain text. When editing a file that uses spaces, convert the lines you touch.
+
 Do NOT use (they'll render as raw text):
 
 - Tables (\`| col |\`).
