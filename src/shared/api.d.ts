@@ -337,6 +337,21 @@ export interface ShockwaveApi {
      *  call because a name absent from a saved list is no longer a delete — this
      *  window's copy of the list is legitimately stale. */
     deleteAgentSecret(name: string): Promise<{ ok: boolean; error?: string }>;
+    /** Fires when the app has been pointed at a DIFFERENT companion — the URL
+     *  changed in `api:write`. (A rotated API key is not a switch: the companion
+     *  is single-tenant, so the key is auth rather than identity.)
+     *
+     *  This is the only "forget it" signal there is, and it has to be explicit.
+     *  The companion answers `GET /settings` from the rows it HAS, so a setting
+     *  the new server has never set is simply absent from the payload — and
+     *  absent cannot mean "clear this" without meaning it on every ordinary read
+     *  too. Without this event the previous server's provider, token dots, voice
+     *  vendor and workspace list all survive the switch.
+     *
+     *  NOT the same as going offline. An unreachable companion is the same truth
+     *  out of contact; clearing on it would blank the theme and close the
+     *  workspace on a network blip. */
+    onCompanionChanged(cb: () => void): () => void;
     /** Whether the companion is reachable right now, and what it's running. Asked
      *  on load — the push below can fire before the window is listening. */
     companionState(): Promise<CompanionState>;

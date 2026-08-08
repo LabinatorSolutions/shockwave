@@ -233,7 +233,12 @@ export default function App() {
   const chatSidebarOpenRef = useRef(false);
   const [chatSidebarWidth, setChatSidebarWidth] = useState(360);
   const chatSidebarWidthRef = useRef(360);
-  const [viewMode, setViewMode] = useState<any>(VIEW_MODES.LIVE);
+  // `viewMode` is NOT here — it is a read off the one settings object
+  // (`useSettings` below). The three above stay App-local because they are LIVE
+  // drag/toggle state: a resize writes on every mousemove and persists once at
+  // mouseup, so routing them through the store would either write per frame or
+  // lag the pointer. They are seeded from the object at boot and are
+  // machine-local, so no companion can disagree with them.
   const [editorStats, setEditorStats] = useState({ words: 0, chars: 0 });
   const [editorHistory, setEditorHistory] = useState({ canUndo: false, canRedo: false });
   const [saveState, setSaveState] = useState<any>(SAVE_STATES.SAVED);
@@ -284,13 +289,14 @@ export default function App() {
   const {
     themeMode, hideLineNumbers, treePanel, bookmarkFilterActive, showHiddenFiles,
     chatSources,
-    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
-    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, syncRef, telegram, timezone,
+    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder, viewMode,
+    codingAgentSettings, agentSecrets, transcription, speech, hasVoiceKey, sync, telegram, timezone,
     settingsRef,
-    saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
+    saveStatus, persistSettings, hydrateSettings, resetSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onShowHiddenFilesChange, onChatSourcesChange, saveOpenTabs,
     onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
+    onViewModeChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSpeechChange, onVoiceKeyChange, onTelegramChange,
     onSyncChange, onTimezoneChange,
@@ -914,23 +920,44 @@ export default function App() {
   // Which workspace's tabs are fully restored and therefore safe to persist.
   // Null while a load is in flight — see "remember which files are open" below.
   const tabsReadyForWsRef = useRef<string | null>(null);
-  const loadWorkspace = useCallback(async (workspace) => {
+  /**
+   * Put the app back to having no workspace open, and return the load
+   * generation that did it.
+   *
+   * ONE teardown, because there are three ways to stop being in a workspace —
+   * switching to another, removing this one, and being pointed at a different
+   * companion — and each used to carry its own idea of what to undo. Remove had
+   * the shortest list (no flush, no bookmark reset, no graph exit, and the link
+   * index left holding the old workspace's files), so removing the open
+   * workspace left wiki-link completions offering files that were no longer
+   * there. Adding a fourth caller must not mean writing a fourth list.
+   *
+   * Bumping the generation first is what makes it safe to call while a load is
+   * in flight: that load's `current()` goes false and it stops writing state.
+   */
+  const closeWorkspace = useCallback(async () => {
     const gen = ++loadGenRef.current;
-    const current = () => loadGenRef.current === gen;
-
     tabsReadyForWsRef.current = null;
     await writeNow();
     await window.api.watchStop();
-    if (!current()) return;
+    if (loadGenRef.current !== gen) return gen;
     resetTabs();
     setTree([]);
     setSelectedFolderPath(null);
     setGraphMode(false);
     setSaveState(SAVE_STATES.SAVED);
     resetBookmarks();
+    linkIndex.rebuild([]);
     // A stale conflict list belongs to the workspace we just left; its paths are
-    // relative and would re-root under the new workspace's folder.
+    // relative and would re-root under the next workspace's folder.
     setSyncStatus({ status: 'unconfigured', detail: '', lastSyncAt: null, conflicts: [] });
+    return gen;
+  }, [writeNow, resetTabs, resetBookmarks, linkIndex]);
+
+  const loadWorkspace = useCallback(async (workspace) => {
+    const gen = await closeWorkspace();
+    const current = () => loadGenRef.current === gen;
+    if (!current()) return;
 
     const [treeData, files, wsData] = await Promise.all([
       // settingsRef, not state — boot hydrates and loads in one tick. See refreshTree.
@@ -952,7 +979,7 @@ export default function App() {
     // back via `onStatus` (subscribed once on mount).
     window.api.sync.engineStart({
       workspacePath: workspace.path,
-      intervalSeconds: syncRef.current?.pullIntervalSeconds,
+      intervalSeconds: settingsRef.current.sync?.pullIntervalSeconds,
     }).catch(() => {});
 
     // Reopen the tabs this workspace had when it was last closed. Filtered
@@ -968,7 +995,7 @@ export default function App() {
       restoreTabs(saved.paths.filter((p) => onDisk.has(p)), saved.active ?? null);
     }
     tabsReadyForWsRef.current = workspace.id;
-  }, [writeNow, resetTabs, linkIndex, loadWorkspaceData, settingsRef, restoreTabs]);
+  }, [closeWorkspace, linkIndex, loadWorkspaceData, settingsRef, restoreTabs, seedBookmarks]);
   loadWorkspaceRef.current = loadWorkspace;
 
   // Settings → Advanced → "Rebuild link cache". Discards the persisted parse
@@ -1032,6 +1059,36 @@ export default function App() {
     await loadWorkspace(ws);
   }, [persistSettings, loadWorkspace]);
 
+  /**
+   * The app has been pointed at a DIFFERENT companion — drop everything the
+   * previous one told us.
+   *
+   * This event exists because nothing else can mean it. The companion answers
+   * `GET /settings` from the rows it HAS, so a setting the new server has never
+   * set is simply absent from the payload — and absent has to keep meaning
+   * "unchanged", or every ordinary read would clear the values it didn't
+   * mention. So a switch looked exactly like a read with fewer keys: the old
+   * server's provider, model, token dots, voice vendor, timezone and workspace
+   * list all stayed on screen, and the Agent settings could be written back INTO
+   * the new server on the next edit.
+   *
+   * Deliberately NOT wired to `companionOnline` going false. An unreachable
+   * server is the same truth temporarily out of contact — clearing on it would
+   * flip the theme to system, empty the workspace list and close the editor
+   * every time the wifi blinked. Settings already refuses to show a synced page
+   * while unreachable (`SettingsModal`'s gate), which covers the only thing
+   * clearing would have bought.
+   */
+  useEffect(() => window.api.settings.onCompanionChanged(() => {
+    resetSettings();
+    setWorkspaces([]);
+    setActiveWorkspaceId(null);
+    // Chats are the companion's too, and the open one's transcript lives in a
+    // module store that no re-read would reach.
+    chatStore.clearAllChats();
+    void closeWorkspace();
+  }), [resetSettings, closeWorkspace]);
+
   // Rename only. `updateWorkspaces` in main applies name + order and cannot
   // create or delete, so sending the whole list here is safe.
   const renameWorkspaces = useCallback(async (next) => {
@@ -1048,13 +1105,9 @@ export default function App() {
     // the new list — so there's no local array to patch here.
     if (id === activeWorkspaceId) {
       setActiveWorkspaceId(null);
-      resetTabs();
-      setTree([]);
-      setSelectedFolderPath(null);
-      setSyncStatus({ status: 'unconfigured', detail: '', lastSyncAt: null, conflicts: [] });
-      await window.api.watchStop();
+      await closeWorkspace();
     }
-  }, [activeWorkspaceId, resetTabs, showError]);
+  }, [activeWorkspaceId, closeWorkspace, showError]);
 
 
   // File-delete confirmation state — holds the path(s) the user asked to delete
@@ -1176,10 +1229,8 @@ export default function App() {
   }, [deleteCandidates, closeTabsForPath, linkIndex, fileOps, showError]);
 
   const onToggleViewMode = useCallback(async () => {
-    const next = viewMode === VIEW_MODES.LIVE ? VIEW_MODES.RAW : VIEW_MODES.LIVE;
-    setViewMode(next);
-    await persistSettings({ viewMode: next });
-  }, [viewMode, persistSettings, workspaces, activeWorkspaceId, themeMode]);
+    await onViewModeChange(viewMode === VIEW_MODES.LIVE ? VIEW_MODES.RAW : VIEW_MODES.LIVE);
+  }, [viewMode, onViewModeChange]);
 
   const onUndo = useCallback(() => { editorRef.current?.undo(); }, []);
   const onRedo = useCallback(() => { editorRef.current?.redo(); }, []);
@@ -1805,9 +1856,9 @@ export default function App() {
         setChatSidebarWidth(settings.chatSidebarWidth);
         chatSidebarWidthRef.current = settings.chatSidebarWidth;
       }
-      if (settings.viewMode === VIEW_MODES.RAW || settings.viewMode === VIEW_MODES.LIVE) {
-        setViewMode(settings.viewMode);
-      }
+      // No `viewMode` here — `hydrateSettings` above already seeded it, and it is
+      // read straight off the object. The three widths/toggles are copied because
+      // they are live drag state; every other setting is a read.
 
       const lastId = settings.activeWorkspaceId;
       if (lastId) {

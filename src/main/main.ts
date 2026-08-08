@@ -1037,7 +1037,36 @@ ipcMain.handle('api:write', (_evt, patch) => {
     next.url = patch.url;
   }
   if (typeof patch?.apiKey === 'string') next.apiKey = patch.apiKey;
+  // Is this a DIFFERENT server? Decided before the write, while the old value is
+  // still readable.
+  //
+  // The URL alone, deliberately. The companion is single-tenant — one `API_KEY`
+  // env var checked by one bearer middleware (`api/src/server.ts`), with no
+  // per-account scoping anywhere in `readSettings` — so the key is how you prove
+  // you may read the data, not WHICH data you read. Rotating it points at the
+  // same settings, the same secrets and the same workspaces, and treating that
+  // as a switch would close the open workspace and drop the chats for nothing.
+  const before = readApiConfig();
   const c = writeApiConfig(next);
+  if (c.url !== before.url) {
+    // The active workspace is machine-local and belongs to the OLD server's
+    // workspace list. Left in place, the id survives into the new server's
+    // session: the renderer sets it from the next push, `list.find` misses, and
+    // the app then holds a non-existent active workspace that blocks the
+    // auto-load of a real one. Nothing else machine-local is server-specific
+    // (window bounds, view state) — `openTabs` is keyed BY workspace id, so its
+    // entries are simply unreachable rather than wrong.
+    patchLocalSettings({ activeWorkspaceId: null });
+    // Tell the renderer to drop everything the old server told it. Settings, the
+    // workspace list and the open chat are all that server's data, and no push
+    // can clear them on its own: the companion sends only the rows it HAS, so a
+    // value the new server has never set simply isn't mentioned, and "not
+    // mentioned" cannot mean "forget it" without also meaning it on every
+    // ordinary read. This is the one event that means forget.
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('api:companionChanged');
+    }
+  }
   // Point the live feed at whatever was just configured. Connecting doesn't get
   // its own "now refresh the workspaces" line — it re-establishes the feed, and
   // the feed opening is the ONE rule that refreshes (see setCompanionOnline).

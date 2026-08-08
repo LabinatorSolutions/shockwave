@@ -404,10 +404,18 @@ export function createAgentRuntime(host: AgentHost) {
       if (!row.systemPrompt) throw new Error('This chat has no stored system prompt, so it cannot be continued. Start a new chat.');
       promptOverride = row.systemPrompt;
     } else {
-      // A brand-new chat. If the row exists we'd be silently restarting a real
-      // conversation from empty — refuse instead, so a lost transcript surfaces
-      // rather than quietly truncating the chat.
-      if (row) throw new Error('This chat\'s transcript is missing on the server, so it cannot be continued. Start a new chat.');
+      // A brand-new chat — INCLUDING a row with no transcript.
+      //
+      // A chat becomes real in three steps that are far apart: the id is minted,
+      // then `upsertChat` below writes the row, then the transcript is uploaded
+      // only once the turn has succeeded. So "row, no transcript" is what EVERY
+      // failed first turn leaves behind — and it used to throw here, which meant
+      // one bad turn wedged the chat permanently: every later message got the
+      // same refusal, and on Telegram the only escape was typing /new.
+      //
+      // There is nothing to protect in that state. A chat with no transcript has
+      // no conversation to truncate, so it starts fresh like any other new chat,
+      // and that is visible on its own — you are simply in a new chat.
       sessionManager = SessionManager.create(workspacePath, sessionsDir, { id: chatId });
       promptOverride = await assembleSystemPrompt(workspacePath, promptOpts);
     }

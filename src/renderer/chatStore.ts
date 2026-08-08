@@ -182,6 +182,26 @@ export function getState(): ChatStoreState {
   return state;
 }
 
+/**
+ * Forget every chat.
+ *
+ * Chats live on the companion, so pointing the app at a DIFFERENT one makes
+ * everything in here another server's data — transcripts, drafts, running flags
+ * and which chat each workspace had open. The history list refreshes by itself
+ * (it is a live `chat:list` call), but the open chat's transcript sits in this
+ * module until something re-reads it, and `openChat` would ask the new server
+ * for an id it has never heard of.
+ *
+ * NOT called when the companion merely goes away: a turn running elsewhere is
+ * still running, and dropping the transcript would lose a reply that is only
+ * being delayed. `isWorking` already stops claiming a remote turn is live while
+ * the feed is down.
+ */
+export function clearAllChats() {
+  state = { chats: {}, activeByWorkspace: {} };
+  emitChange();
+}
+
 function patchChat(chatId: string, patch: Partial<ChatEntry> | ((c: ChatEntry) => Partial<ChatEntry>)) {
   const cur = state.chats[chatId] ?? EMPTY_CHAT;
   const p = typeof patch === 'function' ? patch(cur) : patch;

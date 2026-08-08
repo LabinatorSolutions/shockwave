@@ -138,10 +138,12 @@ export async function syncCommands(pool: PgPool, key: Buffer, log?: any) {
 export async function status(pool: PgPool) {
   const db = getDb(pool);
   const acc = await store.getTelegramAccount(db);
-  // Report the STORED selection — null when nothing is chosen — so the settings
-  // picker shows blank. Message runs still fall back via activeWorkspace().
-  const all = await store.listWorkspaces(db);
-  const ws = all.find((w) => w.id === acc?.activeWorkspaceId) ?? null;
+  // The RESOLVED workspace — the same one a message would actually run in, via
+  // the same function. It used to report the stored column, which is null until
+  // someone picks one, so the settings picker showed blank while the bot was
+  // quite happily working in the first workspace by sort_order. One question,
+  // two answers, and the one on screen was the wrong one.
+  const ws = await activeWorkspace(db);
   return {
     connected: !!acc?.enabled, botUsername: acc?.botUsername ?? null, activeChatId: acc?.activeChatId ?? null,
     workspaceId: ws?.id ?? null, workspaceName: ws?.name ?? null,
@@ -407,6 +409,24 @@ async function runTurn(pool: PgPool, key: Buffer, runtime: any, acc: any, msgs: 
     // to exist. Minting it lazily keeps `/help` and friends from creating a chat
     // just by being typed — they never carry a file.
     chatId = replySwitch ?? acc.activeChatId ?? null;
+    // A linked chat is only REAL once its first turn stored a transcript. A turn
+    // that failed before that leaves a row that can never be continued, and the
+    // bot answered every later message with the same refusal — forever, since
+    // nothing here ever looked back at what it was pointing at. Typing /new was
+    // the only way out. Drop it instead and fall through to the ordinary
+    // new-chat path, which is what /new does minus the typing.
+    //
+    // Never while a turn is in flight: the FIRST turn of a chat has no
+    // transcript yet by definition, so an unguarded check would abandon the
+    // conversation that is mid-reply. `running` covers the same window for a
+    // turn started on another machine.
+    if (chatId && !busy.has(chatId)) {
+      const linked = await store.getChat(db, chatId);
+      if (linked && !linked.running && !linked.transcriptUpdatedAt) {
+        await client.sendMessage(dm, '⚠️ I can\'t load the existing chat. Starting a new one.').catch(() => { /* cosmetic */ });
+        chatId = null;   // getChatId mints and links a new one below
+      }
+    }
     const getChatId = async () => {
       if (!chatId) { chatId = crypto.randomUUID(); await store.setTelegramActiveChat(db, chatId); }
       return chatId;

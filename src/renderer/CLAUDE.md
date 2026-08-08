@@ -14,7 +14,7 @@ Cross-cutting invariants (terminology, link-index rules, parser parity, save-bef
 - `useLinkIndex` — wraps `createMetadataCache()` (in `metadataCache.ts`, modeled on and named after Obsidian's) behind a ref + a `version` counter, `bump()`ed after every mutation. The cache owns `resolvedLinks` (source→dest paths), `unresolvedLinks`, the reverse backlinks, and a PRIVATE basename→paths "phone book"; it resolves links itself via `getFirstLinkpathDest` (rules in the pure `linkResolver.ts`). There is no public `pageIndex` — consumers call `cache.getFirstLinkpathDest` / `candidatesFor` / `getBacklinksForFile`. Rename/move reference rewrites (`renameOps.ts`) capture a context snapshot (`captureRewriteContext`) before the cache re-keys so resolution stays correct regardless of order.
 - `useFileOps` — rename/duplicate/delete/link-click, and the `treeAndIndexChanged()` helper that re-reads the tree and bumps the link index after any structural change.
 - `useSyncRef` — keeps a ref in sync with a value/callback so a stable closure (e.g. `writeNow`) can read fresh state without being rebuilt.
-- `useSettings` — owns all persisted settings: the canonical `settingsRef`, `persistSettings` (diffs via `settingsDiff.ts`, sends a minimal patch to main), `hydrateSettings` (seeds from the companion read at boot), the per-field setters, and the `settings:changed` listener. **No default-merge** — its `DEFAULT_CANONICAL` placeholder starts UNSET for DB-backed values (empty provider/model) so the renderer never invents a value the DB doesn't have; `hydrateSettings` fills from the companion. Section-level save policy lives in `settings/CLAUDE.md`.
+- `useSettings` — owns all persisted settings. **ONE object, and everything on screen is a read off it — never a copy.** See "Settings are one object" below. `persistSettings` diffs via `settingsDiff.ts` and sends a minimal patch; `hydrateSettings` replaces the whole object through `normalizeSettings` (`settingsModel.ts`); `resetSettings` empties it when the app is pointed at a different companion. **No default-merge** — `EMPTY_SETTINGS` starts UNSET for DB-backed values (empty provider/model) so the renderer never invents a value the DB doesn't have. Section-level save policy lives in `settings/CLAUDE.md`.
 - `useFsWatcher` — the external-change (`fs:changed`) listener; see its own section below.
 - `useBookmarks`, `useDailyNote`, `useSendToAgent`, `useAppUpdate` — bookmarks, per-workspace daily-note config, the "send file to agent" flow, and the app-update status. `useAppUpdate` takes `onRequestRestart` from App and re-exposes it as `requestRestart`, so the pill, the toast and Settings all go through the SAME confirm — installing quits the app and kills a running turn, so nothing calls `restartToUpdate` directly. Its toast keys on `version:phase` (`available` and `ready` are two pieces of news about one version), and dismissing it snoozes that version; see "App updates" in `src/main/CLAUDE.md`.
 
@@ -391,6 +391,34 @@ The clock in the `ThinSidebar` opens the app's **whole** cron surface: the live 
 - **`QuickSearch`** (`QuickSearch.tsx`): modal launched from the sort bar. Empty query → top 10 files by the active sort order. With a query → `fuzzysort` ranks every file by workspace-relative path so typing `j/2026` finds `Journal/2026-05-24.md`. Matches are highlighted via `segmentsFromIndexes`. Arrow keys + Enter; Esc closes.
 
 ## Settings
+
+### Settings are ONE object, and the screen READS it
+
+`useSettings` holds a single `Settings` object plus a ref mirroring it, and nothing else. There are no per-field `useState` slices; the named values it returns (`sync`, `transcription`, `codingAgentSettings`, …) are reads off that object, kept only so App and `SettingsModal` keep the props they always had. **Adding a per-field `useState` here reintroduces the bug this shape exists to remove.**
+
+Three rules, and they are the whole model:
+
+1. **A push replaces the object.** `hydrateSettings(payload)` → `normalizeSettings` → one assignment.
+2. **A write sends only what changed.** `persistSettings(patch)` merges the patch into the object and `buildPatch` sends the differing leaves. This half was always right and is unchanged.
+3. **A different companion empties it.** `resetSettings()`, on `api:companionChanged`.
+
+> **What this replaced, and why it could never be got right by care.** `hydrateSettings` used to fan one payload out into twenty `useState` slices with twenty-one hand-written assignments — and **seven of them were guarded on the key being present**. The companion answers `GET /settings` from the rows it HAS (`api/src/store.ts`), so a setting nobody has set is *absent* from the payload, not empty; `stripCredentials` deliberately won't conjure a missing parent to hang a `has*` flag on, so `sync` and `codingAgent` stayed absent too. Those guards therefore read "the new server has no row for this" as "keep the old server's value". Point the app at a second companion and its Agent, GitHub, Voice and timezone pages all kept the first one's — and `codingAgent` was worse than cosmetic, because `disk.codingAgent ?? settingsRef.current.codingAgent` put the stale slice in the canonical cache, which is both the diff base for saves and the merge source for `onCodingAgentChange`. The old server's provider and model could be written INTO the new one on the next edit.
+>
+> Every settings bug in this file's history is the same defect: `voiceReply` added to the complete mapping and missed in the partial one, `micProvider` dropped by a two-field whitelist, a fake `anthropic` provider invented by a defaults merge. Twenty-one places to get one fact right is what produced them; one place is the fix, not more comments on each branch.
+
+`normalizeSettings` (`settingsModel.ts`, pure, `tests/settingsModel.test.js`) is the only way an object is built. It is **total** — every key of `Settings` is assigned, which the return type makes a compile error to get wrong — and it is a function of its argument alone. There is no `?? previous` in it and there must never be one: that is the mechanism, not a convention. Coercions and the two retired `treePanel` migrations live there, so they are one tested function rather than inline branches.
+
+**Credentials never enter the object.** Main strips them on the way down; `persistSettings` drops them from what it *keeps* after building the patch, so a key you just typed travels to the companion without parking in renderer memory. `onVoiceKeyChange` sets the `hasVoiceKey` flag itself, since the value it sent is gone.
+
+**Three values are deliberately NOT reads**: `sidebarWidth`, `chatSidebarWidth` and `chatSidebarOpen` stay App-local. A resize writes on every mousemove and persists once at mouseup, so routing it through the store would either write per frame or lag the pointer. All three are machine-local, so no companion can disagree with them.
+
+### Pointing at a different companion — the one "forget it" signal
+
+`api:write` broadcasts `api:companionChanged` when the **URL** changes (not the key — the companion is single-tenant, so the key is auth, not identity). App's handler empties the settings object, clears the workspace list and active id, calls `chatStore.clearAllChats()`, and runs `closeWorkspace()`. Main clears the machine-local `activeWorkspaceId` in the same breath, or that id survives into the new server's session and blocks the auto-load of a real workspace.
+
+**It has to be its own event.** No push can carry the meaning: absent keys mean "unchanged" on every ordinary read, so a switch is indistinguishable from a read with fewer rows.
+
+**It is NOT wired to the companion going offline**, and that is the deliberate line. An unreachable server is the same truth temporarily out of contact — clearing on it would flip the theme to system, empty the workspace list and close the editor every time the wifi blinked, and the files are on local disk and still editable. `SettingsModal`'s existing gate already refuses to show a synced settings page while unreachable, which is everything clearing would have bought. (Main's rule that going offline pushes the flag and *no* settings payload stands unchanged, for the same reason.)
 
 ### "Needs setup" badge — one rule, three readers
 

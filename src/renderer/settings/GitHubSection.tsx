@@ -190,7 +190,7 @@ export default function GitHubSection({ sync, onSyncChange }) {
             <a
               href="#"
               className="text-primary hover:underline"
-              onClick={(e) => { e.preventDefault(); window.api.openExternal('https://github.com/settings/tokens?type=beta'); }}
+              onClick={(e) => { e.preventDefault(); window.api.openExternal('https://github.com/settings/tokens/new'); }}
             >Create one</a>. Encrypted with your OS keychain.
           </FieldDescription>
           {verifyState.status === 'ok' && (

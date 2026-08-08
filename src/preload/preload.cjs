@@ -257,6 +257,21 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('api:companionUpdated', h);
       return () => ipcRenderer.removeListener('api:companionUpdated', h);
     },
+    /** Fires when the app has been pointed at a DIFFERENT companion (the URL
+     *  changed). Everything the previous server told us — settings, workspaces,
+     *  chats — is now another server's data and must be dropped. A rotated API
+     *  key is NOT a switch: the companion is single-tenant, so the key is auth,
+     *  not identity.
+     *
+     *  Distinct from `onCompanionState(online: false)` on purpose: an unreachable
+     *  server is the same truth temporarily out of contact, and clearing on it
+     *  would flip the theme and close the workspace every time the wifi blinked.
+     *  Returns an unsubscribe fn. */
+    onCompanionChanged: (cb) => {
+      const h = () => cb();
+      ipcRenderer.on('api:companionChanged', h);
+      return () => ipcRenderer.removeListener('api:companionChanged', h);
+    },
     /** Whether the companion is reachable right now, and what version it's
      *  running. Asked on load, because the push below can fire before the window
      *  is listening.
