@@ -76,28 +76,32 @@ const FIRST_PIECE_CHARS = 50;
  * sizes every piece after it — the ladder is built from how long it plays.
  *
  * Without it the floor for the opener is `MIN_PIECE_CHARS` against a budget of 50,
- * i.e. 25 characters — five above the shortest clip permitted anywhere. Replies
- * opening with a short sentence hit that constantly ("Here's where the deploy
- * stands." is 31), and a 31-character opener buffers under two seconds, which gives
- * the second piece a small budget, which buffers barely more. **The ladder never
- * gets going, and the cost lands on LONG replies** — the ones with the most pieces
- * to get wrong. Measured on a 1,093-character answer: six voice notes at 30, four
- * at 60. At 2,398 characters it is seven against five.
+ * i.e. 25 characters — five above the shortest clip permitted anywhere. That is
+ * small enough to starve the ladder: everything after the opener is sized from how
+ * long it PLAYS, so a two-second opener gives the second piece a small budget, which
+ * buffers barely more.
  *
  * **This is the knob for "fewer, longer voice notes", and the only honest one.**
  * The ladder above sizes every later piece from how long this one PLAYS, so raising
  * it lifts the whole curve; nothing downstream can be dialled directly, because
  * piece lengths land wherever a sentence ends.
  *
- * 60 is a chosen point on a real trade, not a plateau. It is paid for in the one
- * wait nothing covers — on that same long answer the first voice note goes from
- * 1.5s to 3.8s, and averaged over eleven replies 3.4s to 4.5s. Going further keeps
- * buying pieces at a worsening rate: 150 gets that answer to three notes but takes
- * the average first sound to 5.6s, which is long enough to read as nothing having
- * happened. Dead air stays at zero across all of them — this trades against the
- * opening wait, never against a gap mid-answer.
+ * **It was 60 for a day, and 60 was wrong.** Raising it bought pieces on long
+ * replies — a 1,093-character answer went from six voice notes to four — but it
+ * buys them with the ONE WAIT NOTHING COVERS, and it does that by REJECTING a
+ * perfectly good opening sentence. "yt-dlp is still the answer, and it's not close."
+ * is 47 characters; at 60 it fails the floor, so the opener swallows the sentence
+ * after it and runs to 169 characters — **eighteen seconds of audio before the reply
+ * starts**, measured, against under three at 30. An extra bubble you can already
+ * hear is not worth eighteen seconds of nothing.
+ *
+ * That is the trade this number makes, in the direction it actually gets felt: it
+ * is not "fewer notes vs. slightly slower", it is "fewer notes vs. a wait long
+ * enough to read as nothing having happened". Bubbles are cheap and the opening
+ * silence is not, so this stays low. Dead air was zero at 30 and at 60 alike — the
+ * whole trade is against the opening wait and never against a gap mid-answer.
  */
-const FIRST_PIECE_MIN = 60;
+const FIRST_PIECE_MIN = 30;
 
 /**
  * Below this, a script is spoken as ONE piece. A twelve-second answer split into
