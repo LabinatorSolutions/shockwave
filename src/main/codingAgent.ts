@@ -17,6 +17,8 @@ import type { AgentHost, RunOpts, Emit } from '../../agent-core/agent.js';
 import type { VoiceConfig } from '../../agent-core/voiceProviders.js';
 import { makeSendMessageTool } from '../../agent-core/sendMessage.js';
 import { sweepScratchDirs } from '../../agent-core/scratchSweep.js';
+import { writeAttachment } from '../../agent-core/attachmentPolicy.js';
+import type { StoredAttachment } from '../../agent-core/attachmentPolicy.js';
 import { getChat, upsertChat, appendMessages, setChatTitle, setRunning, getTranscript, putTranscript,
   searchChatMessages, readChatWindow, recentChats } from './api/chats.js';
 import { api } from './api/client.js';
@@ -81,6 +83,26 @@ export function sweepAgentScratch(ttlDays: unknown, pinned: ReadonlySet<string>)
 /** Drop one chat's scratch pad. Called when the chat itself is deleted. */
 export async function removeAgentScratch(chatId: string): Promise<void> {
   await fs.rm(chatScratchDir(chatId), { recursive: true, force: true }).catch(() => { /* best-effort */ });
+}
+
+/**
+ * Save a file the user attached in the composer into this chat's scratch pad.
+ *
+ * The desktop twin of the companion's `cacheAttachment`, and the same function
+ * underneath — this side only names the directory. Which is what finally makes
+ * the prompt's promise true: `BOUNDARIES` has always told the agent that "files
+ * the user sends you arrive here", and until this existed nothing on the desktop
+ * ever put one there, so a `.tar.gz` in the composer could only be refused.
+ *
+ * Returns null when bytes claiming to be an image clearly aren't; every other
+ * type is accepted, deliberately — see `describeAttachment`.
+ */
+export function stashChatFile(
+  chatId: string,
+  data: Buffer,
+  opts: { filename?: string; mimeType?: string } = {},
+): Promise<StoredAttachment | null> {
+  return writeAttachment(chatScratchDir(chatId), data, opts);
 }
 
 let runtime: ReturnType<typeof createAgentRuntime> | null = null;

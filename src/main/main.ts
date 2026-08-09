@@ -11,7 +11,7 @@ import * as parcelWatcher from '@parcel/watcher';
 import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
-import { initDesktopAgent, agentSend, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats, listThinkingLevels, sweepAgentScratch, removeAgentScratch } from './codingAgent.js';
+import { initDesktopAgent, agentSend, agentAbort, agentDisposeChat, agentDisposeAll, agentRunningChats, listThinkingLevels, sweepAgentScratch, removeAgentScratch, stashChatFile } from './codingAgent.js';
 // Cron execution lives entirely on the companion now; the desktop only VIEWS the
 // schedule (from local cron.json + companion run-status) and triggers a manual run.
 import { cronRead, cronRunNow } from './api/cron.js';
@@ -24,7 +24,7 @@ import { isMdFile, uniquePath, walkMarkdownPaths, isWatchIgnored, isTreeHidden }
 import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from '../../agent-core/defaults/workspaceFiles/index.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
 import { getProviders } from '@earendil-works/pi-ai/compat';
-import { initModelCatalog, getCatalogModels } from '../../agent-core/modelCatalog.js';
+import { initModelCatalog, getCatalogModels, getCatalogModel } from '../../agent-core/modelCatalog.js';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from '../../agent-core/skillLibrary.js';
 import { installOpenFileBridge } from './openFileExtension.js';
 import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, PROVIDER_PRESETS } from './oauth.js';
@@ -2144,6 +2144,52 @@ ipcMain.handle('agent:send', async (evt, { chatId, text, images }) => {
   } catch (err: any) {
     emit('agent:error', { chatId, message: err?.message ?? String(err) });
   }
+});
+
+/** Does the configured model accept images? Unknown counts as no. */
+async function modelSeesImages(settings): Promise<boolean> {
+  const ca = settings?.codingAgent ?? {};
+  if (!ca.provider || !ca.model) return false;
+  try {
+    const entry = await getCatalogModel(ca.provider, ca.model);
+    return !!entry?.input?.includes('image');
+  } catch {
+    return false;
+  }
+}
+
+// Files the user attached in the composer, written into the chat's scratch pad
+// so the agent gets a PATH it can act on — the same treatment a file sent over
+// Telegram already got, and the reason a tarball is no longer "unsupported".
+//
+// The renderer sends bytes it already read, or a `sourcePath` for anything it
+// declined to read into memory (see `MAX_COMPOSER_READ_BYTES` there). Reading
+// from the path here is what keeps a 2GB attachment from crossing IPC as an
+// array — main is already allowed to read that file, the renderer isn't.
+//
+// `visionAvailable` rides back with the descriptors because the note depends on
+// it and only this side has the catalog: the renderer would otherwise have to
+// claim the model can see an image without being able to check.
+ipcMain.handle('agent:stashFiles', async (_evt, { chatId, files }) => {
+  const { settings } = await readSettingsSafe();
+  const visionAvailable = await modelSeesImages(settings);
+  const attachments: any[] = [];
+
+  for (const f of files ?? []) {
+    try {
+      const data = f.data ? Buffer.from(f.data) : await fs.readFile(f.sourcePath);
+      const stored = await stashChatFile(chatId, data, { filename: f.name, mimeType: f.mimeType });
+      // null means bytes claiming to be an image clearly aren't. Nothing else is
+      // refused — see `describeAttachment`.
+      attachments.push(stored
+        ? { id: f.id, ...stored }
+        : { id: f.id, error: "that doesn't look like a real image" });
+    } catch (err: any) {
+      attachments.push({ id: f.id, error: err?.message ?? String(err) });
+    }
+  }
+
+  return { attachments, visionAvailable };
 });
 
 // Chats with a turn in flight — the renderer re-seeds its running set from

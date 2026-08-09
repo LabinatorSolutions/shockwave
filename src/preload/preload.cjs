@@ -372,11 +372,16 @@ contextBridge.exposeInMainWorld('api', {
     importFromPath: (workspacePath, srcPath) => ipcRenderer.invoke('skills:importFromPath', { workspacePath, srcPath }),
     /** Remove a workspace skill folder. @param {string} workspacePath @param {string} folderName @returns {Promise<void>} */
     remove: (workspacePath, folderName) => ipcRenderer.invoke('skills:remove', { workspacePath, folderName }),
-    /** Resolves the absolute disk path of a drag-dropped File (via Electron's
-     *  webUtils.getPathForFile). Returns '' for File objects not backed by disk.
-     *  @param {File} file @returns {string} */
-    pathForFile: (file) => webUtils.getPathForFile(file),
   },
+
+  /** Resolves the absolute disk path of a dropped or picked File (via Electron's
+   *  webUtils.getPathForFile). Returns '' for File objects not backed by disk —
+   *  a clipboard paste, say. Top-level rather than under `skills` because it
+   *  answers one question about a File and has nothing to do with skills: skill
+   *  import was simply its first caller, and chat attachments use it to hand main
+   *  a path instead of pulling a large file through the renderer.
+   *  @param {File} file @returns {string} */
+  pathForFile: (file) => webUtils.getPathForFile(file),
 
   // ---- Coding agent (pi) --------------------------------------------------
 
@@ -389,6 +394,15 @@ contextBridge.exposeInMainWorld('api', {
      *  @param {{ chatId: string, text: string, images?: Array<{ type:'image', source: any }> }} opts
      *  @returns {Promise<void>} */
     send: (opts) => ipcRenderer.invoke('agent:send', opts),
+    /** Save composer attachments into the chat's scratch pad, so the agent gets a
+     *  path it can act on. Each file carries either the bytes the renderer read
+     *  (`data`) or a `sourcePath` for anything too big to hold in memory.
+     *  Answers one entry per file, in order, each with the stored descriptor or
+     *  an `error`; `visionAvailable` says whether the configured model can see
+     *  images, which decides what the note claims.
+     *  @param {{ chatId: string, files: Array<{ id: string, name: string, mimeType?: string, data?: Uint8Array, sourcePath?: string }> }} opts
+     *  @returns {Promise<{ attachments: Array<any>, visionAvailable: boolean }>} */
+    stashFiles: (opts) => ipcRenderer.invoke('agent:stashFiles', opts),
     /** Abort the given chat's running turn. @param {string} chatId @returns {Promise<void>} */
     abort: (chatId) => ipcRenderer.invoke('agent:abort', chatId),
     /** Chats with a turn currently in flight (re-seed after window reload).

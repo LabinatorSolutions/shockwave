@@ -892,7 +892,7 @@ export default function App() {
   const onImportFiles = useCallback(async (destDir, files) => {
     const paths: string[] = [];
     for (const f of files ?? []) {
-      try { const p = window.api.skills.pathForFile(f); if (p) paths.push(p); }
+      try { const p = window.api.pathForFile(f); if (p) paths.push(p); }
       catch { /* File not backed by disk (e.g. browser drag) — skip */ }
     }
     if (paths.length === 0) return;

@@ -1,5 +1,9 @@
-// Inbound Telegram attachments (api/src/telegram/attachmentPolicy.ts) — what a
-// file the user sent IS, and what the agent gets told about it.
+// Inbound attachments (agent-core/attachmentPolicy.ts) — what a file the user
+// sent IS, and what the agent gets told about it.
+//
+// It covers BOTH hosts: the companion takes files over Telegram and the desktop
+// takes them through the chat composer, and since they run one policy module a
+// case proved here is proved for both.
 //
 // Why this is tested: a Telegram photo arrives with no filename and no mime type,
 // so the type has to come from the bytes. Getting it wrong is not cosmetic —
@@ -15,11 +19,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
 
 import {
   describeAttachment, looksLikeImage, sniffImageMime, safeName, classify,
-  composeMessage, imageNote, documentNote, MAX_INBOUND_BYTES,
-} from '../api/src/telegram/attachmentPolicy.ts';
+  composeMessage, imageNote, documentNote, writeAttachment,
+  MAX_INBOUND_BYTES, MAX_TEXT_INLINE_BYTES,
+} from '../agent-core/attachmentPolicy.ts';
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const png = (n = 20) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(n)]);
 const jpg = () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(20)]);
@@ -126,4 +137,95 @@ test('a message with no attachments is just what the user typed', () => {
 
 test('the inbound cap is Telegram\'s, not a number we picked', () => {
   assert.equal(MAX_INBOUND_BYTES, 20 * 1024 * 1024);
+});
+
+// ── writeAttachment: the write both hosts share ──────────────────────────────
+//
+// The desktop composer and the Telegram webhook call this same function with
+// different directories (`chatScratchDir` / `chatFilesDir`). Before it existed the
+// desktop had no way to put a file anywhere, so anything that wasn't an image or
+// a known text extension was answered with "unsupported format" — while the
+// system prompt told the agent that files the user sends it arrive in its scratch
+// pad. These pin the shape that made that sentence true.
+
+test('a tarball is saved and pointed at, not refused', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'shockwave-att-'));
+  const stored = await writeAttachment(dir, Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00]), {
+    filename: 'backup.tar.gz',
+    mimeType: 'application/gzip',
+  });
+
+  assert.equal(stored.kind, 'document');
+  assert.equal(stored.displayName, 'backup.tar.gz');
+  assert.equal(stored.inlineText, undefined, 'gzip bytes must never be pasted into the prompt');
+  assert.equal(dirname(stored.path), dir);
+  assert.ok(existsSync(stored.path), 'the note names a path, so the path has to exist');
+
+  // And what the agent is told about it is a path plus an instruction to open it.
+  assert.match(composeMessage([stored], 'unpack this', false), new RegExp(escapeRe(stored.path)));
+});
+
+test('a text file is BOTH saved and inlined', async () => {
+  // The two halves answer different needs: the contents so it can read without a
+  // tool call, the path so it can move, edit or commit the file.
+  const dir = await mkdtemp(join(tmpdir(), 'shockwave-att-'));
+  const stored = await writeAttachment(dir, Buffer.from('line one\nline two\n'), {
+    filename: 'notes.txt',
+    mimeType: 'text/plain',
+  });
+
+  assert.equal(stored.inlineText, 'line one\nline two\n');
+  assert.equal(await readFile(stored.path, 'utf8'), 'line one\nline two\n');
+
+  const msg = composeMessage([stored], 'what does this say?', false);
+  assert.match(msg, /Its content has been included below/);
+  assert.match(msg, new RegExp(escapeRe(stored.path)));
+});
+
+test('a text file over the inline cap is saved and pointed at instead', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'shockwave-att-'));
+  const big = Buffer.from('x'.repeat(MAX_TEXT_INLINE_BYTES + 1));
+  const stored = await writeAttachment(dir, big, { filename: 'huge.log', mimeType: 'text/plain' });
+
+  assert.equal(stored.inlineText, undefined, 'a megabyte of log must not become the prompt');
+  assert.equal((await readFile(stored.path)).length, big.length);
+});
+
+test('an image is saved too, so the agent gets a handle as well as the pixels', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'shockwave-att-'));
+  const stored = await writeAttachment(dir, png(), { filename: 'shot.png', mimeType: 'image/png' });
+
+  assert.equal(stored.kind, 'image');
+  assert.ok(existsSync(stored.path));
+  // Vision on: the pixels went too, and the note is just the handle.
+  assert.equal(composeMessage([stored], '', true), `[Image attached at: ${stored.path}]`);
+  // Vision off: it must not be left to claim it looked at something it never got.
+  assert.match(composeMessage([stored], '', false), /cannot view images/);
+});
+
+test('two files with the same name both survive', async () => {
+  // The stored name carries a random segment, so attaching the same file twice
+  // (or two `report.pdf`s from different folders) can't have one overwrite the other.
+  const dir = await mkdtemp(join(tmpdir(), 'shockwave-att-'));
+  const a = await writeAttachment(dir, Buffer.from('one'), { filename: 'report.pdf' });
+  const b = await writeAttachment(dir, Buffer.from('two'), { filename: 'report.pdf' });
+
+  assert.notEqual(a.path, b.path);
+  assert.equal(await readFile(a.path, 'utf8'), 'one');
+  assert.equal(await readFile(b.path, 'utf8'), 'two');
+  assert.equal(a.displayName, 'report.pdf', 'the user still sees their own name');
+});
+
+test('a crafted filename cannot escape the directory', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'shockwave-att-'));
+  const stored = await writeAttachment(dir, Buffer.from('x'), { filename: '../../etc/passwd' });
+  assert.equal(dirname(stored.path), dir);
+});
+
+test('bytes claiming to be an image and clearly not are the ONE refusal', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'shockwave-att-'));
+  const html = Buffer.from('<!doctype html><title>404</title>');
+  assert.equal(await writeAttachment(dir, html, { filename: 'photo.jpg', mimeType: 'image/jpeg' }), null);
+  // Same bytes, not claiming to be an image: accepted, like everything else.
+  assert.ok(await writeAttachment(dir, html, { filename: 'page.html', mimeType: 'text/html' }));
 });

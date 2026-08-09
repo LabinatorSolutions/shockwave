@@ -8,12 +8,13 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuChe
 import { CHAT_SOURCES, CHAT_SOURCE_LABELS } from './constants.js';
 import { resolveImageUrl } from './imageWidgets.js';
 import {
-  classify,
-  readAsBase64,
-  readAsText,
+  MAX_COMPOSER_READ_BYTES,
+  isImageFile,
+  readAsBytes,
+  toBase64,
   formatBytes,
   nextAttachmentId,
-  composePromptText,
+  composeMessage,
   toImageContents,
 } from './chatAttachments.js';
 import { useVoiceInput } from './voice/useVoiceInput.js';
@@ -860,10 +861,50 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     const id = chatIdRef.current ?? chatStore.ensureActiveChat(workspacePath);
     setRejected(null);
 
-    const imageAttachments = attachments.filter((a) => a.kind === 'image');
-    const textAttachments = attachments.filter((a) => a.kind === 'text');
-    const promptText = composePromptText(typed, textAttachments);
-    const images = toImageContents(imageAttachments);
+    // Save every attachment into the chat's scratch pad FIRST — the prompt is
+    // built out of what main says it wrote, so the paths in it always name files
+    // that exist. Writing at send rather than at ingest is what keeps a chip you
+    // removed, or a draft you never sent, from leaving a file behind.
+    let saved: any[] = [];
+    let visionAvailable = false;
+    if (attachments.length > 0) {
+      try {
+        const res = await window.api.agent.stashFiles({
+          chatId: id,
+          files: attachments.map((a) => ({
+            id: a.id, name: a.name, mimeType: a.mimeType, data: a.data, sourcePath: a.sourcePath,
+          })),
+        });
+        visionAvailable = res.visionAvailable;
+        saved = res.attachments ?? [];
+      } catch (err: any) {
+        setRejected({ name: 'Attachments', reason: err?.message ?? String(err) });
+        return; // the draft is still on screen — nothing was cleared yet
+      }
+      const failed = saved.filter((s) => s.error);
+      if (failed.length > 0) {
+        const first = attachments.find((a) => a.id === failed[0].id);
+        setRejected(failed.length === 1
+          ? { name: first?.name ?? 'Attachment', reason: failed[0].error }
+          : { name: `${failed.length} files`, reason: `${first?.name}: ${failed[0].error} (+${failed.length - 1} more)` });
+        return;
+      }
+    }
+
+    // One composition, shared with Telegram: the bracketed notes naming each
+    // path, then any small text file's contents, then what the user typed.
+    const promptText = composeMessage(saved, typed, visionAvailable);
+    const images = visionAvailable
+      ? toImageContents(
+        saved
+          .filter((s) => s.kind === 'image')
+          .map((s) => {
+            const bytes = attachments.find((a) => a.id === s.id)?.data;
+            return bytes ? { ...s, base64: toBase64(bytes) } : null;
+          })
+          .filter(Boolean),
+      )
+      : [];
 
     chatStore.setDraft(id, '');
     chatStore.setAttachments(id, () => []);
@@ -872,7 +913,10 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
       text: typed,
       promptText,
       images,
-      attachments: attachments.map((a) => ({ ...a })),
+      // `data` is dropped on the way into the transcript: the bubble needs a name
+      // and a thumbnail, and keeping the bytes would pin every file the user ever
+      // attached in memory for the life of the window.
+      attachments: attachments.map(({ data, sourcePath, ...rest }) => rest),
     });
   }, [input, partialText, attachments, workspacePath, voiceRecording, stopVoice]);
 
@@ -959,41 +1003,52 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (wasActive && workspacePath) chatStore.newChat(workspacePath);
   }, [workspacePath]);
 
+  // Take whatever the user gave us. No format gate: what the file IS gets
+  // decided in main, which sniffs the bytes and writes it into the chat's
+  // scratch pad at send time — so the only things that can fail here are
+  // reading it and, for a pasted file with no path on disk, its size.
+  //
+  // `kind` here is for the CHIP alone (a thumbnail or a filename row); the
+  // authoritative kind comes back from main with the saved descriptor.
   const ingestFiles = useCallback(async (fileList) => {
     const files = [...(fileList ?? [])];
     if (files.length === 0) return;
     const added: any[] = [];
     const failures: any[] = [];
     for (const file of files) {
-      const kind = classify(file);
-      if (!kind) {
-        failures.push({ name: file.name, reason: 'unsupported format' });
-        continue;
-      }
       try {
-        if (kind === 'image') {
-          const base64 = await readAsBase64(file);
-          const mimeType = file.type;
-          const dataUrl = `data:${mimeType};base64,${base64}`;
-          added.push({
-            id: nextAttachmentId(),
-            kind: 'image',
-            name: file.name || 'image',
-            mimeType,
-            bytes: file.size,
-            base64,
-            dataUrl,
-          });
-        } else {
-          const content = await readAsText(file);
-          added.push({
-            id: nextAttachmentId(),
-            kind: 'text',
-            name: file.name,
-            bytes: file.size,
-            content,
-          });
+        const isImage = isImageFile(file);
+        // Electron answers this for anything dropped or picked from disk, and ''
+        // for a File the clipboard synthesized. Having it is what lets a huge
+        // archive skip the renderer entirely — main can read the file itself.
+        const sourcePath = window.api.pathForFile(file) || '';
+
+        // Images are always read: the thumbnail and the pixels the model sees
+        // both come from these bytes, and every provider's own size limit is far
+        // below ours. Everything else is read only when there's no path to hand
+        // over instead — which is a clipboard paste, the one case that can be
+        // too big to accept at all.
+        const read = isImage || !sourcePath;
+        if (read && !isImage && file.size > MAX_COMPOSER_READ_BYTES) {
+          failures.push({ name: file.name, reason: `too large to paste (${formatBytes(file.size)}) — drag the file in instead` });
+          continue;
         }
+
+        const att: any = {
+          id: nextAttachmentId(),
+          kind: isImage ? 'image' : 'file',
+          name: file.name || (isImage ? 'image' : 'file'),
+          mimeType: file.type || '',
+          bytes: file.size,
+          sourcePath,
+        };
+        if (read) {
+          att.data = await readAsBytes(file);
+          // The preview declares the browser's guess at the type, which is fine
+          // for an <img> — nothing reaches a provider from this string.
+          if (isImage) att.dataUrl = `data:${file.type};base64,${toBase64(att.data)}`;
+        }
+        added.push(att);
       } catch (err: any) {
         failures.push({ name: file.name, reason: err?.message ?? String(err) });
       }
@@ -1023,14 +1078,15 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     e.target.value = '';
   }, [ingestFiles]);
 
+  // Any pasted FILE is an attachment now, not only an image — the composer used
+  // to intercept the clipboard only when it held a picture, so pasting a PDF did
+  // nothing at all, not even the error. Text on the clipboard is still text and
+  // falls through to the textarea untouched (`files` is empty for a plain copy).
   const onPaste = useCallback(async (e) => {
     const files = e.clipboardData?.files;
     if (files && files.length > 0) {
-      const anyImage = [...files].some((f) => f.type.startsWith('image/'));
-      if (anyImage) {
-        e.preventDefault();
-        await ingestFiles(files);
-      }
+      e.preventDefault();
+      await ingestFiles(files);
     }
   }, [ingestFiles]);
 
@@ -1282,11 +1338,14 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           onPaste={onPaste}
           rows={2}
         />
+        {/* No `accept` — anything can be attached, so anything must be pickable.
+            The list that used to sit here was a third hand-maintained copy of the
+            extension rules, and it greyed out in the OS dialog exactly the files
+            drag-and-drop would happily have taken. */}
         <input
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/png,image/jpeg,image/gif,image/webp,.txt,.md,.markdown,.py,.js,.jsx,.ts,.tsx,.mjs,.cjs,.json,.jsonc,.yaml,.yml,.toml,.html,.htm,.css,.scss,.sass,.less,.xml,.svg,.csv,.tsv,.log,.sh,.bash,.zsh,.fish,.ps1,.rb,.go,.rs,.java,.kt,.swift,.c,.cpp,.cc,.h,.hpp,.m,.mm,.sql,.ini,.conf,.env,.gitignore,.gitattributes,.dockerfile,.lock,.properties,.gradle,.cmake"
           style={{ display: 'none' }}
           onChange={onFileInputChange}
         />

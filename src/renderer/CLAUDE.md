@@ -257,7 +257,18 @@ The chat sidebar is mounted with `key={workspacePath ?? 'no-workspace'}` in `App
 
 ### Attachments (`chatAttachments.ts`)
 
-The composer accepts images (PNG/JPEG/GIF/WebP) and a long list of text/code file extensions, via the paperclip button, paste, or drag-drop onto the sidebar. Images are sent as pi's `ImageContent[]` shape; text files are inlined into the prompt as `<file name="…">…</file>` blocks before the user's typed message. Rejected files (unsupported format or read error) surface a dismissible inline error.
+**The composer takes any file**, via the paperclip button, paste, or drag-drop onto the sidebar. Every attachment is written into the chat's scratch pad (`agent:stashFiles` → `stashChatFile` → `agent-core/attachmentPolicy.ts`) and the agent is handed the **path**, in the same bracketed notes a file sent over Telegram gets — one composition (`composeMessage`), so the two arrive described identically. On top of that path: an image is also sent as pi's `ImageContent[]` when the configured model lists `image` input, and a small text file's contents are also inlined. **The path is given in every case, images included** — pixels can't be moved, renamed or committed, and the agent needs a string handle to do any of that.
+
+> **This module used to decide what a file IS, and that is what made a tarball "unsupported format".** It carried an image MIME list and a hand-written extension allowlist, and anything outside both was refused — while the system prompt told the agent that "files the user sends you arrive here" (`BOUNDARIES` in `agent-core/defaults/helper.ts`), pointing at a scratch pad the desktop had never once written to. There were three copies of the extension rules: this file's, the file input's `accept` (which greyed out in the OS dialog exactly the files drag-drop would have taken), and the companion's own list, which disagreed with both. All three are gone. What a file is now gets decided once, in main, from the bytes.
+
+Two things this file still owns, and both are about the renderer's own limits rather than about policy:
+
+- **What gets read into memory.** Above `MAX_COMPOSER_READ_BYTES` (25MB) a file travels to main as a **path** instead — `window.api.pathForFile`, which Electron answers for anything dropped or picked from disk — so attaching a 2GB archive costs nothing. Images are always read whatever their size, because the thumbnail and the pixels both come from those bytes. A clipboard paste is the one case with no path to fall back on, and therefore the only thing that can still be refused for its size.
+- **When the write happens: at SEND, not at ingest.** A chip you removed, or a draft you never sent, leaves nothing on disk. It also means the prompt is built from what main says it wrote, so every path in it names a file that exists.
+
+Note the bytes are dropped on the way into the transcript (`attachments.map(({ data, sourcePath, ...rest }) => rest)`) — the bubble needs a name and a thumbnail, and keeping them would pin every file ever attached in memory for the life of the window.
+
+**Any pasted FILE is an attachment**, not only an image. `onPaste` used to intercept the clipboard only when it held a picture, so pasting a PDF did nothing at all — not even the error. Text on the clipboard still falls through to the textarea untouched (`clipboardData.files` is empty for a plain copy).
 
 **A sent image survives the send — `AttachmentChip` renders from two sources.** A file you just picked carries its bytes inline (`dataUrl`), which is what paints it the instant you hit send. A message loaded from a stored chat carries `url` instead — `app://attachment/<id>`, which main proxies to the companion's `GET /attachment/:id` (the API key lives in main, so the renderer can only ask for a URL). The chip takes whichever it has and knows nothing about the other.
 

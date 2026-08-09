@@ -404,13 +404,31 @@ export interface ShockwaveApi {
     importPicker(workspacePath: string | null): Promise<string | null>;
     importFromPath(workspacePath: string | null, srcPath: string): Promise<string>;
     remove(workspacePath: string | null, folderName: string): Promise<void>;
-    pathForFile(file: File): string;
   };
+
+  /** Absolute disk path of a dropped or picked File; '' when it isn't backed by
+   *  disk (a clipboard paste). Used by skill import and by chat attachments, so
+   *  it sits at the top level rather than under either. */
+  pathForFile(file: File): string;
 
   agent: {
     /** Send to a chat. chatId is renderer-minted (UUID) for new chats.
      *  Mid-turn sends are steered into the running turn. */
     send(opts: { chatId: string; text: string; images?: Array<{ type: 'image'; source: unknown }> }): Promise<void>;
+    /** Save composer attachments into the chat's scratch pad so the agent gets a
+     *  path. Pass `data` for bytes the renderer read, or `sourcePath` for a file
+     *  it declined to read into memory. One answer per file, in order. */
+    stashFiles(opts: {
+      chatId: string;
+      files: Array<{ id: string; name: string; mimeType?: string; data?: Uint8Array; sourcePath?: string }>;
+    }): Promise<{
+      attachments: Array<{
+        id: string; error?: string;
+        path?: string; mimeType?: string; kind?: 'image' | 'video' | 'audio' | 'document';
+        displayName?: string; inlineText?: string;
+      }>;
+      visionAvailable: boolean;
+    }>;
     abort(chatId: string): Promise<void>;
     /** Chats with a turn in flight (re-seed the running set after reload). */
     runningChats(): Promise<string[]>;

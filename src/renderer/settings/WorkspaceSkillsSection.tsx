@@ -99,7 +99,7 @@ export default function WorkspaceSkillsSection({ workspacePath, builtinSkills, o
     if (!files || files.length === 0) return;
     let any = false;
     for (const file of files) {
-      const srcPath = window.api.skills.pathForFile(file);
+      const srcPath = window.api.pathForFile(file);
       if (!srcPath) { setError('Could not resolve the dropped item. Use the picker instead.'); continue; }
       try { await window.api.skills.importFromPath(workspacePath, srcPath); any = true; }
       catch (err: any) { safeSetError(err?.message ?? String(err)); }
