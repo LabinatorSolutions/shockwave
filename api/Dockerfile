@@ -100,6 +100,29 @@ RUN playwright-cli install-browser chromium --with-deps \
 # wherever `--browser` is omitted (`resolveExtensionOptions` in playwright-core).
 ENV PLAYWRIGHT_MCP_BROWSER=chromium
 
+# The runtime files that live on the HOST rather than inside a container: the
+# compose file, traefik's static config, the updater scripts, the `shockwave`
+# command, and init.sql. They ride in the image so that a release is ONE
+# artifact — install.sh and updater/apply.sh copy this directory out of the
+# tagged image instead of fetching a hardcoded file list from GitHub.
+#
+# The list was the problem. It lived in a script ON THE SERVER, frozen at
+# whatever release that box last installed, so removing a runtime file from the
+# repo made every older box fetch a 404 and abort — permanently, because the
+# step that replaces the script is the one that never ran. Deleting
+# traefik/gen-router.sh in v1.0.85 did exactly that to every box on v1.0.84.
+#
+# Copying them out of the image instead means the file set always comes from the
+# release being installed, there is nothing on the server to go stale, and the
+# host files cannot disagree with the image they are configuring — they were
+# built from the same commit. The layout under /host-files mirrors the install
+# directory exactly, so extracting is a straight copy with no mapping to keep
+# in step.
+COPY api/docker-compose.yml api/init.sql /host-files/
+COPY api/traefik/traefik.yml /host-files/traefik/
+COPY api/updater/ /host-files/updater/
+COPY api/host/ /host-files/host/
+
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/init.sql ./init.sql

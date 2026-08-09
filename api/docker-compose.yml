@@ -135,10 +135,11 @@ services:
 
   # Remote-upgrade sidecar. Polls the updater-trigger volume for a release tag
   # written by the api's POST /update, then spawns a detached one-shot helper
-  # (updater/apply.sh) that fetches that tag's compose/traefik/updater files,
-  # pins SHOCKWAVE_TAG in .env, pulls the tag's api image, and `up -d`s the
-  # stack. Holds the docker socket — deliberately has NO network surface; the
-  # trigger is a file. COMPANION_DIR must be the install dir's HOST path (the
+  # (updater/apply.sh) that pulls the tag's api image, copies this file and the
+  # rest of the host files OUT of it, pins SHOCKWAVE_TAG in .env, and `up -d`s
+  # the stack. Holds the docker socket — deliberately has NO network surface;
+  # the trigger is a file, and the files now come from the image rather than
+  # from GitHub. COMPANION_DIR must be the install dir's HOST path (the
   # helper bind-mounts it, and dockerd resolves bind paths on the host);
   # default matches install.sh's /opt/shockwave-companion.
   updater:
@@ -146,9 +147,9 @@ services:
     restart: unless-stopped
     environment:
       COMPANION_DIR: ${COMPANION_DIR:-/opt/shockwave-companion}
-      # Test hook — overrides where apply.sh fetches release files from
-      # (file:// or http). Empty in production (raw.githubusercontent.com).
-      SHOCKWAVE_RAW_BASE: ${SHOCKWAVE_RAW_BASE:-}
+      # Test hook — overrides which image apply.sh pulls and copies the host
+      # files out of. Empty in production (the ghcr.io image above).
+      SHOCKWAVE_IMAGE: ${SHOCKWAVE_IMAGE:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./updater:/updater:ro

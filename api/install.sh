@@ -17,7 +17,10 @@
 # What it does:
 #   1. Installs docker (via get.docker.com) if missing.
 #   2. Sets up ufw: deny inbound, allow SSH + 80/443 (skippable, see above).
-#   3. Fetches the compose file + traefik config + init.sql into /opt/shockwave-companion.
+#   3. Pulls the image and copies the host files out of it (compose file,
+#      traefik config, init.sql, updater scripts, the `shockwave` command) into
+#      /opt/shockwave-companion. They ship in the image, so they always match
+#      the server they configure and there is no file list to go stale.
 #   4. Generates .env secrets on first run (never overwritten after that), and
 #      records this server's public address as COMPANION_HOST.
 #   5. docker compose up -d  — pulls ghcr.io/stephengpope/shockwave-companion.
@@ -29,17 +32,18 @@
 #   8. Installs the `shockwave` command on PATH (subcommands: check, fingerprint,
 #      rotate-cert, status, logs, version).
 #
-# Re-running is the update path: refreshes the compose/config files, pulls the
-# newest image, recreates changed containers. Data lives on named volumes.
+# Re-running is the update path AND the recovery path: it pulls `latest`,
+# refreshes the host files from it, releases any SHOCKWAVE_TAG a remote upgrade
+# pinned, and recreates changed containers. Data lives on named volumes.
 # Secrets are never regenerated; only flags you pass are updated.
 # ============================================================================
 
 set -eu
 
-REPO="stephengpope/shockwave"
-REF="${SHOCKWAVE_REF:-main}"
-# Overridable for testing (point RAW at a file:// checkout, DIR at a temp dir).
-RAW="${SHOCKWAVE_RAW_BASE:-https://raw.githubusercontent.com/$REPO/$REF/api}"
+# The image is the whole release: the server, and the host files this script
+# unpacks into $DIR. Overridable for testing (point IMAGE at a locally built
+# tag, DIR at a temp dir).
+IMAGE="${SHOCKWAVE_IMAGE:-ghcr.io/stephengpope/shockwave-companion}"
 DIR="${SHOCKWAVE_DIR:-/opt/shockwave-companion}"
 
 # Empty = not passed. A re-run only overwrites what was actually given, so
@@ -135,12 +139,26 @@ if [ "$NO_FIREWALL" -ne 1 ]; then
 fi
 
 # ── Runtime files ───────────────────────────────────────────────────────────
-say "Fetching companion files into $DIR ..."
-$SUDO mkdir -p "$DIR/traefik" "$DIR/updater" "$DIR/host"
-for f in docker-compose.yml init.sql traefik/traefik.yml updater/watch.sh updater/apply.sh host/shockwave; do
-  curl -fsSL "$RAW/$f" | $SUDO tee "$DIR/$f" >/dev/null || fail "failed to fetch $f"
-done
-ok "Files fetched (ref: $REF)"
+# They come OUT OF THE IMAGE, not off GitHub. A release is one artifact, so the
+# compose file, traefik config, updater scripts and `shockwave` command are
+# always the ones built alongside the server they configure — and there is no
+# file list anywhere for a release to outgrow. See api/Dockerfile.
+#
+# Always `latest`, and any SHOCKWAVE_TAG pin is cleared below: re-running this
+# script is the documented update path and the recovery path, so it has to move
+# a box forward rather than rebuild it at whatever tag it was stuck on.
+say "Pulling companion image..."
+$SUDO docker pull "$IMAGE:latest" || fail "could not pull $IMAGE:latest"
+
+say "Extracting companion files into $DIR ..."
+$SUDO mkdir -p "$DIR"
+CID=$($SUDO docker create "$IMAGE:latest") || fail "could not create a container from $IMAGE:latest"
+$SUDO docker cp "$CID:/host-files/." "$DIR/" || {
+  $SUDO docker rm "$CID" >/dev/null 2>&1 || true
+  fail "image has no /host-files — is $IMAGE:latest older than this installer?"
+}
+$SUDO docker rm "$CID" >/dev/null 2>&1 || true
+ok "Files installed from $IMAGE:latest"
 
 # ── Public address ──────────────────────────────────────────────────────────
 # Resolved HERE, once, and written to .env. The server reads it rather than
@@ -194,6 +212,16 @@ if $SUDO test -f "$ENV_FILE"; then
   if [ -n "$PUBLIC_IP" ] && [ "$(env_get COMPANION_HOST)" != "$PUBLIC_IP" ]; then
     env_set COMPANION_HOST "$PUBLIC_IP"
     say "Recorded new public address: $PUBLIC_IP"
+  fi
+  # Release the tag a previous remote upgrade pinned. Compose reads
+  # ${SHOCKWAVE_TAG:-latest}, so an empty value IS `latest` — and the files just
+  # unpacked came from `latest`, so leaving an old pin would run one release's
+  # server under another release's compose file. This is also what makes
+  # re-running the installer a real recovery: a box whose upgrades are broken
+  # gets moved forward rather than rebuilt exactly as stuck as it was.
+  if [ -n "$(env_get SHOCKWAVE_TAG)" ]; then
+    env_set SHOCKWAVE_TAG ""
+    say "Unpinned SHOCKWAVE_TAG — this install runs latest"
   fi
 else
   if [ "$DOMAIN_SET" -ne 1 ]; then

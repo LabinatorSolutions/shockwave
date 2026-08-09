@@ -39,7 +39,7 @@ while :; do
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$COMPANION_DIR:$COMPANION_DIR" \
         -e COMPANION_DIR="$COMPANION_DIR" \
-        -e SHOCKWAVE_RAW_BASE="${SHOCKWAVE_RAW_BASE:-}" \
+        -e SHOCKWAVE_IMAGE="${SHOCKWAVE_IMAGE:-}" \
         docker:27-cli sh "$COMPANION_DIR/updater/apply.sh" "$tag" \
         || echo "updater: failed to spawn helper"
     else

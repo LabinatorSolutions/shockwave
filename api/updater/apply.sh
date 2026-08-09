@@ -9,82 +9,86 @@
 #   sh apply.sh v1.2.3
 #
 # Steps (each aborts the upgrade and leaves the running stack untouched):
-#   1. Fetch this tag's runtime files into a staging dir (all-or-nothing).
-#   2. Pull the tag's api image USING THE STAGED compose file — nothing on
-#      disk changes until the image is on the box, so a failed pull can't
-#      leave .env pinned to an image that doesn't exist.
-#   3. mv the staged files into place (rename — never cp: this very script is
-#      one of the files, and an in-place overwrite would corrupt the copy the
-#      shell is still reading; rename swaps the inode, our fd keeps the old one).
+#   1. Pull the tag's image. Nothing on disk changes until it is on the box, so
+#      a failed pull can't leave .env pinned to an image that doesn't exist.
+#   2. Copy the host files OUT of that image into a staging dir.
+#   3. mv them into place (rename — never cp: this very script is one of the
+#      files, and an in-place overwrite would corrupt the copy the shell is
+#      still reading; rename swaps the inode, our fd keeps the old one).
 #   4. Persist SHOCKWAVE_TAG=<tag> in .env, then docker compose up -d.
 #
-# SHOCKWAVE_RAW_BASE overrides the fetch source for testing (file:// or http),
-# same hook as install.sh. Note the override ignores the tag by design.
+# THERE IS NO FILE LIST HERE, and that is the point. It used to fetch a fixed
+# set of paths from raw.githubusercontent — a list baked into whatever copy of
+# this script the box happened to be holding, which is the release it LAST
+# installed. So deleting a runtime file from the repo made every older box 404
+# and abort forever: the step that would have replaced this script (3) is
+# downstream of the fetch that fails. Removing traefik/gen-router.sh in v1.0.85
+# jammed every box still on v1.0.84, with the desktop reporting success.
+#
+# Taking the files from the image inverts that. The set comes from the release
+# being INSTALLED rather than the one already installed, so adding or removing
+# a runtime file is no longer a breaking change; there is nothing on the server
+# that can be stale; the host files can never disagree with the image they
+# configure; and upgrading no longer depends on GitHub being reachable.
+#
+# SHOCKWAVE_IMAGE overrides the image for testing (e.g. a locally built tag).
 # ============================================================================
 set -eu
 
 TAG="${1:?usage: apply.sh <tag>}"
 COMPANION_DIR="${COMPANION_DIR:-/opt/shockwave-companion}"
-REPO="stephengpope/shockwave"
-RAW="${SHOCKWAVE_RAW_BASE:-https://raw.githubusercontent.com/$REPO/$TAG/api}"
+IMAGE="${SHOCKWAVE_IMAGE:-ghcr.io/stephengpope/shockwave-companion}"
+# Where the image keeps the host files (api/Dockerfile). Mirrors the install
+# directory's layout, so extraction is a straight copy.
+IMAGE_HOST_DIR=/host-files
 
 # Second line of defense (the api validates too; watch.sh again): the tag lands
-# in a URL and in .env — nothing but a plain version tag may pass.
+# in an image reference and in .env — nothing but a plain version tag may pass.
 echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "apply: invalid tag"; exit 1; }
 
-# Every runtime file that lives on the host. `host/shockwave` is the command on
-# PATH: /usr/local/bin/shockwave is a symlink to it, made once at install, so
-# replacing this file IS how a command update reaches the box — no write outside
-# $COMPANION_DIR (the only thing mounted here) and no new symlink, ever.
-FILES="docker-compose.yml traefik/traefik.yml updater/watch.sh updater/apply.sh host/shockwave"
-# Files that are executed directly rather than via `sh <file>`, so their mode
-# matters. `curl -o` writes 644 and `mv` preserves it — without this the command
-# on PATH would land unrunnable.
-EXECUTABLE="host/shockwave"
-
-fetch() { # fetch <relpath> <dest>
-  case "$RAW" in
-    file://*) cp "${RAW#file://}/$1" "$2" ;;
-    *)
-      # docker:cli is alpine; busybox wget's TLS support is shaky, so use curl
-      # (installed below).
-      curl -fsSL "$RAW/$1" -o "$2"
-      ;;
-  esac
-}
-
-case "$RAW" in
-  file://*) : ;;
-  *) command -v curl >/dev/null 2>&1 || apk add --no-cache --quiet curl ;;
-esac
-
-echo "apply: upgrading to $TAG (source: $RAW)"
-
-# ── 1. Stage ────────────────────────────────────────────────────────────────
-STAGE=$(mktemp -d)
-trap 'rm -rf "$STAGE"' EXIT
-for f in $FILES; do
-  mkdir -p "$STAGE/$(dirname "$f")"
-  fetch "$f" "$STAGE/$f" || { echo "apply: failed to fetch $f — aborting, nothing changed"; exit 1; }
-done
-echo "apply: files staged"
-
-# ── 2. Pull the new image (staged compose — disk still untouched) ──────────
 ENV_FILE="$COMPANION_DIR/.env"
 [ -f "$ENV_FILE" ] || { echo "apply: no .env at $ENV_FILE — aborting"; exit 1; }
-export COMPANION_DIR
-SHOCKWAVE_TAG="$TAG" docker compose --project-directory "$COMPANION_DIR" -f "$STAGE/docker-compose.yml" pull api \
+
+echo "apply: upgrading to $TAG (image: $IMAGE:$TAG)"
+
+# ── 1. Pull the new image (disk still untouched) ────────────────────────────
+docker pull "$IMAGE:$TAG" \
   || { echo "apply: image pull failed — aborting, nothing changed"; exit 1; }
 echo "apply: image pulled"
 
-# ── 3. Move files into place ────────────────────────────────────────────────
-for f in $FILES; do
-  mkdir -p "$COMPANION_DIR/$(dirname "$f")"
-  mv "$STAGE/$f" "$COMPANION_DIR/$f"
+# ── 2. Copy the host files out of it ────────────────────────────────────────
+# The staging dir sits INSIDE the install dir on purpose: step 3 has to be a
+# rename to avoid rewriting this running script in place, and rename only works
+# within one filesystem. $COMPANION_DIR is a bind mount, so a staging dir in the
+# container's own /tmp would make every `mv` a cross-device copy — which opens
+# the destination and truncates it, exactly the corruption the rename avoids.
+STAGE=$(mktemp -d "$COMPANION_DIR/.upgrade-XXXXXX")
+CID=""
+cleanup() {
+  [ -n "$CID" ] && docker rm -f "$CID" >/dev/null 2>&1
+  rm -rf "$STAGE"
+}
+trap cleanup EXIT
+
+CID=$(docker create "$IMAGE:$TAG") \
+  || { echo "apply: could not create a container from the image — aborting, nothing changed"; exit 1; }
+docker cp "$CID:$IMAGE_HOST_DIR/." "$STAGE/" \
+  || { echo "apply: image has no $IMAGE_HOST_DIR (released before this mechanism?) — aborting, nothing changed"; exit 1; }
+echo "apply: host files extracted"
+
+# ── 3. Move them into place ─────────────────────────────────────────────────
+# Discovered from what the image actually shipped, never from a list here.
+STAGED=$(cd "$STAGE" && find . -type f | sed 's|^\./||')
+[ -n "$STAGED" ] || { echo "apply: $IMAGE_HOST_DIR is empty — aborting, nothing changed"; exit 1; }
+for rel in $STAGED; do
+  mkdir -p "$COMPANION_DIR/$(dirname "$rel")"
+  mv "$STAGE/$rel" "$COMPANION_DIR/$rel"
 done
-for f in $EXECUTABLE; do
-  chmod 755 "$COMPANION_DIR/$f"
-done
+# `docker cp` preserves the mode it was built with, so the dispatcher arrives
+# executable already. Asserted anyway — /usr/local/bin/shockwave is a symlink to
+# it, and a file that lands 644 is a command that reports "permission denied"
+# with nothing to say why.
+chmod 755 "$COMPANION_DIR/host/shockwave"
 
 # ── 4. Pin the tag in .env + restart ────────────────────────────────────────
 grep -v '^SHOCKWAVE_TAG=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
