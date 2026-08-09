@@ -72,6 +72,15 @@ Day to day there's nothing to do — the app updates the server for itself, and 
 
 When you do need it: **[looking after the server](docs/server.md)** covers the `shockwave` command, backups, certificates and what to check when the app can't connect.
 
+> **One-time fix if Upgrade does nothing (servers set up before v1.0.88).** Upgrades used to fetch a fixed list of files from GitHub, and v1.0.85 removed one of them — so a server that hasn't upgraded since then asks for a file that no longer exists, gives up, and stays where it is. The app can't tell, so it just looks like nothing happened. From v1.0.88 the files come from the release itself and this can't recur, but a stuck server can't install that release either. SSH in and run:
+>
+> ```sh
+> curl -fsSL https://raw.githubusercontent.com/stephengpope/shockwave/v1.0.88/api/updater/apply.sh \
+>   -o /opt/shockwave-companion/updater/apply.sh
+> ```
+>
+> Then press Upgrade in the app again. (Re-running the [install one-liner](#2-start-your-server) fixes it too — it keeps your data and settings.)
+
 ---
 
 ## Your agent on Telegram
