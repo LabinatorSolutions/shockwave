@@ -99,6 +99,19 @@ services:
       # dynamic TLS config here, which traefik's file provider picks up.
       - traefik-dynamic:/etc/traefik/dynamic
       - agent-data:/data/agent
+      # The agent's Python environment (api/Dockerfile). On a volume so a
+      # package it installs survives a redeploy — the container filesystem does
+      # not, and it has no root, so anything it added would otherwise be gone
+      # by the next upgrade.
+      #
+      # Nothing seeds this. Docker fills a FRESH named volume from the image's
+      # content at this path and leaves a populated one alone, which is both
+      # halves of what's wanted: a new box comes up with yt-dlp already there,
+      # and an upgrade never overwrites what the agent installed. The cost is
+      # that this volume DRIFTS from the image over time — two boxes on the
+      # same release can hold different packages. That's inherent to it being
+      # writable; `docker volume rm shockwave_agent-venv` resets it.
+      - agent-venv:/opt/pyenv
       - updater-trigger:/trigger
 
   # TLS terminator + reverse proxy — the ONLY public surface. :80 redirects to
@@ -169,6 +182,7 @@ services:
 volumes:
   pg-data:
   agent-data:
+  agent-venv:
   traefik-dynamic:
   letsencrypt:
   updater-trigger:

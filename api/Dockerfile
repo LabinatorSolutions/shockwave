@@ -39,14 +39,71 @@ WORKDIR /app
 #   pandoc                              — docx/odt/rtf/epub to text
 #   python3 + openpyxl + pil            — spreadsheets, and general scripting
 #   file                                — identify an upload with no useful name
+#
+# The last four lines are the tools an agent reaches for by reflex, and their
+# absence was invisible until something needed one. curl AND wget were both
+# missing, which meant there was no way to make an HTTP request from bash at
+# all — firecrawl and playwright-cli fetch web PAGES, and are no help calling a
+# REST API, hitting a webhook, or downloading a file from a URL. The only route
+# left was `node -e "fetch(...)"`, which the agent had to invent under pressure.
+#
+# That matters most because the DESKTOP host is someone's Mac, where all of
+# these already exist. So a skill the agent wrote for itself while running in
+# the app would silently break the moment the same agent ran it from Telegram
+# or on a schedule — the one failure this tree exists to avoid.
+#   curl/wget            — fetch a URL; see above
+#   jq                   — read JSON, which is what every API answers with
+#   sqlite3              — open a .db a user sends, or one a skill keeps
+#   ripgrep              — search a checkout (grep works; this is much faster)
+#   less/bc/tree         — page output, arithmetic, see a folder's shape
+#   procps               — `ps`; the agent could not see its own processes
+#   dnsutils/ping/netcat — tell "the host is unreachable" from "the API said no"
+#   python3-pip/venv     — see the virtualenv block below
+#   requests/yaml/bs4    — the three imports a scripting turn assumes are there
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates openssl \
       unzip zip p7zip-full xz-utils bzip2 \
       poppler-utils imagemagick ffmpeg pandoc \
       python3 python3-openpyxl python3-pil file \
+      curl wget jq sqlite3 ripgrep less bc tree procps \
+      dnsutils iputils-ping netcat-openbsd \
+      python3-pip python3-venv \
+      python3-requests python3-yaml python3-bs4 \
   && rm -rf /var/lib/apt/lists/*
 # Fail the BUILD, not the first boot, if the CLI isn't actually there.
 RUN openssl version
+
+# A Python environment the AGENT CAN WRITE TO, on a volume of its own.
+#
+# Debian's python is externally managed: `pip install` into it is refused, and
+# the agent runs as `node` with no root and no sudo, so it could not have
+# installed a package by any route. Whatever was not baked in was unavailable
+# forever — and a turn that needs one library it doesn't have simply fails.
+#
+# `--system-site-packages` is load-bearing. Without it this venv HIDES the apt
+# packages above (openpyxl, pil, requests, yaml, bs4, lxml), because putting
+# its bin/ first on PATH is what makes `pip` and `python3` mean this one. With
+# it, the agent sees both: everything apt installed, plus anything it adds.
+#
+# yt-dlp lives here rather than in apt on purpose. Debian ships a 2023 build
+# that the sites it downloads from broke long ago; upstream ships fixes weekly
+# because those sites actively try to break it. Installed here, the agent can
+# run `pip install -U yt-dlp` and heal it between releases — which is the whole
+# reason this is a writable volume rather than another apt line. It needs
+# ffmpeg to merge the streams it downloads, which is already above.
+#
+# There is NO seeding script, and there should not be one: docker populates a
+# FRESH named volume from whatever the image holds at the mount point, and
+# never touches a volume that already has content. That is exactly "fill if
+# empty, never overwrite" — so a new box comes up with yt-dlp present and needs
+# no network at boot, and an upgrade cannot stomp a package the agent installed.
+# The compose file mounts `agent-venv` here; the chown is what that fresh volume
+# inherits, the same mechanism /data/agent and /etc/traefik/dynamic already use.
+ENV PYENV=/opt/pyenv
+RUN python3 -m venv --system-site-packages $PYENV \
+  && $PYENV/bin/pip install --no-cache-dir --upgrade pip yt-dlp \
+  && chown -R node:node $PYENV
+ENV PATH=$PYENV/bin:$PATH
 
 # The bundled CLI tools the agent shells out to (firecrawl, playwright-cli),
 # installed from the SAME pinned list the desktop ships (cli-tools/package.json)

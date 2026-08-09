@@ -38,6 +38,20 @@ Five services (postgres, api, traefik, updater, autoheal):
 - **updater** (`docker:27-cli` + `updater/watch.sh`) — the remote-upgrade sidecar. Holds the docker socket and has **deliberately zero network surface**: its trigger is a file on the `updater-trigger` volume, not a listener. See "Remote upgrade" above.
 - **autoheal** (`willfarrell/autoheal`) — restarts any container labeled `autoheal=true` (today: `api`) once Docker marks it unhealthy, via the api's Dockerfile `HEALTHCHECK`. Compose's own `restart:` policy only covers a *crashed* process, not a wedged one, and there is no operator on the box to notice a companion that stopped answering.
 
+### What the agent can actually run (`api/Dockerfile`)
+
+The base image is bare, and the agent runs as `node` with **no root and no sudo** — so whatever is not baked in is unavailable forever, and a turn that needs one missing tool simply fails. Two rules follow from that.
+
+**The bar is the DESKTOP host, not "what a server needs".** The other host this agent runs on is someone's Mac, where curl, jq and pip already exist. So a tool missing here doesn't just fail — it makes a skill the agent wrote for itself in the app break the moment the same agent runs it from Telegram or on a schedule, which is the divergence this whole tree exists to prevent. `curl` **and** `wget` were both absent until 2026-08-09, meaning there was no way to make an HTTP request from bash at all: firecrawl and playwright-cli fetch web *pages* and are no help calling a REST API, hitting a webhook, or downloading a file from a URL. On top of the file-handling set the Dockerfile already documents, the image now carries `curl`/`wget`, `jq`, `sqlite3`, `ripgrep`, `less`/`bc`/`tree`, `procps`, `dnsutils`/`ping`/`netcat`, and `requests`/`yaml`/`bs4`.
+
+**Python is writable, on a volume of its own.** Debian's python is externally managed, so `pip install` into it is refused and the agent had no route to add a package. `/opt/pyenv` is a virtualenv built at image time, first on `PATH`, mounted from the `agent-venv` volume — so a package the agent installs survives a redeploy. Three things about it are load-bearing:
+
+- **`--system-site-packages`, or the venv HIDES apt's python packages.** Putting its `bin/` first on PATH is what makes `python3` and `pip` mean this one; without the flag that same move makes `openpyxl`, `PIL`, `lxml`, `requests`, `yaml` and `bs4` invisible, and those are what the attachment path leans on.
+- **Nothing seeds it, and nothing should.** Docker populates a **fresh** named volume from the image's content at the mount point and leaves a populated one alone — which is both halves of what's wanted, with no startup script to write: a new box comes up with `yt-dlp` already there and needs no network at boot, and an upgrade cannot overwrite a package the agent installed.
+- **The cost is drift, and it is accepted.** A writable volume means two boxes on the same release can hold different packages. `docker volume rm shockwave_agent-venv` resets one to what the image ships.
+
+`yt-dlp` lives in that venv rather than in apt for exactly this reason: Debian ships a 2023 build the sites it downloads from broke long ago, and upstream ships fixes weekly because those sites actively try to break it. In the venv the agent can `pip install -U yt-dlp` and heal it between releases. It merges streams with `ffmpeg`, which is already in the image for voice notes.
+
 **Three exposure modes:** (a) localhost dev on `127.0.0.1:8080`; (b) public via Traefik TLS on `:443` — self-signed cert for `COMPANION_HOST` with no domain, Let's Encrypt with `COMPANION_DOMAIN`; (c) **ngrok raw tunnel** straight to `127.0.0.1:8080` (ngrok brings its own trusted cert, so set `COMPANION_DOMAIN` to the ngrok host and Traefik/self-signed is bypassed).
 
 ### TLS is settled at boot, before the server answers (`settleTls`)
